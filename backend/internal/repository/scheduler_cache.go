@@ -1408,6 +1408,7 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		service.GatewayBorrowAccountQualityPendingKey,
 		service.GatewayBorrowInitialReadyKey,
 		service.GatewayBorrowModelsKey,
+		service.QualityGroupIsolationKey,
 		"quality_candy",
 		"openai_connections_managed", "openai_auth_connections",
 		// Priority scoring runs on candidate metadata before full hydration.

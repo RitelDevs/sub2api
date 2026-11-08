@@ -29,6 +29,9 @@ func (a *Account) RequiresGatewayBorrowUpstream(model string) bool {
 	if a == nil {
 		return false
 	}
+	if a.hasDedicatedQualityGroupIsolation() {
+		return false
+	}
 	raw, exists := a.Extra[GatewayBorrowModelsKey]
 	if !exists || raw == nil {
 		return false
@@ -59,6 +62,26 @@ func (a *Account) RequiresGatewayBorrowUpstream(model string) bool {
 		}
 	}
 	return false
+}
+
+// QualityGroupIsolationKey records the original memberships while a degraded
+// account serves only its dedicated, explicitly selected isolation group.
+const QualityGroupIsolationKey = "quality_group_isolation"
+
+// A retained historical borrow flag must not force borrowing inside the
+// dedicated native isolation group. Rejoining any business group restores the
+// old fail-closed policy until the quality worker completes that transition.
+func (a *Account) hasDedicatedQualityGroupIsolation() bool {
+	if a == nil || !a.IsOpenAIOAuth() || a.IsShadow() || a.IsOpenAIAgentIdentity() || a.IsOpenAIPersonalAccessToken() {
+		return false
+	}
+	marker, ok := a.Extra[QualityGroupIsolationKey].(map[string]any)
+	if !ok {
+		return false
+	}
+	version, valid := excelBPS403GroupID(marker["version"])
+	groupID, validGroup := excelBPS403GroupID(marker["isolation_group_id"])
+	return valid && version == 1 && validGroup && groupID > 0 && len(a.GroupIDs) == 1 && a.GroupIDs[0] == groupID
 }
 
 // Previous revisions are accepted only for a concrete still-valid proof that

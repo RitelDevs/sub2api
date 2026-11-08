@@ -12,6 +12,7 @@
       @mouseleave="onLeave"
       @focusin="onEnter"
       @focusout="onLeave"
+      @click.stop="show ? closePopover() : onEnter()"
       tabindex="0"
     >
       <PlatformIcon
@@ -36,7 +37,9 @@
         v-show="show"
         ref="popoverEl"
         role="tooltip"
-        class="pointer-events-none fixed z-[99999] w-80 max-w-[min(22rem,calc(100vw-1rem))] rounded-lg border bg-white text-xs shadow-xl dark:bg-dark-800"
+        @mouseenter="onEnter"
+        @mouseleave="onLeave"
+        class="pointer-events-auto fixed z-[99999] overflow-y-auto whitespace-normal [overflow-wrap:anywhere] rounded-lg border bg-white text-xs shadow-xl dark:bg-dark-800"
         :class="[popoverBorderClass]"
         :style="popoverStyle"
       >
@@ -45,7 +48,7 @@
           class="flex items-center justify-between gap-2 rounded-t-lg border-b px-3 py-2"
           :class="[popoverHeaderClass, popoverBorderClass]"
         >
-          <span class="truncate font-semibold">{{ model.name }}</span>
+          <span class="min-w-0 [overflow-wrap:anywhere] font-semibold">{{ model.name }}</span>
           <span
             v-if="model.platform"
             class="flex-shrink-0 rounded bg-white/70 px-1.5 py-0.5 text-2xs uppercase tracking-wide dark:bg-dark-900/60"
@@ -174,6 +177,8 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import { useOwnedPopover } from '@/composables/overlayLifecycle'
+import { popoverLayout } from '@/utils/floatingPanel'
 import { useI18n } from 'vue-i18n'
 import PricingRow from './PricingRow.vue'
 import { formatScaled, resolveIntervalPrices } from '@/utils/pricing'
@@ -278,36 +283,18 @@ function formatInterval(iv: UserPricingInterval, pricing: UserSupportedModelPric
 const show = ref(false)
 const triggerEl = ref<HTMLElement | null>(null)
 const popoverEl = ref<HTMLElement | null>(null)
-const popoverStyle = ref<Record<string, string>>({ top: '0px', left: '0px' })
+const popoverStyle = ref<ReturnType<typeof popoverLayout>>()
 
 function updatePosition() {
   const trigger = triggerEl.value
   if (!trigger) return
-  const rect = trigger.getBoundingClientRect()
-  const margin = 8
-  const popover = popoverEl.value
-  const popWidth = popover?.offsetWidth ?? 320
-  const popHeight = popover?.offsetHeight ?? 240
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-
-  let top = rect.bottom + margin
-  // Flip upward if it would overflow below.
-  if (top + popHeight > vh - margin) {
-    top = Math.max(margin, rect.top - popHeight - margin)
-  }
-
-  let left = rect.left + rect.width / 2 - popWidth / 2
-  if (left < margin) left = margin
-  if (left + popWidth > vw - margin) left = vw - margin - popWidth
-
-  popoverStyle.value = {
-    top: `${Math.round(top)}px`,
-    left: `${Math.round(left)}px`,
-  }
+  popoverStyle.value = popoverLayout(trigger.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight }, 320, popoverEl.value?.scrollHeight || 240)
 }
 
+let closeTimer: ReturnType<typeof setTimeout> | undefined
+useOwnedPopover(show, { root: () => popoverEl.value, trigger: () => triggerEl.value, close: closePopover })
 function onEnter() {
+  clearTimeout(closeTimer)
   show.value = true
   nextTick(() => {
     updatePosition()
@@ -317,12 +304,19 @@ function onEnter() {
 }
 
 function onLeave() {
+  clearTimeout(closeTimer)
+  closeTimer = setTimeout(closePopover, 120)
+}
+
+function closePopover() {
+  clearTimeout(closeTimer)
   show.value = false
   window.removeEventListener('scroll', updatePosition, true)
   window.removeEventListener('resize', updatePosition)
 }
 
 onBeforeUnmount(() => {
+  clearTimeout(closeTimer)
   window.removeEventListener('scroll', updatePosition, true)
   window.removeEventListener('resize', updatePosition)
 })

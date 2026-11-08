@@ -1,5 +1,7 @@
 /* Shared rich-text styles for announcement popup and bell detail content. */
 .markdown-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
   @apply text-[15px] leading-[1.75];
   @apply text-gray-700 dark:text-gray-300;
 }
@@ -63,6 +65,7 @@
 }
 
 .markdown-body pre {
+  max-width: 100%;
   @apply my-5 overflow-x-auto rounded-xl border border-gray-200 bg-gray-50 p-5 dark:border-dark-600 dark:bg-dark-900/50;
 }
 
@@ -75,7 +78,10 @@
 }
 
 .markdown-body table {
-  @apply mb-5 w-full overflow-hidden rounded-lg border border-gray-200 dark:border-dark-600;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  @apply mb-5 w-full rounded-lg border border-gray-200 dark:border-dark-600;
 }
 
 .markdown-body th,

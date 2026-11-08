@@ -1,5 +1,5 @@
 <template>
-  <div class="relative">
+  <div ref="versionAnchorRef" class="relative">
     <!-- Admin: Full version badge with dropdown -->
     <template v-if="isAdmin">
       <button
@@ -29,12 +29,13 @@
       </button>
 
       <!-- Dropdown -->
+      <Teleport to="body">
       <transition name="dropdown">
         <div
           v-if="dropdownOpen"
           ref="dropdownRef"
-          class="absolute left-0 z-50 mt-2 overflow-hidden whitespace-normal rounded-xl border border-gray-200 bg-white shadow-lg transition-all duration-200 dark:border-dark-700 dark:bg-dark-800"
-          :class="rollbackPanelOpen && isReleaseBuild ? 'w-80' : 'w-64'"
+          class="fixed z-50 overflow-y-auto whitespace-normal [overflow-wrap:anywhere] rounded-xl border border-gray-200 bg-white shadow-lg transition-opacity duration-200 dark:border-dark-700 dark:bg-dark-800"
+          :style="dropdownStyle"
         >
           <!-- Header with refresh button -->
           <div
@@ -630,6 +631,7 @@
           </div>
         </div>
       </transition>
+      </Teleport>
     </template>
 
     <!-- Non-admin: Simple static version text -->
@@ -642,7 +644,9 @@
 <script setup lang="ts">
 import { formatTimestamp as formatDisplayTimestamp } from "@/utils/consoleDisplay"
 
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
+import { useEventListener } from '@vueuse/core'
+import { popoverLayout } from '@/utils/floatingPanel'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import {
@@ -672,6 +676,14 @@ const isAdmin = computed(() => authStore.isAdmin)
 
 const dropdownOpen = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)
+const versionAnchorRef = ref<HTMLElement | null>(null)
+const dropdownStyle = ref<ReturnType<typeof popoverLayout>>()
+function positionDropdown() {
+  if (!dropdownOpen.value || !versionAnchorRef.value) return
+  dropdownStyle.value = popoverLayout(versionAnchorRef.value.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight }, rollbackPanelOpen.value && isReleaseBuild.value ? 320 : 256, dropdownRef.value?.scrollHeight || 400)
+}
+useEventListener(window, 'resize', positionDropdown)
+useEventListener(window, 'scroll', positionDropdown, true)
 
 // Use store's cached version state
 const loading = computed(() => appStore.versionLoading)
@@ -734,6 +746,8 @@ const activeManualCommand = computed(() =>
 
 // Only show update check for release builds (binary/docker deployment)
 const isReleaseBuild = computed(() => buildType.value === 'release')
+
+watch([dropdownOpen, rollbackPanelOpen], async ([open]) => { if (open) { positionDropdown(); await nextTick(); positionDropdown() } })
 
 function toggleDropdown() {
   dropdownOpen.value = !dropdownOpen.value
@@ -907,8 +921,7 @@ async function checkServiceAndReload() {
 
 function handleClickOutside(event: MouseEvent) {
   const target = event.target as Node
-  const button = (event.target as Element).closest('button')
-  if (dropdownRef.value && !dropdownRef.value.contains(target) && !button?.contains(target)) {
+  if (dropdownRef.value && !dropdownRef.value.contains(target) && !versionAnchorRef.value?.contains(target)) {
     closeDropdown()
   }
 }

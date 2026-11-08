@@ -55,3 +55,13 @@ Every Toggle/Select needs its business field name, not a generic enable/select p
 Use `LoadingRegion` once for a real skeleton group; repeated cells opt out of repeated live regions. Native table skeletons preserve table structure and expose one parent status. Health pulses, cursors and named busy-action icons keep their separate roles.
 
 2026-10-24 integration and remaining list/cross-product work: Windows workspace `reports/ritel-ui-integration-20261024/README.md`. This candidate includes current QQ code, while unified-account integration stays separate.
+
+## Responsive content and floating surfaces
+
+- Dialogs use `BaseDialog`: the visible viewport and safe areas bound the panel, its body scrolls, and title/close/footer actions stay reachable. Long titles and action labels wrap; never use a fixed content height to fit an assumed screen.
+- Anchored menus use `getFloatingPanelPosition` or its CSS adapter `popoverLayout` from `src/utils/floatingPanel.ts`. Use the same bounded width for rendering and positioning, clamp both horizontal edges, choose the available vertical side, and let the panel or its list scroll within that space. Recompute an open panel on viewport changes. Do not size a panel by unconstrained rich text or position it using an estimated width different from its actual width.
+- Informational hover/click content uses `HelpTooltip` where possible, including touch/focus support and scrollable long content. Do not add raw `absolute left-full` or fixed-width hover cards without viewport bounds.
+- Descriptions, group names, messages and long tokens wrap at their owning content boundary (`min-width: 0`, normal/pre-line whitespace, `overflow-wrap: anywhere`). Truncation is only for an intentionally compact summary that has an accessible complete detail view. Do not hide overflow at the page root to conceal an oversized child.
+- Dense data tables and preformatted code may scroll horizontally inside their own region. Rich-text tables/code and images must not enlarge the containing page or hide dialog controls.
+
+For these shared boundaries, exercise narrow portrait (320px), short landscape and desktop edge anchors with long text, resizing, scrolling and the relevant close/select actions. Preserve business callbacks and existing disabled/busy restrictions.

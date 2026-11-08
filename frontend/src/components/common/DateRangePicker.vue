@@ -98,6 +98,7 @@ import type { CSSProperties, HTMLAttributes } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import { useOwnedPopover } from '@/composables/overlayLifecycle'
+import { popoverLayout } from '@/utils/floatingPanel'
 import { formatLocalDate, formatLocalMinute, getDatePresetRange, parseDateBoundary, parseLocalMinute } from '@/utils/dateRange'
 
 defineOptions({ inheritAttrs: false })
@@ -242,16 +243,7 @@ const selectPreset = (preset: { value: string }) => {
 const positionDropdown = () => {
   const rect = containerRef.value?.getBoundingClientRect()
   if (!rect) return
-  const width = Math.min(props.enableTime ? 520 : 360, window.innerWidth - 24)
-  const below = window.innerHeight - rect.bottom - 16
-  const above = rect.top - 16
-  const showAbove = below < 320 && above > below
-  dropdownStyle.value = {
-    width: `${width}px`,
-    left: `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`,
-    ...(showAbove ? { bottom: `${window.innerHeight - rect.top + 8}px` } : { top: `${rect.bottom + 8}px` }),
-    maxHeight: `${Math.max(120, showAbove ? above : below)}px`
-  }
+  dropdownStyle.value = popoverLayout(rect, { width: window.innerWidth, height: window.innerHeight }, props.enableTime ? 520 : 360, 320)
 }
 const toggle = () => {
   if (props.disabled) return

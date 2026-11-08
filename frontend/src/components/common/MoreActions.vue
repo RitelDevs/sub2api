@@ -10,27 +10,33 @@
 </template>
 <script setup lang="ts">
 import { nextTick, ref } from 'vue'
+import { popoverLayout } from '@/utils/floatingPanel'
 import { onClickOutside, onKeyStroke, useEventListener } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 const open = ref(false)
 const anchor = ref<HTMLElement>()
 const panel = ref<HTMLElement>()
-const position = ref({ top: '0px', right: '0px' })
+const position = ref<ReturnType<typeof popoverLayout>>()
+function updatePosition() {
+  if (!open.value || !anchor.value) return
+  position.value = popoverLayout(anchor.value.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight }, 192, panel.value?.scrollHeight || 180)
+}
 function close() { open.value = false; anchor.value?.querySelector('button')?.focus() }
 async function toggle() {
   open.value = !open.value
   if (!open.value) return
-  const rect = anchor.value!.getBoundingClientRect()
-  position.value = { top: Math.min(rect.bottom + 6, window.innerHeight - 180) + 'px', right: Math.max(12, window.innerWidth - rect.right) + 'px' }
+  updatePosition()
   await nextTick()
+  updatePosition()
   panel.value?.querySelector<HTMLElement>('button, a, input')?.focus()
 }
 onClickOutside(panel, () => { open.value = false }, { ignore: [anchor] })
 onKeyStroke('Escape', () => { if (open.value) close() })
-useEventListener(window, 'resize', () => { open.value = false })
+useEventListener(window, 'resize', updatePosition)
+useEventListener(window, 'scroll', () => { open.value = false })
 </script>
 <style>
-.more-actions-panel { position: fixed; z-index: 70; display: flex; flex-direction: column; gap: .5rem; min-width: 12rem; max-width: calc(100vw - 24px); padding: .75rem; border: 1px solid var(--ritel-border, #d9d5cc); border-radius: .75rem; background: var(--ritel-bg, #fffdf8); box-shadow: 0 8px 24px #0002; }
-.more-actions-panel button { min-width: 44px; min-height: 44px; width: 100%; }
+.more-actions-panel { position: fixed; z-index: 70; display: flex; flex-direction: column; gap: .5rem; min-width: 0; overflow: auto; overscroll-behavior: contain; overflow-wrap: anywhere; padding: .75rem; border: 1px solid var(--ritel-border, #d9d5cc); border-radius: .75rem; background: var(--ritel-bg, #fffdf8); box-shadow: 0 8px 24px #0002; }
+.more-actions-panel button { min-width: 44px; min-height: 44px; width: 100%; white-space: normal; overflow-wrap: anywhere; }
 </style>

@@ -24,12 +24,15 @@
     </button>
 
     <!-- Hover/Click Tooltip -->
+    <Teleport to="body">
     <transition name="dropdown">
       <div
         v-if="tooltipOpen"
-        class="absolute right-0 z-50 mt-2 w-[340px] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl dark:border-dark-700 dark:bg-dark-800"
+        ref="tooltipRef"
+        :style="tooltipStyle"
+        class="fixed z-50 flex flex-col overflow-hidden [overflow-wrap:anywhere] rounded-xl border border-gray-200 bg-white shadow-xl dark:border-dark-700 dark:bg-dark-800"
       >
-        <div class="border-b border-gray-100 p-3 dark:border-dark-700">
+        <div class="shrink-0 border-b border-gray-100 p-3 dark:border-dark-700">
           <AppHeading as="h3" variant="subsection" class="text-gray-900 dark:text-white">
             {{ t('subscriptionProgress.title') }}
           </AppHeading>
@@ -38,7 +41,7 @@
           </p>
         </div>
 
-        <div class="max-h-64 overflow-y-auto">
+        <div class="min-h-0 max-h-64 overflow-y-auto">
           <div
             v-for="subscription in displaySubscriptions"
             :key="subscription.id"
@@ -163,7 +166,7 @@
           </div>
         </div>
 
-        <div class="border-t border-gray-100 p-2 dark:border-dark-700">
+        <div class="shrink-0 border-t border-gray-100 p-2 dark:border-dark-700">
           <router-link
             to="/subscriptions"
             @click="closeTooltip"
@@ -174,12 +177,15 @@
         </div>
       </div>
     </transition>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
 import AppHeading from '@/components/common/AppHeading.vue'
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
+import { useEventListener } from '@vueuse/core'
+import { popoverLayout } from '@/utils/floatingPanel'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import { useSubscriptionStore } from '@/stores'
@@ -193,6 +199,15 @@ const subscriptionStore = useSubscriptionStore()
 
 const containerRef = ref<HTMLElement | null>(null)
 const tooltipOpen = ref(false)
+const tooltipRef = ref<HTMLElement | null>(null)
+const tooltipStyle = ref<ReturnType<typeof popoverLayout>>()
+function positionTooltip() {
+  if (!tooltipOpen.value || !containerRef.value) return
+  tooltipStyle.value = popoverLayout(containerRef.value.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight }, 340, tooltipRef.value?.scrollHeight || 360)
+}
+watch(tooltipOpen, async (open) => { if (open) { positionTooltip(); await nextTick(); positionTooltip() } })
+useEventListener(window, 'resize', positionTooltip)
+useEventListener(window, 'scroll', positionTooltip, true)
 
 // Use store data instead of local state
 const activeSubscriptions = computed(() => subscriptionStore.activeSubscriptions)
@@ -293,7 +308,7 @@ function closeTooltip() {
 }
 
 function handleClickOutside(event: MouseEvent) {
-  if (containerRef.value && !containerRef.value.contains(event.target as Node)) {
+  if (containerRef.value && !containerRef.value.contains(event.target as Node) && !tooltipRef.value?.contains(event.target as Node)) {
     closeTooltip()
   }
 }

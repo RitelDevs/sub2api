@@ -15,8 +15,8 @@
       class="fixed z-[9999] flex flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl dark:border-dark-600 dark:bg-dark-800"
       :style="position"
     >
-      <div class="flex shrink-0 items-center justify-between gap-3 border-b border-gray-200 px-3 py-2 dark:border-dark-600">
-        <span class="text-sm font-medium">{{ primaryHeading }}</span>
+      <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-gray-200 px-3 py-2 dark:border-dark-600">
+        <span class="min-w-0 [overflow-wrap:anywhere] text-sm font-medium">{{ primaryHeading }}</span>
         <button type="button" class="btn btn-secondary btn-sm" @click="emit('reset')">{{ t('common.resetColumns') }}</button>
       </div>
       <span :id="hintId" class="sr-only">{{ t('common.columnKeyboard') }}</span>
@@ -40,7 +40,7 @@
               :checked="!hiddenColumns.has(column.key) || requiredColumns.includes(column.key)"
               :disabled="requiredColumns.includes(column.key)" @change="emit('toggle', column.key)"
             />
-            <span class="min-w-0 break-words">{{ column.label }}</span>
+            <span class="min-w-0 whitespace-normal [overflow-wrap:anywhere]">{{ column.label }}</span>
           </label>
         </div>
       </VueDraggable>
@@ -55,6 +55,7 @@ import { VueDraggable } from 'vue-draggable-plus'
 import { useI18n } from 'vue-i18n'
 import type { Column } from './types'
 import { useOwnedPopover } from '@/composables/overlayLifecycle'
+import { popoverLayout } from '@/utils/floatingPanel'
 
 const props = withDefaults(defineProps<{
   columns: Column[]
@@ -70,7 +71,7 @@ const trigger = ref<HTMLButtonElement>()
 const panel = ref<HTMLElement>()
 const open = ref(false)
 useOwnedPopover(open, { root: () => panel.value, trigger: () => trigger.value, close: () => { open.value = false } })
-const position = ref<Record<string, string>>({})
+const position = ref<ReturnType<typeof popoverLayout>>()
 const draggableColumns = computed({
   get: () => props.columns.filter(column => column.key !== 'select'),
   set: columns => emit('reorder', columns.map(column => column.key))
@@ -78,15 +79,8 @@ const draggableColumns = computed({
 function place() {
   const rect = trigger.value?.getBoundingClientRect()
   if (!rect) return
-  const width = Math.min(360, window.innerWidth - 24)
-  const below = window.innerHeight - rect.bottom - 16
-  const above = rect.top - 16
-  const flip = below < 240 && above > below
-  position.value = {
-    left: `${Math.max(12, Math.min(rect.right - width, window.innerWidth - width - 12))}px`,
-    width: `${width}px`, maxHeight: `${Math.max(100, Math.min(480, flip ? above : below))}px`,
-    ...(flip ? { bottom: `${window.innerHeight - rect.top + 8}px` } : { top: `${rect.bottom + 8}px` })
-  }
+  const layout = popoverLayout(rect, { width: window.innerWidth, height: window.innerHeight }, 360, 240)
+  position.value = { ...layout, maxHeight: `${Math.min(480, Number.parseFloat(layout.maxHeight))}px` }
 }
 function close() { open.value = false }
 async function move(index: number, delta: number) {

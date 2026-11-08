@@ -982,8 +982,8 @@
         class="animate-in fade-in slide-in-from-top-2 fixed z-[100000020] flex flex-col overflow-hidden rounded-xl bg-white shadow-lg ring-1 ring-black/5 transition-opacity duration-200 dark:bg-dark-800 dark:ring-white/10"
         style="pointer-events: auto !important;"
         :style="{
-          top: dropdownPosition.top !== undefined ? dropdownPosition.top + 'px' : undefined,
-          bottom: dropdownPosition.bottom !== undefined ? dropdownPosition.bottom + 'px' : undefined,
+          top: dropdownPosition.top !== null ? dropdownPosition.top + 'px' : undefined,
+          bottom: dropdownPosition.bottom !== null ? dropdownPosition.bottom + 'px' : undefined,
           left: dropdownPosition.left + 'px',
           width: dropdownPosition.width + 'px',
           maxHeight: dropdownPosition.maxHeight + 'px'
@@ -1051,6 +1051,7 @@
 </template>
 
 <script setup lang="ts">
+import { getFloatingPanelPosition, type FloatingPanelPosition } from '@/utils/floatingPanel'
 import { formatAmount as formatDisplayAmount } from '@/utils/consoleDisplay'
 import { useId as useFieldLabelId } from 'vue'
 const fieldLabelScope = useFieldLabelId()
@@ -1328,7 +1329,7 @@ let copiedKeyTimer: ReturnType<typeof setTimeout> | undefined
 const groupSelectorKeyId = ref<number | null>(null)
 const publicSettings = ref<PublicSettings | null>(null)
 const dropdownRef = ref<HTMLElement | null>(null)
-const dropdownPosition = ref<{ top?: number; bottom?: number; left: number; width: number; maxHeight: number } | null>(null)
+const dropdownPosition = ref<FloatingPanelPosition | null>(null)
 const groupButtonRefs = ref<Map<number, HTMLElement>>(new Map())
 
 // Get the currently selected key for group change
@@ -1760,18 +1761,9 @@ const updateGroupDropdownPosition = () => {
   if (groupSelectorKeyId.value === null) return
   const buttonEl = groupButtonRefs.value.get(groupSelectorKeyId.value)
   if (!buttonEl) return
-  const rect = buttonEl.getBoundingClientRect()
-  const width = Math.min(380, window.innerWidth - 16)
-  const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))
-  const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - 12)
-  const spaceAbove = Math.max(0, rect.top - 12)
-  const opensUp = spaceBelow < 400 && spaceAbove > spaceBelow
-  dropdownPosition.value = {
-    ...(opensUp ? { bottom: window.innerHeight - rect.top + 4 } : { top: rect.bottom + 4 }),
-    left,
-    width,
-    maxHeight: opensUp ? spaceAbove : spaceBelow
-  }
+  dropdownPosition.value = getFloatingPanelPosition(buttonEl.getBoundingClientRect(), window.innerWidth, window.innerHeight, {
+    alignment: 'start', viewportPadding: 8, gap: 4, maxWidth: 380, maxHeightRatio: 1, minComfortableHeight: 400
+  })
 }
 
 const openGroupSelector = (key: ApiKey) => {

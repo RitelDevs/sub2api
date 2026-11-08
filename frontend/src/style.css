@@ -495,7 +495,6 @@
   }
 
   .modal-footer > * { min-width: 0; max-width: 100%; }
-  .modal-footer .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 
   /* 防止body滚动的工具类 */
   body.modal-open {
@@ -886,6 +885,8 @@ select option { background: var(--theme-surface); color: var(--ritel-fg); }
 .tabs, .tab { border-radius: 0 !important; }
 .badge { border-radius: var(--ritel-radius-pill) !important; }
 .btn { min-height: 44px; padding: 10px 22px; font-size: 14.5px; font-weight: 500; white-space: nowrap; }
+/* Dialog actions follow the available width, including localized labels. */
+.modal-footer .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 button.rounded, a.rounded[href] { border-radius: var(--ritel-radius-control); }
 .btn-sm { min-height: 36px; padding: 6px 14px; font-size: 13.5px; }
 .btn-primary { background: var(--theme-control-fill) !important; border: 1px solid var(--theme-control-fill); color: var(--theme-on-control) !important; }

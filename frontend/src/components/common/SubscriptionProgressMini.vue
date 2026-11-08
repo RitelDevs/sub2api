@@ -186,6 +186,7 @@ import AppHeading from '@/components/common/AppHeading.vue'
 import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useEventListener } from '@vueuse/core'
 import { popoverLayout } from '@/utils/floatingPanel'
+import { useOwnedPopover } from '@/composables/overlayLifecycle'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import { useSubscriptionStore } from '@/stores'
@@ -200,6 +201,7 @@ const subscriptionStore = useSubscriptionStore()
 const containerRef = ref<HTMLElement | null>(null)
 const tooltipOpen = ref(false)
 const tooltipRef = ref<HTMLElement | null>(null)
+useOwnedPopover(tooltipOpen, { root: () => tooltipRef.value, trigger: () => containerRef.value?.querySelector('button'), close: closeTooltip })
 const tooltipStyle = ref<ReturnType<typeof popoverLayout>>()
 function positionTooltip() {
   if (!tooltipOpen.value || !containerRef.value) return

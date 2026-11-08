@@ -647,6 +647,7 @@ import { formatTimestamp as formatDisplayTimestamp } from "@/utils/consoleDispla
 import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useEventListener } from '@vueuse/core'
 import { popoverLayout } from '@/utils/floatingPanel'
+import { useOwnedPopover } from '@/composables/overlayLifecycle'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import {
@@ -677,6 +678,7 @@ const isAdmin = computed(() => authStore.isAdmin)
 const dropdownOpen = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)
 const versionAnchorRef = ref<HTMLElement | null>(null)
+useOwnedPopover(dropdownOpen, { root: () => dropdownRef.value, trigger: () => versionAnchorRef.value?.querySelector('button'), close: closeDropdown })
 const dropdownStyle = ref<ReturnType<typeof popoverLayout>>()
 function positionDropdown() {
   if (!dropdownOpen.value || !versionAnchorRef.value) return

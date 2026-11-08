@@ -11,12 +11,14 @@
 <script setup lang="ts">
 import { nextTick, ref } from 'vue'
 import { popoverLayout } from '@/utils/floatingPanel'
-import { onClickOutside, onKeyStroke, useEventListener } from '@vueuse/core'
+import { useOwnedPopover } from '@/composables/overlayLifecycle'
+import { onClickOutside, useEventListener } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 const open = ref(false)
 const anchor = ref<HTMLElement>()
 const panel = ref<HTMLElement>()
+useOwnedPopover(open, { root: () => panel.value, trigger: () => anchor.value?.querySelector('button'), close })
 const position = ref<ReturnType<typeof popoverLayout>>()
 function updatePosition() {
   if (!open.value || !anchor.value) return
@@ -32,7 +34,6 @@ async function toggle() {
   panel.value?.querySelector<HTMLElement>('button, a, input')?.focus()
 }
 onClickOutside(panel, () => { open.value = false }, { ignore: [anchor] })
-onKeyStroke('Escape', () => { if (open.value) close() })
 useEventListener(window, 'resize', updatePosition)
 useEventListener(window, 'scroll', () => { open.value = false })
 </script>

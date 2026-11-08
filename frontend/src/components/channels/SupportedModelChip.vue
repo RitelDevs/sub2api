@@ -1,9 +1,9 @@
 <template>
-  <div class="relative inline-block">
+  <div class="relative inline-block min-w-0 max-w-full">
     <span
       ref="triggerEl"
       :class="[
-        'inline-flex cursor-help items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium transition-colors',
+        'inline-flex min-w-0 max-w-full cursor-help items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium transition-colors',
         effectivePlatform
           ? platformBadgeClass(effectivePlatform)
           : 'border-gray-200 bg-gray-50 text-gray-700 dark:border-dark-600 dark:bg-dark-800 dark:text-gray-300',
@@ -26,7 +26,7 @@
       >
         {{ model.platform }}
       </span>
-      {{ model.name }}
+      <span class="min-w-0 whitespace-normal [overflow-wrap:anywhere]">{{ model.name }}</span>
     </span>
 
     <!-- Teleport to body so the popover is not clipped by card/overflow-hidden

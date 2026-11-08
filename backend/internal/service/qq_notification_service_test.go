@@ -229,8 +229,8 @@ func TestQQUnboundCommandsStaySilentWithoutAuditWrites(t *testing.T) {
 	}
 }
 
-func TestQQUnboundCodeOnlyRecordsPendingWithoutReply(t *testing.T) {
-	for _, changed := range []int64{0, 1} {
+func TestQQInvalidExpiredOrAlreadyObservedCodeStaysSilent(t *testing.T) {
+	for _, changed := range []int64{0} {
 		t.Run(fmt.Sprint(changed), func(t *testing.T) {
 			s, m := qqTestService(t)
 			m.ExpectQuery("SELECT n.user_id").WithArgs("234567").WillReturnError(sql.ErrNoRows)

@@ -63,6 +63,9 @@ func TestQQPostgresBindingAndDelivery(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	if hits.Load() != 2 {
+		t.Fatal("website confirmation did not send success under default email preferences")
+	}
 	if _, e = s.Issue(ctx, 1); e == nil {
 		t.Fatal("rate limit absent")
 	}
@@ -71,6 +74,12 @@ func TestQQPostgresBindingAndDelivery(t *testing.T) {
 	body, _ := json.Marshal(event)
 	if e = s.Webhook(ctx, body); e != nil {
 		t.Fatal(e)
+	}
+	if hits.Load() != 1 {
+		t.Fatal("accepted code did not receive one confirmation prompt")
+	}
+	if e = s.Webhook(ctx, body); e != nil || hits.Load() != 1 {
+		t.Fatal("duplicate code event resent a prompt", e)
 	}
 	status, e := s.Status(ctx, 1)
 	if e != nil || status.PendingQQ == nil {

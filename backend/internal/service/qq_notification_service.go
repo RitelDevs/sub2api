@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -133,7 +134,18 @@ func (s *QQNotificationService) Confirm(ctx context.Context, uid int64, masked, 
 	if e != nil {
 		return ErrQQRequest
 	}
-	return tx.Commit()
+	if e = tx.Commit(); e != nil {
+		return e
+	}
+	// The binding is durable even if its one-off service reply fails. Do not
+	// turn a committed binding into a retryable confirmation error.
+	replyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 12*time.Second)
+	defer cancel()
+	message := "QQ 绑定成功！\n现在可以私聊我进行普通对话，也可发送“查余额”“查套餐”“查用量”或“帮助”。\n余额与套餐提醒请在网页的通知偏好中选择 QQ 或 QQ＋邮箱并保存。\n完整私人助理环境仅向管理员指定开通的用户提供。\n账号中心：https://account.ritel.si/account/#qq"
+	if err := s.deliver(replyCtx, uid, q, "binding-confirmed:"+fmt.Sprint(uid)+":"+bindingID, message, true); err != nil {
+		log.Printf("QQ binding committed; success reply unavailable; user_id=%d", uid)
+	}
+	return nil
 }
 func (s *QQNotificationService) Unbind(ctx context.Context, uid int64) error {
 	_, e := s.db.ExecContext(ctx, "UPDATE qq_user_notifications SET qq=NULL,channel='email',code_hash=NULL,pending_qq=NULL,expires_at=NULL WHERE user_id=$1", uid)
@@ -340,9 +352,21 @@ func (s *QQNotificationService) Webhook(ctx context.Context, body []byte) error 
 		return e
 	}
 	if binding {
-		_, e = s.db.ExecContext(ctx, `UPDATE qq_user_notifications SET pending_qq=$2 WHERE code_hash=$1 AND expires_at>NOW() AND pending_qq IS NULL
+		result, err := s.db.ExecContext(ctx, `UPDATE qq_user_notifications SET pending_qq=$2 WHERE code_hash=$1 AND expires_at>NOW() AND pending_qq IS NULL
  AND NOT EXISTS(SELECT 1 FROM qq_user_notifications q WHERE q.qq=$2 AND q.user_id<>qq_user_notifications.user_id)`, qqHash(code), ev.UserID.String())
-		return e // The website confirms the candidate; QQ remains silent until then.
+		if err != nil {
+			return err
+		}
+		changed, err := result.RowsAffected()
+		if err != nil || changed != 1 {
+			return err // Invalid, expired and already-observed codes stay silent.
+		}
+		var uid int64
+		if err = s.db.QueryRowContext(ctx, "SELECT user_id FROM qq_user_notifications WHERE code_hash=$1 AND pending_qq=$2 AND expires_at>NOW()", qqHash(code), ev.UserID.String()).Scan(&uid); err != nil {
+			return err
+		}
+		message := "绑定码正确，已收到你的绑定请求。\n请返回账号中心网页，核对显示的 QQ 后点击“确认绑定”。网页会自动检测，无需手动刷新。\n确认后我会发送绑定成功消息和使用提示。\nhttps://account.ritel.si/account/#qq"
+		return s.deliver(ctx, uid, ev.UserID.String(), "binding-pending:"+fmt.Sprint(uid)+":"+qqHash(code), message, false, "binding-pending", qqHash(code))
 	}
 	reply := "Sub2API QQ 助手\n请在账号中心 → QQ Bot 生成验证码，只需将验证码私聊发给我，再返回网页核对 QQ 并确认。\n绑定后直接发送：查余额、查套餐、查用量。\n也可以用自然语言让我查询。通知偏好与解绑请在账号中心设置：https://account.ritel.si/account/#qq"
 	if text != "/sub" {
@@ -432,11 +456,25 @@ func (s *QQNotificationService) deliver(ctx context.Context, uid int64, q, key, 
 		return e
 	}
 	defer func() { _ = tx.Rollback() }()
-	if checkBinding {
+	pending := !checkBinding && len(event) == 2 && event[0] == "binding-pending"
+	checkRecipient := func(tx *sql.Tx) error {
 		var actual string
-		e = tx.QueryRowContext(ctx, "SELECT qq FROM qq_user_notifications WHERE user_id=$1 FOR UPDATE", uid).Scan(&actual)
-		if e != nil || actual != q {
+		if pending {
+			err := tx.QueryRowContext(ctx, "SELECT n.pending_qq FROM qq_user_notifications n JOIN users u ON u.id=n.user_id WHERE n.user_id=$1 AND n.code_hash=$2 AND n.expires_at>NOW() AND n.qq IS NULL AND u.deleted_at IS NULL AND u.status='active' FOR UPDATE OF n", uid, event[1]).Scan(&actual)
+			if err != nil || actual != q {
+				return ErrQQRequest
+			}
+			return nil
+		}
+		err := tx.QueryRowContext(ctx, "SELECT qq FROM qq_user_notifications WHERE user_id=$1 FOR UPDATE", uid).Scan(&actual)
+		if err != nil || actual != q {
 			return ErrQQRequest
+		}
+		return nil
+	}
+	if checkBinding || pending {
+		if e = checkRecipient(tx); e != nil {
+			return e
 		}
 	}
 	r, e := tx.ExecContext(ctx, "INSERT INTO qq_delivery_attempts(delivery_key,user_id,qq,state) VALUES($1,NULLIF($2,0),$3,'attempting') ON CONFLICT DO NOTHING", key, uid, q)
@@ -458,16 +496,14 @@ func (s *QQNotificationService) deliver(ctx context.Context, uid int64, q, key, 
 	if e = tx.Commit(); e != nil {
 		return e
 	}
-	if checkBinding {
+	if checkBinding || pending {
 		tx, e = s.db.BeginTx(ctx, nil)
 		if e != nil {
 			return e
 		}
 		defer func() { _ = tx.Rollback() }()
-		var actual string
-		e = tx.QueryRowContext(ctx, "SELECT qq FROM qq_user_notifications WHERE user_id=$1 FOR UPDATE", uid).Scan(&actual)
-		if e != nil || actual != q {
-			return ErrQQRequest
+		if e = checkRecipient(tx); e != nil {
+			return e
 		}
 
 		var active bool
@@ -477,7 +513,7 @@ func (s *QQNotificationService) deliver(ctx context.Context, uid int64, q, key, 
 		if !active {
 			return ErrQQRequest
 		}
-		if len(event) > 0 {
+		if checkBinding && len(event) > 0 {
 			var channel string
 			var balance, expiry bool
 			if e = tx.QueryRowContext(ctx, "SELECT channel,balance_low,subscription_expiry FROM qq_user_notifications WHERE user_id=$1", uid).Scan(&channel, &balance, &expiry); e != nil {
@@ -519,7 +555,7 @@ func (s *QQNotificationService) deliver(ctx context.Context, uid int64, q, key, 
 			state = "rejected"
 		}
 	}
-	if checkBinding {
+	if checkBinding || pending {
 		_ = tx.Commit()
 	}
 	finalCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

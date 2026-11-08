@@ -12,7 +12,7 @@
       @mouseleave="onLeave"
       @focusin="onEnter"
       @focusout="onLeave"
-      @click.stop="show ? closePopover() : onEnter()"
+      @click.stop="onEnter"
       tabindex="0"
     >
       <PlatformIcon

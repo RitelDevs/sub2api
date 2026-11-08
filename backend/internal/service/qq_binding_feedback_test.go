@@ -43,6 +43,16 @@ func expectQQFeedbackSend(m sqlmock.Sqlmock, pending bool, key, state string) {
 }
 func TestQQAcceptedCodeRepliesOnlyAfterPendingStored(t *testing.T) {
 	s, m := qqTestService(t)
+	s.client.Timeout = 10 * time.Second
+	observed := false
+	s.client.Transport = qqFeedbackRoundTripper(func(r *http.Request) (*http.Response, error) {
+		observed = true
+		deadline, ok := r.Context().Deadline()
+		if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 3*time.Second {
+			t.Errorf("pending reply must release its row lock within 3s, deadline=%v present=%v", deadline, ok)
+		}
+		return http.DefaultTransport.RoundTrip(r)
+	})
 	var message string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var p struct {
@@ -67,6 +77,9 @@ func TestQQAcceptedCodeRepliesOnlyAfterPendingStored(t *testing.T) {
 	body, _ := json.Marshal(ev)
 	if err := s.Webhook(context.Background(), body); err != nil {
 		t.Fatal(err)
+	}
+	if !observed {
+		t.Fatal("pending native request was not exercised")
 	}
 	if !strings.Contains(message, "绑定码正确") || !strings.Contains(message, "确认绑定") || strings.Contains(message, "绑定成功！") {
 		t.Fatal(message)
@@ -134,7 +147,7 @@ func TestQQCommittedBindingRemainsSuccessfulWhenReplyFails(t *testing.T) {
 	s.client.Transport = qqFeedbackRoundTripper(func(r *http.Request) (*http.Response, error) {
 		observed = true
 		deadline, ok := r.Context().Deadline()
-		if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 5*time.Second {
+		if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 3*time.Second {
 			t.Errorf("service reply must finish inside Node's 10s budget, deadline=%v present=%v", deadline, ok)
 		}
 		return nil, errors.New("synthetic uncertain delivery")

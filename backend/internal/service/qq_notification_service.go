@@ -26,6 +26,9 @@ var qqMessageID = regexp.MustCompile(`^-?[0-9]{1,20}$`)
 var qqCode = regexp.MustCompile(`^[A-F0-9]{16}$`)
 var ErrQQRequest = errors.New("QQ request unavailable, expired or conflicting")
 
+// Pending lock wait + success send + final attempt write stay within the native 10s caller budget.
+const qqBindingReplyTimeout = 3 * time.Second
+
 type QQNotificationService struct {
 	db                           *sql.DB
 	endpoint, token, secret, bot string
@@ -139,7 +142,7 @@ func (s *QQNotificationService) Confirm(ctx context.Context, uid int64, masked, 
 	}
 	// The binding is durable even if its one-off service reply fails. Do not
 	// turn a committed binding into a retryable confirmation error.
-	replyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	replyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqBindingReplyTimeout)
 	defer cancel()
 	message := "QQ 绑定成功！\n现在可以私聊我进行普通对话，也可发送“查余额”“查套餐”“查用量”或“帮助”。\n余额与套餐提醒请在网页的通知偏好中选择 QQ 或 QQ＋邮箱并保存。\n完整私人助理环境仅向管理员指定开通的用户提供。\n账号中心：https://account.ritel.si/account/#qq"
 	if err := s.deliver(replyCtx, uid, q, "binding-confirmed:"+fmt.Sprint(uid)+":"+bindingID, message, true); err != nil {
@@ -366,7 +369,11 @@ func (s *QQNotificationService) Webhook(ctx context.Context, body []byte) error 
 			return err
 		}
 		message := "绑定码正确，已收到你的绑定请求。\n请返回账号中心网页，核对显示的 QQ 后点击“确认绑定”。网页会自动检测，无需手动刷新。\n确认后我会发送绑定成功消息和使用提示。\nhttps://account.ritel.si/account/#qq"
-		return s.deliver(ctx, uid, ev.UserID.String(), "binding-pending:"+fmt.Sprint(uid)+":"+qqHash(code), message, false, "binding-pending", qqHash(code))
+		// A pending prompt holds the candidate row lock while sending. Keep
+		// that wait plus Confirm's 3s reply inside the native caller's 10s budget.
+		replyCtx, cancel := context.WithTimeout(ctx, qqBindingReplyTimeout)
+		defer cancel()
+		return s.deliver(replyCtx, uid, ev.UserID.String(), "binding-pending:"+fmt.Sprint(uid)+":"+qqHash(code), message, false, "binding-pending", qqHash(code))
 	}
 	reply := "Sub2API QQ 助手\n请在账号中心 → QQ Bot 生成验证码，只需将验证码私聊发给我，再返回网页核对 QQ 并确认。\n绑定后直接发送：查余额、查套餐、查用量。\n也可以用自然语言让我查询。通知偏好与解绑请在账号中心设置：https://account.ritel.si/account/#qq"
 	if text != "/sub" {

@@ -629,7 +629,7 @@ def compact(summary):
 def run(*, state_dir=legacy.STATE_DIR, initial=False, apply=False, account_ids=(),
         model=DEFAULT_MODEL, reasoning=DEFAULT_REASONING, expected_answer=DEFAULT_ANSWER,
         apply_record=None, max_age_minutes=180, workers=4, route_mode="bps", pending_only=False):
-    if route_mode == "borrow":
+    if route_mode in ("borrow", "isolate"):
         import sys
         borrow_spec = importlib.util.spec_from_file_location(
             'oauth_gateway_borrow', Path(__file__).with_name('oauth_gateway_borrow.py'))
@@ -640,7 +640,7 @@ def run(*, state_dir=legacy.STATE_DIR, initial=False, apply=False, account_ids=(
         return borrow.run_borrow(state_dir=state_dir, initial=initial, apply=apply, account_ids=account_ids,
                           reasoning=reasoning, expected_answer=expected_answer,
                           apply_record=apply_record, max_age_minutes=max_age_minutes, workers=workers,
-                          pending_only=pending_only)
+                          pending_only=pending_only, isolation=route_mode == "isolate")
     if pending_only:
         raise ValueError('pending-only requires borrow route mode')
     if route_mode != "bps":
@@ -752,7 +752,7 @@ def run(*, state_dir=legacy.STATE_DIR, initial=False, apply=False, account_ids=(
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--route-mode', choices=['bps', 'borrow'], default='bps')
+    parser.add_argument('--route-mode', choices=['bps', 'borrow', 'isolate'], default='bps')
     parser.add_argument('--pending-only', action='store_true')
     parser.add_argument('--initial', action='store_true')
     parser.add_argument('--apply', action='store_true')

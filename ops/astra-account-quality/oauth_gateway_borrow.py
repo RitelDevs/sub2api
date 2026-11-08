@@ -505,7 +505,7 @@ def compact(summary):
 
 def run_borrow(*, state_dir, initial=False, apply=False, account_ids=(), reasoning='medium',
                expected_answer='21', apply_record=None, max_age_minutes=180, workers=4,
-               pending_only=False):
+               pending_only=False, isolation=False):
     if workers not in range(1, 5) or not re.fullmatch(r'\d+', expected_answer):
         raise ValueError('invalid candy run arguments')
     if reasoning != 'medium' or expected_answer != '21':
@@ -519,9 +519,16 @@ def run_borrow(*, state_dir, initial=False, apply=False, account_ids=(), reasoni
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            output = {'route_mode': 'borrow', 'pending_only': pending_only, 'skipped': 'cycle_busy'}
+            output = {'route_mode': 'isolate' if isolation else 'borrow', 'pending_only': pending_only, 'skipped': 'cycle_busy'}
             print(json.dumps(output, sort_keys=True), flush=True)
             return output
+        isolator = None
+        if isolation:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                'oauth_quality_isolation', Path(__file__).with_name('oauth_quality_isolation.py'))
+            isolator = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(isolator)
         accounts = candy.inventory()
         selected = [a for a in accounts if not account_ids or a['id'] in account_ids]
         retry_path = state_dir / 'pending-retry.json'
@@ -538,7 +545,7 @@ def run_borrow(*, state_dir, initial=False, apply=False, account_ids=(), reasoni
             selected = [a for a in selected if not pending_retry_active(a, pending_retries.get(str(a['id'])))]
         if not selected:
             if pending_only:
-                output = {'route_mode': 'borrow', 'pending_only': True,
+                output = {'route_mode': 'isolate' if isolation else 'borrow', 'pending_only': True,
                           'skipped': 'pending_retry_deferred' if ready_count else 'no_ready_pending_accounts'}
                 print(json.dumps(output, sort_keys=True), flush=True)
                 return output
@@ -548,8 +555,9 @@ def run_borrow(*, state_dir, initial=False, apply=False, account_ids=(), reasoni
         run_dir = state_dir / 'candy-runs' / run_id
         run_dir.mkdir(mode=0o700, parents=True)
         summary = {'at': candy.utcnow(), 'run_id': run_id, 'algorithm': candy.ALGORITHM,
-                   'prompt_sha256': candy.PROMPT_SHA256, 'route_mode': 'borrow', 'results': [],
+                   'prompt_sha256': candy.PROMPT_SHA256, 'route_mode': 'isolate' if isolation else 'borrow', 'results': [],
                    'quality_mode': QUALITY_MODE, 'pending_only': pending_only,
+                   'isolation': isolation,
                    'changes': [], 'recoveries': [], 'quota_updates': [], 'applied': apply}
         def task(account):
             out = []
@@ -569,6 +577,14 @@ def run_borrow(*, state_dir, initial=False, apply=False, account_ids=(), reasoni
         def apply_fresh(account, results):
             try:
                 change = apply_account(account, results, key, run_dir)
+                if isolation:
+                    # Also reconcile an existing classification after an inconclusive
+                    # probe; failed probes must never return a degraded account to service.
+                    change['isolation'] = isolator.reconcile_account(account['id'], key, state_dir, run_dir)
+                    if change['isolation'].get('skipped') in (
+                            'concurrent_account_change', 'isolation_marker_conflict', 'isolation_membership_changed'):
+                        raise RuntimeError('isolation transition needs reconciliation')
+
             except Exception as exc:
                 change = {'id': account['id'], 'error': type(exc).__name__}
             summary['changes'].append(change)
@@ -608,15 +624,18 @@ def run_borrow(*, state_dir, initial=False, apply=False, account_ids=(), reasoni
             try:
                 verified_ids = {c['id'] for c in summary['changes'] if c.get('applied') or c.get('skipped') == 'unchanged'}
                 routing_results = [r for r in summary['results'] if r['id'] in verified_ids]
-                summary['routing'] = update_routing(candy.inventory(), routing_results, key, run_dir,
+                summary['routing'] = (isolator.disable_routing(key, run_dir) if isolation else
+                    update_routing(candy.inventory(), routing_results, key, run_dir,
                                                    pending_only=pending_only, partial=bool(account_ids),
-                                                   observed_account_ids={r['id'] for r in summary['results'] if r.get('samples')})
+                                                   observed_account_ids={r['id'] for r in summary['results'] if r.get('samples')}))
             except Exception as exc:
                 summary['routing'] = {'updated': False, 'error': type(exc).__name__}
         summary['completed_at'] = candy.utcnow()
         candy.legacy.save_private(run_dir / ('applied.json' if apply else 'result.json'), summary)
         candy.legacy.save_private(state_dir / ('pending-last-run.json' if pending_only else 'last-run.json'), summary)
         output = compact(summary)
+        if isolation:
+            output['route_mode'] = 'isolate'
         if not pending_only:
             history_path = state_dir / 'candy-history.json'
             history = json.loads(history_path.read_text()) if history_path.exists() else []

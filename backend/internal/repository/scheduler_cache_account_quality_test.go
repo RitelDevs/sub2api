@@ -60,3 +60,22 @@ func TestSchedulerMetadataKeepsPendingAdmissionGate(t *testing.T) {
 	}
 	require.False(t, projected.IsOpenAIGatewayAccountQualityPendingForModel("gpt-6-luna"))
 }
+
+func TestSchedulerMetadataKeepsDedicatedQualityGroupNativeRoute(t *testing.T) {
+	a := service.Account{ID: 25, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+		GroupIDs: []int64{25}, Extra: map[string]any{
+			service.GatewayBorrowModelsKey:   []string{"gpt-6-astra", "gpt-6.1-sol"},
+			service.QualityGroupIsolationKey: map[string]any{"version": 1, "isolation_group_id": 25},
+		}}
+	projected := buildSchedulerMetadataAccount(a)
+	raw, err := json.Marshal(projected)
+	require.NoError(t, err)
+	var restored service.Account
+	require.NoError(t, json.Unmarshal(raw, &restored))
+	require.Equal(t, []int64{25}, restored.GroupIDs)
+	for _, model := range []string{"gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"} {
+		require.False(t, restored.RequiresGatewayBorrowUpstream(model), model)
+	}
+	restored.GroupIDs = []int64{12, 25}
+	require.True(t, restored.RequiresGatewayBorrowUpstream("gpt-6-astra"))
+}

@@ -16,6 +16,31 @@ afterEach(() => { document.body.innerHTML = '' })
 const render = () => mount(ThemeSwitcher, { attachTo: document.body, global: { stubs: { Teleport: true } } })
 
 describe('theme switcher', () => {
+  it('keeps an open menu inside a short viewport and repositions on resize', async () => {
+    const oldWidth = window.innerWidth
+    const oldHeight = window.innerHeight
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 320 })
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 240 })
+    try {
+      const wrapper = render()
+      const trigger = wrapper.get('button[aria-haspopup="menu"]')
+      vi.spyOn(trigger.element, 'getBoundingClientRect').mockReturnValue({ left: 280, right: 316, top: 190, bottom: 226, width: 36, height: 36 } as DOMRect)
+      await trigger.trigger('click'); await flushPromises()
+      const menu = wrapper.get<HTMLElement>('[role="menu"]')
+      expect(Number.parseFloat(menu.element.style.left)).toBeGreaterThanOrEqual(8)
+      expect(Number.parseFloat(menu.element.style.left) + Number.parseFloat(menu.element.style.width)).toBeLessThanOrEqual(312)
+      expect(menu.element.style.bottom).not.toBe('')
+      expect(Number.parseFloat(menu.element.style.maxHeight)).toBeLessThanOrEqual(182)
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 220 })
+      window.dispatchEvent(new Event('resize'))
+      await flushPromises()
+      const resizedMenu = wrapper.get<HTMLElement>('[role="menu"]')
+      expect(Number.parseFloat(resizedMenu.element.style.left) + Number.parseFloat(resizedMenu.element.style.width)).toBeLessThanOrEqual(212)
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: oldWidth })
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: oldHeight })
+    }
+  })
   it('uses the branded icon menu and commits exactly one explicit choice', async () => {
     const wrapper = render()
     expect(wrapper.find('select').exists()).toBe(false)

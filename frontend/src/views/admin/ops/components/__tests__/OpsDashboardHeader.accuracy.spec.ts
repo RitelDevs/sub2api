@@ -24,7 +24,7 @@ function mountHeader(overrides: Partial<OpsDashboardOverview> = {}, lang = 'en')
     props: { overview, platform: '', groupId: null, timeRange: '24h', queryMode: 'auto', loading: false, lastUpdated: null },
     global: {
       plugins: [createI18n({ legacy: false, locale: lang, missingWarn: false, fallbackWarn: false, messages: { en: { admin: en }, zh: { admin: zh }, 'zh-Hant-HK': { admin: hk } } })],
-      stubs: { Select: true, HelpTooltip: true, Icon: true, BaseDialog: { props: ['show'], template: '<div v-if="show"><slot /></div>' } }
+      stubs: { Select: true, HelpTooltip: { template: '<div><slot name="trigger" /></div>' }, Icon: true, BaseDialog: { props: ['show'], template: '<div v-if="show"><slot /></div>' } }
     }
   })
 }

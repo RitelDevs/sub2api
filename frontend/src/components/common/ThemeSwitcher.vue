@@ -29,6 +29,7 @@ import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import { useOwnedPopover } from '@/composables/overlayLifecycle'
 import { useTheme, type ThemePreference } from '@/composables/useTheme'
+import { popoverLayout } from '@/utils/floatingPanel'
 
 const { t } = useI18n()
 const { preference, setTheme } = useTheme()
@@ -52,10 +53,10 @@ onClickOutside(root, event => { if (!panel.value?.contains(event.target as Node)
 function positionMenu() {
   const rect = trigger.value?.getBoundingClientRect()
   if (!rect) return
-  const width = Math.min(176, window.innerWidth - 16)
-  position.value = { top: `${rect.bottom + 8}px`, left: `${Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8))}px`, width: `${width}px` }
+  position.value = popoverLayout(rect, { width: window.innerWidth, height: window.innerHeight }, 176, panel.value?.scrollHeight || 136)
 }
 useEventListener(window, 'resize', () => { if (open.value) positionMenu() })
+useEventListener(window, 'scroll', () => { if (open.value) positionMenu() }, true)
 function focusChoice(index: number) {
   activeIndex.value = (index + choices.length) % choices.length
   void nextTick(() => { panel.value?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')[activeIndex.value]?.focus() })
@@ -93,9 +94,11 @@ function selectTheme(value: ThemePreference) {
 .theme-switcher-trigger{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border:0;border-radius:var(--ritel-radius-control);background:transparent;color:var(--ritel-muted);cursor:pointer}
 .theme-switcher-trigger:hover{color:var(--ritel-fg);background:var(--theme-hover)}
 .theme-switcher-trigger:focus-visible{outline:2px solid var(--ritel-focus);outline-offset:2px}
-.theme-switcher-menu{position:fixed;z-index:100000100;padding:4px;border:1px solid var(--ritel-border);border-radius:var(--ritel-radius-menu);background:var(--ritel-surface-raised);color:var(--ritel-fg);box-shadow:0 10px 30px rgba(var(--theme-shadow-rgb),.18)}
+.theme-switcher-menu{position:fixed;overflow-y:auto;overscroll-behavior:contain;overflow-wrap:anywhere;z-index:100000100;padding:4px;border:1px solid var(--ritel-border);border-radius:var(--ritel-radius-menu);background:var(--ritel-surface-raised);color:var(--ritel-fg);box-shadow:0 10px 30px rgba(var(--theme-shadow-rgb),.18)}
 .theme-switcher-choice{display:flex;align-items:center;gap:10px;width:100%;min-height:40px;padding:8px 10px;border:0;border-radius:var(--ritel-radius-control);background:transparent;font:inherit;font-size:14px;text-align:left;color:var(--ritel-muted);cursor:pointer}
 .theme-switcher-choice:hover,.theme-switcher-choice:focus-visible{background:var(--theme-hover);color:var(--ritel-fg)}
 .theme-switcher-choice.is-selected{color:var(--ritel-fg);background:var(--theme-selected)}
+.theme-switcher-choice span{min-width:0;white-space:normal;overflow-wrap:anywhere}
+.theme-switcher-choice svg{flex-shrink:0}
 .theme-switcher-check{margin-left:auto}
 </style>

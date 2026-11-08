@@ -74,20 +74,20 @@ describe('Select dropdown viewport constraints', () => {
 
     expect(dropdown).not.toBeNull()
     expect(dropdown?.style.left).toBe('20px')
-    expect(dropdown?.style.minWidth).toBe('200px')
-    expect(dropdown?.style.maxWidth).toBe('996px')
+    expect(dropdown?.style.width).toBe('200px')
+    expect(dropdown?.style.maxWidth).toBe('1008px')
   })
 
-  it('shrinks the minimum width to fit near the right viewport edge', async () => {
+  it('shifts left to preserve readable width near the right viewport edge', async () => {
     setViewportWidth(320)
     mockTriggerRect(220, 80)
 
     const dropdown = await openSelect()
 
     expect(dropdown).not.toBeNull()
-    expect(dropdown?.style.left).toBe('220px')
-    expect(dropdown?.style.minWidth).toBe('92px')
-    expect(dropdown?.style.maxWidth).toBe('92px')
+    expect(dropdown?.style.left).toBe('112px')
+    expect(dropdown?.style.width).toBe('200px')
+    expect(dropdown?.style.maxWidth).toBe('304px')
   })
 
   it('clamps a trigger left of the viewport to the safe padding', async () => {
@@ -98,7 +98,7 @@ describe('Select dropdown viewport constraints', () => {
 
     expect(dropdown).not.toBeNull()
     expect(dropdown?.style.left).toBe('8px')
-    expect(dropdown?.style.minWidth).toBe('200px')
+    expect(dropdown?.style.width).toBe('200px')
     expect(dropdown?.style.maxWidth).toBe('304px')
   })
 
@@ -109,9 +109,9 @@ describe('Select dropdown viewport constraints', () => {
     const dropdown = await openSelect()
 
     expect(dropdown).not.toBeNull()
-    expect(dropdown?.style.left).toBe('312px')
-    expect(dropdown?.style.minWidth).toBe('0px')
-    expect(dropdown?.style.maxWidth).toBe('0px')
+    expect(dropdown?.style.left).toBe('112px')
+    expect(dropdown?.style.width).toBe('200px')
+    expect(dropdown?.style.maxWidth).toBe('304px')
   })
 })
 

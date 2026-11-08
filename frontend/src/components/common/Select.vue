@@ -68,7 +68,7 @@
           <!-- Search input -->
           <div v-if="isSearchable" class="select-search">
             <Icon name="search" size="sm" class="text-gray-400" />
-            <label class="block min-w-0" data-field-role="filter">
+            <label class="block min-w-0 flex-1" data-field-role="filter">
               <span class="sr-only">{{ searchPlaceholderText }}</span>
               <input
               ref="searchInputRef"
@@ -133,6 +133,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick, useAttrs, useId, type HTMLAttributes } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
+import { popoverLayout } from '@/utils/floatingPanel'
 import { useOwnedPopover } from '@/composables/overlayLifecycle'
 
 defineOptions({ inheritAttrs: false })
@@ -214,10 +215,7 @@ const triggerRef = ref<HTMLButtonElement | null>(null)
 const searchInputRef = ref<HTMLInputElement | null>(null)
 const dropdownRef = ref<HTMLElement | null>(null)
 const optionsListRef = ref<HTMLElement | null>(null)
-const dropdownPosition = ref<'bottom' | 'top'>('bottom')
 const triggerRect = ref<DOMRect | null>(null)
-const dropdownViewportPadding = 8
-const dropdownMinimumWidth = 200
 
 const overlay = useOwnedPopover(isOpen, {
   root: () => dropdownRef.value,
@@ -245,30 +243,10 @@ const isSearchable = computed(() => {
 const dropdownStyle = computed(() => {
   if (!triggerRect.value) return {}
 
-  const rect = triggerRect.value
-  const viewportRight = Math.max(dropdownViewportPadding, window.innerWidth - dropdownViewportPadding)
-  const left = Math.min(
-    Math.max(dropdownViewportPadding, rect.left),
-    viewportRight
-  )
-  const availableWidth = Math.max(0, viewportRight - left)
-  const preferredMinWidth = Math.max(dropdownMinimumWidth, rect.width)
-  const minWidth = Math.min(preferredMinWidth, availableWidth)
-  const style: Record<string, string> = {
-    position: 'fixed',
-    left: `${left}px`,
-    minWidth: `${minWidth}px`,
-    maxWidth: `${availableWidth}px`,
+  return {
+    ...popoverLayout(triggerRect.value, { width: window.innerWidth, height: window.innerHeight }, 200, isSearchable.value ? 372 : 320),
     zIndex: '100000020'
   }
-
-  if (dropdownPosition.value === 'top') {
-    style.bottom = `${window.innerHeight - rect.top + 4}px`
-  } else {
-    style.top = `${rect.bottom + 4}px`
-  }
-
-  return style
 })
 
 const getOptionValue = (option: any): any => {
@@ -403,18 +381,7 @@ const calculateDropdownPosition = () => {
   if (!containerRef.value) return
   updateTriggerRect()
 
-  nextTick(() => {
-    if (!dropdownRef.value || !triggerRect.value) return
-    const dropdownHeight = dropdownRef.value.offsetHeight || 240
-    const spaceBelow = window.innerHeight - triggerRect.value.bottom
-    const spaceAbove = triggerRect.value.top
 
-    if (spaceBelow < dropdownHeight && spaceAbove > dropdownHeight) {
-      dropdownPosition.value = 'top'
-    } else {
-      dropdownPosition.value = 'bottom'
-    }
-  })
 }
 
 const toggle = () => {
@@ -447,7 +414,7 @@ watch(isOpen, (open) => {
       nextTick(() => dropdownRef.value?.focus())
     }
     // Add scroll listener to update position
-    window.addEventListener('scroll', updateTriggerRect, { capture: true, passive: true })
+    window.addEventListener('scroll', calculateDropdownPosition, { capture: true, passive: true })
     window.addEventListener('resize', calculateDropdownPosition)
   } else {
     searchQuery.value = ''
@@ -457,7 +424,7 @@ watch(isOpen, (open) => {
       clearTimeout(remoteSearchTimer)
       remoteSearchTimer = null
     }
-    window.removeEventListener('scroll', updateTriggerRect, { capture: true })
+    window.removeEventListener('scroll', calculateDropdownPosition, { capture: true })
     window.removeEventListener('resize', calculateDropdownPosition)
   }
 })
@@ -568,7 +535,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
-  window.removeEventListener('scroll', updateTriggerRect, { capture: true })
+  window.removeEventListener('scroll', calculateDropdownPosition, { capture: true })
   window.removeEventListener('resize', calculateDropdownPosition)
   if (remoteSearchTimer) {
     clearTimeout(remoteSearchTimer)
@@ -602,7 +569,7 @@ onUnmounted(() => {
 
 <style>
 .select-dropdown-portal {
-  @apply w-max min-w-[200px];
+  @apply flex min-w-0 flex-col;
   @apply bg-white dark:bg-dark-800;
   @apply rounded-xl;
   @apply border border-gray-200 dark:border-dark-700;
@@ -612,19 +579,20 @@ onUnmounted(() => {
 }
 
 .select-dropdown-portal .select-search {
-  @apply flex items-center gap-2 px-3 py-2;
+  @apply flex shrink-0 items-center gap-2 px-3 py-2;
   @apply border-b border-gray-100 dark:border-dark-700;
 }
 
 .select-dropdown-portal .select-search-input {
-  @apply flex-1 bg-transparent text-sm;
+  @apply min-w-0 w-full flex-1 bg-transparent text-sm;
   @apply text-gray-900 dark:text-gray-100;
   @apply placeholder:text-gray-400 dark:placeholder:text-dark-400;
   @apply focus:outline-none;
 }
 
 .select-dropdown-portal .select-options {
-  @apply max-h-80 overflow-y-auto py-1 outline-none;
+  @apply min-h-0 max-h-80 overflow-y-auto py-1 outline-none;
+  overscroll-behavior: contain;
 }
 
 .select-dropdown-portal .select-option {
@@ -661,7 +629,8 @@ onUnmounted(() => {
 }
 
 .select-dropdown-portal .select-option-label {
-  @apply flex-1 min-w-0 truncate text-left;
+  @apply flex-1 min-w-0 whitespace-normal text-left;
+  overflow-wrap: anywhere;
 }
 
 .select-dropdown-portal .select-empty {

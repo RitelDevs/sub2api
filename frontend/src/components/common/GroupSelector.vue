@@ -13,7 +13,7 @@
         v-model="searchText"
         type="text"
         :placeholder="t('common.searchPlaceholder')"
-        class="flex-1 bg-transparent text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none dark:text-gray-100 dark:placeholder:text-dark-400"
+        class="min-w-0 flex-1 bg-transparent text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none dark:text-gray-100 dark:placeholder:text-dark-400"
       />
     </div>
     <div
@@ -39,6 +39,7 @@
         />
         <GroupBadge
           :name="group.name"
+          :truncate="false"
           :platform="group.platform"
           :subscription-type="group.subscription_type || undefined"
           :rate-multiplier="group.rate_multiplier == null ? undefined : group.rate_multiplier"

@@ -27,7 +27,7 @@ describe('selectors disabled while open', () => {
   it('closes an open proxy picker when the account form becomes disabled', async () => {
     const wrapper = mount(ProxySelector, {
       props: { modelValue: null, proxies: [{ id: 1, name: 'Proxy', host: 'localhost', port: 8080, protocol: 'http' } as Proxy] },
-      global: { stubs: { Transition: true } },
+      global: { stubs: { Transition: true, Teleport: true } },
     })
     await wrapper.get('.select-trigger').trigger('click')
     expect(wrapper.find('.select-dropdown').exists()).toBe(true)

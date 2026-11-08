@@ -23,13 +23,14 @@
       </span>
     </button>
 
+    <Teleport to="body">
     <Transition name="select-dropdown">
-      <div v-if="isOpen" class="select-dropdown">
+      <div v-if="isOpen" ref="dropdownRef" class="select-dropdown" :style="dropdownStyle" @click.stop>
         <!-- Search and Batch Test Header -->
         <div class="select-header">
           <div class="select-search">
             <Icon name="search" size="sm" class="text-gray-400" />
-            <label class="block min-w-0" data-field-role="filter">
+            <label class="block min-w-0 flex-1" data-field-role="filter">
               <span class="sr-only">{{ t('admin.proxies.searchProxies') }}</span>
               <input
               ref="searchInputRef"
@@ -87,8 +88,8 @@
             :class="['select-option', modelValue === proxy.id && 'select-option-selected']"
           >
             <div class="min-w-0 flex-1">
-              <div class="flex items-center gap-2">
-                <span class="truncate font-medium">{{ proxy.name }}</span>
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="min-w-0 whitespace-normal [overflow-wrap:anywhere] font-medium">{{ proxy.name }}</span>
                 <!-- Account count badge -->
                 <span
                   v-if="proxy.account_count !== undefined"
@@ -117,7 +118,7 @@
                   </span>
                 </template>
               </div>
-              <div class="truncate text-xs text-gray-500 dark:text-gray-400">
+              <div class="whitespace-normal [overflow-wrap:anywhere] text-xs text-gray-500 dark:text-gray-400">
                 {{ proxy.protocol }}://{{ proxy.host }}:{{ proxy.port }}
               </div>
             </div>
@@ -168,6 +169,7 @@
         </div>
       </div>
     </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -176,6 +178,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import Icon from '@/components/icons/Icon.vue'
+import { popoverLayout } from '@/utils/floatingPanel'
 import type { Proxy } from '@/types'
 
 const { t } = useI18n()
@@ -209,6 +212,22 @@ const isOpen = ref(false)
 const searchQuery = ref('')
 const containerRef = ref<HTMLElement | null>(null)
 const searchInputRef = ref<HTMLInputElement | null>(null)
+const dropdownRef = ref<HTMLElement | null>(null)
+const dropdownStyle = ref({})
+const updatePosition = () => {
+  if (!isOpen.value || !containerRef.value) return
+  dropdownStyle.value = { ...popoverLayout(containerRef.value.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight }, 280, 300), zIndex: '100000020' }
+}
+watch(isOpen, open => {
+  if (open) {
+    updatePosition()
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', updatePosition, { capture: true, passive: true })
+  } else {
+    window.removeEventListener('resize', updatePosition)
+    window.removeEventListener('scroll', updatePosition, { capture: true })
+  }
+})
 
 // Test state
 const testResults = reactive<Record<number, ProxyTestResult>>({})
@@ -293,7 +312,7 @@ const handleBatchTest = async () => {
 }
 
 const handleClickOutside = (event: MouseEvent) => {
-  if (containerRef.value && !containerRef.value.contains(event.target as Node)) {
+  if (containerRef.value && !containerRef.value.contains(event.target as Node) && !dropdownRef.value?.contains(event.target as Node)) {
     isOpen.value = false
     searchQuery.value = ''
   }
@@ -314,6 +333,8 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
   document.removeEventListener('keydown', handleEscape)
+  window.removeEventListener('resize', updatePosition)
+  window.removeEventListener('scroll', updatePosition, { capture: true })
 })
 </script>
 
@@ -332,7 +353,7 @@ onUnmounted(() => {
 }
 
 .select-dropdown {
-  @apply absolute z-[100] mt-2 w-full;
+  @apply flex min-w-0 flex-col;
   @apply bg-white dark:bg-dark-800;
   @apply rounded-xl;
   @apply border border-gray-200 dark:border-dark-700;
@@ -341,16 +362,16 @@ onUnmounted(() => {
 }
 
 .select-header {
-  @apply flex items-center gap-2 px-3 py-2;
+  @apply flex shrink-0 items-center gap-2 px-3 py-2;
   @apply border-b border-gray-100 dark:border-dark-700;
 }
 
 .select-search {
-  @apply flex flex-1 items-center gap-2;
+  @apply flex min-w-0 flex-1 items-center gap-2;
 }
 
 .select-search-input {
-  @apply flex-1 bg-transparent text-sm;
+  @apply min-w-0 w-full flex-1 bg-transparent text-sm;
   @apply text-gray-900 dark:text-gray-100;
   @apply placeholder:text-gray-400 dark:placeholder:text-dark-400;
   @apply focus:outline-none;
@@ -364,7 +385,8 @@ onUnmounted(() => {
 }
 
 .select-options {
-  @apply max-h-60 overflow-y-auto py-1;
+  @apply min-h-0 max-h-60 overflow-y-auto py-1;
+  overscroll-behavior: contain;
 }
 
 .select-option {
@@ -381,7 +403,8 @@ onUnmounted(() => {
 }
 
 .select-option-label {
-  @apply truncate;
+  @apply min-w-0 whitespace-normal;
+  overflow-wrap: anywhere;
 }
 
 .select-empty {

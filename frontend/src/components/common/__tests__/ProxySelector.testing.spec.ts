@@ -14,7 +14,7 @@ async function openSelector() {
     props: { modelValue: null, proxies: [1, 2].map(id => ({
       id, name: `Proxy ${id}`, host: 'localhost', port: 8080, protocol: 'http'
     } as Proxy)) },
-    global: { stubs: { Icon: true } }
+    global: { stubs: { Icon: true, Teleport: true } }
   })
   await wrapper.get('.select-trigger').trigger('click')
   return wrapper
@@ -60,7 +60,7 @@ it('associates the visible caller caption with the proxy trigger', () => {
   const wrapper = mount(ProxySelector, {
     props: { modelValue: null, proxies: [] },
     attrs: { 'aria-labelledby': 'account-proxy-caption' },
-    global: { stubs: { Icon: true } }
+    global: { stubs: { Icon: true, Teleport: true } }
   })
   expect(wrapper.get('button.select-trigger').attributes('aria-labelledby')).toBe('account-proxy-caption')
   expect(wrapper.attributes('aria-labelledby')).toBeUndefined()

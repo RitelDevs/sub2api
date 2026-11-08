@@ -22,6 +22,7 @@
 
     <div
       v-if="showDropdown"
+        ref="panelRef"
       :style="dropdownPosition"
       class="fixed z-20 overflow-y-auto overscroll-contain whitespace-normal [overflow-wrap:anywhere] rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-600 dark:bg-dark-800"
     >
@@ -56,6 +57,7 @@
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { popoverLayout } from '@/utils/floatingPanel'
+import { useOwnedPopover } from '@/composables/overlayLifecycle'
 
 defineProps<{
   enabled: boolean
@@ -72,6 +74,8 @@ defineEmits<{
 const { t } = useI18n()
 const showDropdown = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)
+const panelRef = ref<HTMLElement | null>(null)
+useOwnedPopover(showDropdown, { root: () => panelRef.value, trigger: () => dropdownRef.value?.querySelector('button'), close: () => { showDropdown.value = false } })
 const dropdownPosition = ref<Record<string, string>>({})
 function positionDropdown() {
   if (!showDropdown.value) return

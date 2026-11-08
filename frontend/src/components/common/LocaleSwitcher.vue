@@ -21,6 +21,7 @@
     <transition name="dropdown">
       <div
         v-if="isOpen"
+        ref="panelRef"
       :style="dropdownPosition"
         class="fixed z-50 overflow-y-auto overscroll-contain whitespace-normal [overflow-wrap:anywhere] rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-700 dark:bg-dark-800"
       >
@@ -48,6 +49,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { popoverLayout } from '@/utils/floatingPanel'
+import { useOwnedPopover } from '@/composables/overlayLifecycle'
 import Icon from '@/components/icons/Icon.vue'
 import { setLocale, availableLocales } from '@/i18n'
 import usFlag from '@/assets/flags/us.svg'
@@ -62,6 +64,8 @@ const { locale } = useI18n()
 
 const isOpen = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)
+const panelRef = ref<HTMLElement | null>(null)
+useOwnedPopover(isOpen, { root: () => panelRef.value, trigger: () => dropdownRef.value?.querySelector('button'), close: () => { isOpen.value = false } })
 const dropdownPosition = ref<Record<string, string>>({})
 function positionDropdown() {
   if (!isOpen.value) return

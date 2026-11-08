@@ -63,9 +63,6 @@ func TestQQPostgresBindingAndDelivery(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if hits.Load() != 2 {
-		t.Fatal("website confirmation did not send success under default email preferences")
-	}
 	if _, e = s.Issue(ctx, 1); e == nil {
 		t.Fatal("rate limit absent")
 	}
@@ -93,6 +90,9 @@ func TestQQPostgresBindingAndDelivery(t *testing.T) {
 	}
 	if e = s.Confirm(ctx, 1, *status.PendingQQ, status.BindingID); e != nil {
 		t.Fatal(e)
+	}
+	if hits.Load() != 2 {
+		t.Fatal("website confirmation did not send success under default email preferences")
 	}
 	if _, e = s.Issue(ctx, 1); e == nil {
 		t.Fatal("replace bound account")

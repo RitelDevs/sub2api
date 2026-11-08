@@ -139,7 +139,7 @@ func (s *QQNotificationService) Confirm(ctx context.Context, uid int64, masked, 
 	}
 	// The binding is durable even if its one-off service reply fails. Do not
 	// turn a committed binding into a retryable confirmation error.
-	replyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 12*time.Second)
+	replyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	message := "QQ 绑定成功！\n现在可以私聊我进行普通对话，也可发送“查余额”“查套餐”“查用量”或“帮助”。\n余额与套餐提醒请在网页的通知偏好中选择 QQ 或 QQ＋邮箱并保存。\n完整私人助理环境仅向管理员指定开通的用户提供。\n账号中心：https://account.ritel.si/account/#qq"
 	if err := s.deliver(replyCtx, uid, q, "binding-confirmed:"+fmt.Sprint(uid)+":"+bindingID, message, true); err != nil {

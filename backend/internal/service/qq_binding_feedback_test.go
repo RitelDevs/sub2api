@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"github.com/DATA-DOG/go-sqlmock"
 	"net/http"
 	"net/http/httptest"
@@ -128,15 +129,26 @@ func TestQQConfirmSuccessReplyDoesNotDependOnNotificationPreferences(t *testing.
 }
 func TestQQCommittedBindingRemainsSuccessfulWhenReplyFails(t *testing.T) {
 	s, m := qqTestService(t)
+	s.client.Timeout = 10 * time.Second // Same budget as production and Node native caller.
+	observed := false
+	s.client.Transport = qqFeedbackRoundTripper(func(r *http.Request) (*http.Response, error) {
+		observed = true
+		deadline, ok := r.Context().Deadline()
+		if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 5*time.Second {
+			t.Errorf("service reply must finish inside Node's 10s budget, deadline=%v present=%v", deadline, ok)
+		}
+		return nil, errors.New("synthetic uncertain delivery")
+	})
 	m.ExpectBegin()
 	m.ExpectQuery("SELECT pending_qq").WillReturnRows(sqlmock.NewRows([]string{"pending_qq"}).AddRow("234567"))
 	m.ExpectExec("UPDATE qq_user_notifications SET qq").WillReturnResult(sqlmock.NewResult(0, 1))
 	m.ExpectCommit()
-	m.ExpectBegin()
-	m.ExpectQuery("SELECT qq").WillReturnError(sql.ErrNoRows)
-	m.ExpectRollback()
+	expectQQFeedbackSend(m, false, "binding-confirmed:42:challenge", "unknown")
 	if err := s.Confirm(context.Background(), 42, "23****67", "challenge"); err != nil {
 		t.Fatal("committed binding returned retryable error", err)
+	}
+	if !observed {
+		t.Fatal("native request not exercised")
 	}
 }
 
@@ -149,3 +161,7 @@ func TestQQPendingReplyRejectsDifferentQQ(t *testing.T) {
 		t.Fatal("different QQ inherited pending permission")
 	}
 }
+
+type qqFeedbackRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f qqFeedbackRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

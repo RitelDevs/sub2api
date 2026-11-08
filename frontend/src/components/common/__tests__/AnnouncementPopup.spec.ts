@@ -110,16 +110,19 @@ describe('AnnouncementPopup', () => {
     wrapper.unmount()
   })
 
-  it('keeps the existing user popup dismissal behavior', async () => {
+  it.each(['footer', 'header', 'escape'])('dismisses the user popup via %s', async (action) => {
     const store = useAnnouncementStore()
     store.currentPopup = announcement
     const dismissPopup = vi.spyOn(store, 'dismissPopup').mockResolvedValue()
     const wrapper = mount(AnnouncementPopup)
+    await wrapper.vm.$nextTick()
 
-    const dismissButton = document.body.querySelector<HTMLButtonElement>(
-      '[data-testid="announcement-popup-dismiss"]',
-    )
-    dismissButton?.click()
+    if (action === 'escape') {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    } else {
+      const selector = action === 'header' ? '.modal-header button' : '[data-testid="announcement-popup-dismiss"]'
+      document.body.querySelector<HTMLButtonElement>(selector)?.click()
+    }
     await wrapper.vm.$nextTick()
 
     expect(dismissPopup).toHaveBeenCalledTimes(1)

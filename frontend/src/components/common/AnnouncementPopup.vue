@@ -4,8 +4,7 @@
     :title="displayedAnnouncement?.title || t('announcements.title')"
     width="wide"
     :z-index="120"
-    :show-close-button="preview"
-    :close-on-escape="preview"
+    content-class="announcement-popup"
     @close="handleDismiss"
   >
     <template v-if="displayedAnnouncement">
@@ -75,3 +74,32 @@ function handleDismiss() {
 }
 
 </script>
+
+<style>
+/* Keep both dismissal actions outside the scrolling announcement content. */
+.modal-content.announcement-popup {
+  max-height: calc(100vh - 2rem);
+  max-height: min(48rem, calc(100dvh - 2rem - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+  min-height: 0;
+  overflow: hidden;
+}
+.announcement-popup .modal-header { gap: 0.75rem; }
+.announcement-popup .modal-title {
+  min-width: 0;
+  max-height: 4.2em;
+  line-height: 1.4;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+.announcement-popup .modal-header > button {
+  flex-shrink: 0;
+  min-width: 44px;
+  min-height: 44px;
+}
+.announcement-popup .modal-body {
+  min-height: 0;
+  min-width: 0;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+}
+</style>

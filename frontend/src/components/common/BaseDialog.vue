@@ -4,7 +4,7 @@
       <div
         v-if="show"
         class="modal-overlay"
-        :class="{ 'drawer-overlay': placement === 'right' }"
+        :class="{ 'drawer-overlay': placement === 'right', 'fullscreen-overlay': fullscreen }"
         :style="zIndexStyle"
         :aria-labelledby="dialogId"
         role="dialog"
@@ -157,6 +157,8 @@ watch(() => props.show, async isOpen => {
 
 <style scoped>
 .modal-overlay.drawer-overlay { padding: 0; justify-content: flex-end; align-items: stretch; }
-.modal-content.drawer-content { border-radius: 0; height: 100dvh; max-height: 100dvh; margin: 0; }
+.modal-overlay.fullscreen-overlay { padding: 0; }
+.drawer-content, .modal-fullscreen { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+.modal-content.drawer-content { border-radius: 0; height: 100vh; max-height: 100vh; height: 100dvh; max-height: 100dvh; margin: 0; }
 .modal-enter-from .drawer-content, .modal-leave-to .drawer-content { transform: translateX(100%); }
 </style>

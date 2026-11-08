@@ -1506,6 +1506,27 @@ describe('user KeysView column settings', () => {
       expect(wrapper.getComponent({ name: 'GroupBadge' }).text()).toContain('0.5x')
     })
 
+    it.each([320, 390, 1440])('bounds the inline selector at the right and bottom edges of a %spx viewport', async (width) => {
+      const initialWidth = window.innerWidth
+      const initialHeight = window.innerHeight
+      try {
+        Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
+        Object.defineProperty(window, 'innerHeight', { configurable: true, value: 568 })
+        const wrapper = await mountView()
+        const button = wrapper.get('[data-test="key-group"] button')
+        vi.spyOn(button.element, 'getBoundingClientRect').mockReturnValue({ left: width - 100, right: width - 8, top: 500, bottom: 544 } as DOMRect)
+        await button.trigger('click')
+        const popup = wrapper.get('[data-testid="key-group-selector"]').element as HTMLElement
+        expect(Number.parseFloat(popup.style.left) + Number.parseFloat(popup.style.width)).toBeLessThanOrEqual(width - 8)
+        expect(Number.parseFloat(popup.style.width)).toBe(Math.min(380, width - 16))
+        expect(popup.style.bottom).toBe('72px')
+        expect(popup.style.maxHeight).toBe('488px')
+      } finally {
+        Object.defineProperty(window, 'innerWidth', { configurable: true, value: initialWidth })
+        Object.defineProperty(window, 'innerHeight', { configurable: true, value: initialHeight })
+      }
+    })
+
     it('keeps the previous pricing together and reports a failed refresh', async () => {
       const wrapper = await mountView()
       getAvailableGroups.mockResolvedValue([{ ...group, rate_multiplier: 0.4 }])

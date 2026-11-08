@@ -669,8 +669,9 @@
     <Teleport to="body">
       <div
         v-if="activeMenuId !== null && menuPosition"
-        class="action-menu-content fixed z-[9999] w-48 overflow-hidden rounded-xl bg-white shadow-lg ring-1 ring-black/5 dark:bg-dark-800 dark:ring-white/10"
-        :style="{ top: menuPosition.top + 'px', left: menuPosition.left + 'px' }"
+        ref="actionMenuRef"
+        class="action-menu-content fixed z-[9999] overflow-y-auto overscroll-contain whitespace-normal [overflow-wrap:anywhere] rounded-xl bg-white shadow-lg ring-1 ring-black/5 dark:bg-dark-800 dark:ring-white/10"
+        :style="menuPosition"
       >
         <div class="py-1">
           <template v-for="user in users" :key="user.id">
@@ -788,6 +789,7 @@
 import AppHeading from '@/components/common/AppHeading.vue'
 import TableToolbarTarget from '@/components/common/TableToolbarTarget.vue'
 import { watch,  ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { popoverLayout } from '@/utils/floatingPanel'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useTableSelection } from '@/composables/useTableSelection'
@@ -1329,7 +1331,14 @@ const loadUsersSecondaryData = async (
 
 // Action Menu State
 const activeMenuId = ref<number | null>(null)
-const menuPosition = ref<{ top: number; left: number } | null>(null)
+const menuPosition = ref<Record<string, string> | null>(null)
+const actionMenuRef = ref<HTMLElement | null>(null)
+const actionMenuTrigger = ref<HTMLElement | null>(null)
+function updateActionMenuPosition() {
+  if (activeMenuId.value === null) return
+  const rect = actionMenuTrigger.value?.getBoundingClientRect()
+  if (rect) menuPosition.value = popoverLayout(rect, { width: window.innerWidth, height: window.innerHeight }, 192, 280)
+}
 
 const openActionMenu = (user: AdminUser, e: MouseEvent) => {
   if (activeMenuId.value === user.id) {
@@ -1341,52 +1350,16 @@ const openActionMenu = (user: AdminUser, e: MouseEvent) => {
       return
     }
 
-    const rect = target.getBoundingClientRect()
-    const menuWidth = 200
-    const menuHeight = 240
-    const padding = 8
-    const viewportWidth = window.innerWidth
-    const viewportHeight = window.innerHeight
-
-    let left, top
-
-    if (viewportWidth < 768) {
-      // 居中显示,水平位置
-      left = Math.max(padding, Math.min(
-        rect.left + rect.width / 2 - menuWidth / 2,
-        viewportWidth - menuWidth - padding
-      ))
-
-      // 优先显示在按钮下方
-      top = rect.bottom + 4
-
-      // 如果下方空间不够,显示在上方
-      if (top + menuHeight > viewportHeight - padding) {
-        top = rect.top - menuHeight - 4
-        // 如果上方也不够,就贴在视口顶部
-        if (top < padding) {
-          top = padding
-        }
-      }
-    } else {
-      left = Math.max(padding, Math.min(
-        e.clientX - menuWidth,
-        viewportWidth - menuWidth - padding
-      ))
-      top = e.clientY
-      if (top + menuHeight > viewportHeight - padding) {
-        top = viewportHeight - menuHeight - padding
-      }
-    }
-
-    menuPosition.value = { top, left }
+    actionMenuTrigger.value = target
     activeMenuId.value = user.id
+    updateActionMenuPosition()
   }
 }
 
 const closeActionMenu = () => {
   activeMenuId.value = null
   menuPosition.value = null
+  actionMenuTrigger.value = null
 }
 
 // Close menu when clicking outside
@@ -1737,7 +1710,8 @@ const handleWithdrawFromHistory = () => {
 }
 
 // 滚动时关闭菜单
-const handleScroll = () => {
+const handleScroll = (event: Event) => {
+  if (event.target instanceof Node && actionMenuRef.value?.contains(event.target)) return
   closeActionMenu()
 }
 
@@ -1753,6 +1727,7 @@ onMounted(async () => {
   }
   document.addEventListener('click', handleClickOutside)
   window.addEventListener('scroll', handleScroll, true)
+  window.addEventListener('resize', updateActionMenuPosition)
 })
 
 onUnmounted(() => {
@@ -1760,6 +1735,7 @@ onUnmounted(() => {
   secondaryDataSeq++
   document.removeEventListener('click', handleClickOutside)
   window.removeEventListener('scroll', handleScroll, true)
+  window.removeEventListener('resize', updateActionMenuPosition)
   clearTimeout(searchTimeout)
 })
 

@@ -22,7 +22,8 @@
 
     <div
       v-if="showDropdown"
-      class="absolute right-0 z-20 mt-1 w-44 rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-600 dark:bg-dark-800"
+      :style="dropdownPosition"
+      class="fixed z-20 overflow-y-auto overscroll-contain whitespace-normal [overflow-wrap:anywhere] rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-600 dark:bg-dark-800"
     >
       <div class="p-1.5">
         <button
@@ -52,8 +53,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { popoverLayout } from '@/utils/floatingPanel'
 
 defineProps<{
   enabled: boolean
@@ -70,6 +72,14 @@ defineEmits<{
 const { t } = useI18n()
 const showDropdown = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)
+const dropdownPosition = ref<Record<string, string>>({})
+function positionDropdown() {
+  if (!showDropdown.value) return
+  const rect = dropdownRef.value?.getBoundingClientRect()
+  if (rect) dropdownPosition.value = popoverLayout(rect, { width: window.innerWidth, height: window.innerHeight }, 176, 320)
+}
+watch(showDropdown, positionDropdown)
+
 
 function handleClickOutside(event: MouseEvent) {
   if (dropdownRef.value && !dropdownRef.value.contains(event.target as Node)) {
@@ -77,6 +87,14 @@ function handleClickOutside(event: MouseEvent) {
   }
 }
 
-onMounted(() => document.addEventListener('click', handleClickOutside))
-onBeforeUnmount(() => document.removeEventListener('click', handleClickOutside))
+onMounted(() => {
+  document.addEventListener('click', handleClickOutside)
+  window.addEventListener('resize', positionDropdown)
+  window.addEventListener('scroll', positionDropdown, true)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('click', handleClickOutside)
+  window.removeEventListener('resize', positionDropdown)
+  window.removeEventListener('scroll', positionDropdown, true)
+})
 </script>

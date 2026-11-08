@@ -21,7 +21,8 @@
     <transition name="dropdown">
       <div
         v-if="isOpen"
-        class="absolute right-0 z-50 mt-1 w-48 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-700 dark:bg-dark-800"
+      :style="dropdownPosition"
+        class="fixed z-50 overflow-y-auto overscroll-contain whitespace-normal [overflow-wrap:anywhere] rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-700 dark:bg-dark-800"
       >
         <button
           v-for="locale in availableLocales"
@@ -44,8 +45,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { popoverLayout } from '@/utils/floatingPanel'
 import Icon from '@/components/icons/Icon.vue'
 import { setLocale, availableLocales } from '@/i18n'
 import usFlag from '@/assets/flags/us.svg'
@@ -60,6 +62,14 @@ const { locale } = useI18n()
 
 const isOpen = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)
+const dropdownPosition = ref<Record<string, string>>({})
+function positionDropdown() {
+  if (!isOpen.value) return
+  const rect = dropdownRef.value?.getBoundingClientRect()
+  if (rect) dropdownPosition.value = popoverLayout(rect, { width: window.innerWidth, height: window.innerHeight }, 192, 200)
+}
+watch(isOpen, positionDropdown)
+
 const switching = ref(false)
 
 const currentLocaleCode = computed(() => locale.value)
@@ -93,10 +103,14 @@ function handleClickOutside(event: MouseEvent) {
 
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
+  window.addEventListener('resize', positionDropdown)
+  window.addEventListener('scroll', positionDropdown, true)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', handleClickOutside)
+  window.removeEventListener('resize', positionDropdown)
+  window.removeEventListener('scroll', positionDropdown, true)
 })
 </script>
 

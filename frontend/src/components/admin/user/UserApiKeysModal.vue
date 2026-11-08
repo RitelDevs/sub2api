@@ -54,10 +54,10 @@
     <div
       v-if="groupSelectorKeyId !== null && dropdownPosition"
       ref="dropdownRef"
-      class="animate-in fade-in slide-in-from-top-2 fixed z-[100000020] w-64 overflow-hidden rounded-xl bg-white shadow-lg ring-1 ring-black/5 duration-200 dark:bg-dark-800 dark:ring-white/10"
-      :style="{ top: dropdownPosition.top + 'px', left: dropdownPosition.left + 'px' }"
+      class="animate-in fade-in slide-in-from-top-2 fixed z-[100000020] flex flex-col overflow-hidden rounded-xl bg-white shadow-lg ring-1 ring-black/5 duration-200 dark:bg-dark-800 dark:ring-white/10"
+      :style="dropdownPosition"
     >
-      <div class="max-h-64 overflow-y-auto p-1.5">
+      <div class="min-h-0 max-h-64 overflow-y-auto p-1.5">
         <!-- Unbind option -->
         <button
           @click="changeGroup(selectedKeyForGroup!, null)"
@@ -113,6 +113,7 @@ import { adminAPI } from '@/api/admin'
 import { formatDateTime } from '@/utils/format'
 import type { AdminUser, AdminGroup, ApiKey } from '@/types'
 import { useOwnedPopover } from '@/composables/overlayLifecycle'
+import { popoverLayout } from '@/utils/floatingPanel'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import GroupBadge from '@/components/common/GroupBadge.vue'
 import GroupOptionItem from '@/components/common/GroupOptionItem.vue'
@@ -128,7 +129,7 @@ const loading = ref(false)
 let requestVersion = 0
 const updatingKeyIds = ref(new Set<number>())
 const groupSelectorKeyId = ref<number | null>(null)
-const dropdownPosition = ref<{ top: number; left: number } | null>(null)
+const dropdownPosition = ref<ReturnType<typeof popoverLayout> | null>(null)
 const dropdownRef = ref<HTMLElement | null>(null)
 const scrollContainerRef = ref<HTMLElement | null>(null)
 const groupButtonRefs = ref<Map<number, HTMLElement>>(new Map())
@@ -186,24 +187,22 @@ const loadGroups = async () => {
   }
 }
 
-const DROPDOWN_HEIGHT = 272 // max-h-64 = 16rem = 256px + padding
-const DROPDOWN_GAP = 4
+const updateDropdownPosition = () => {
+  if (groupSelectorKeyId.value === null) return
+  const button = groupButtonRefs.value.get(groupSelectorKeyId.value)
+  if (!button) return
+  dropdownPosition.value = popoverLayout(button.getBoundingClientRect(), {
+    width: document.documentElement.clientWidth || window.innerWidth,
+    height: window.innerHeight
+  }, 320, 272)
+}
 
 const openGroupSelector = (key: ApiKey) => {
   if (groupSelectorKeyId.value === key.id) {
     closeGroupSelector()
   } else {
-    const buttonEl = groupButtonRefs.value.get(key.id)
-    if (buttonEl) {
-      const rect = buttonEl.getBoundingClientRect()
-      const spaceBelow = window.innerHeight - rect.bottom
-      const openUpward = spaceBelow < DROPDOWN_HEIGHT && rect.top > spaceBelow
-      dropdownPosition.value = {
-        top: openUpward ? rect.top - DROPDOWN_HEIGHT - DROPDOWN_GAP : rect.bottom + DROPDOWN_GAP,
-        left: rect.left
-      }
-    }
     groupSelectorKeyId.value = key.id
+    updateDropdownPosition()
   }
 }
 
@@ -254,9 +253,11 @@ const handleClose = () => {
 
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
+  window.addEventListener('resize', updateDropdownPosition)
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
+  window.removeEventListener('resize', updateDropdownPosition)
 })
 </script>

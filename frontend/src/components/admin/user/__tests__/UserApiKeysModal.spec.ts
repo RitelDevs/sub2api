@@ -96,6 +96,23 @@ describe('user API keys owned group portal', () => {
     trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     expect(wrapper.emitted('close')).toHaveLength(1)
   })
+  it('keeps the group panel within a narrow viewport and updates on resize', async () => {
+    vi.stubGlobal('innerWidth', 320)
+    vi.stubGlobal('innerHeight', 240)
+    getKeys.mockResolvedValue(keys(1, 'first-user-key'))
+    const wrapper = await open(); await flushPromises()
+    const trigger = wrapper.find('button').element
+    vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue({ left: 290, right: 318, top: 180, bottom: 204, width: 28, height: 24 } as DOMRect)
+    trigger.click(); await flushPromises()
+    const panel = document.querySelector<HTMLElement>('.fixed.z-\\[100000020\\]')!
+    expect(parseFloat(panel.style.left)).toBeGreaterThanOrEqual(8)
+    expect(parseFloat(panel.style.left) + parseFloat(panel.style.width)).toBeLessThanOrEqual(312)
+    expect(parseFloat(panel.style.maxHeight)).toBeLessThanOrEqual(224)
+    vi.stubGlobal('innerWidth', 240)
+    window.dispatchEvent(new Event('resize')); await flushPromises()
+    expect(parseFloat(panel.style.left) + parseFloat(panel.style.width)).toBeLessThanOrEqual(232)
+    vi.unstubAllGlobals()
+  })
   it('dismisses group portal on hide and does not reopen it next time', async () => {
     getKeys.mockResolvedValue(keys(1, 'first-user-key'))
     const wrapper = mount(UserApiKeysModal, { attachTo: document.body, props: { show: false, user: user(1) }, global: { stubs: { transition: true, GroupBadge: true, GroupOptionItem: true } } })

@@ -37,23 +37,23 @@
         <div
           v-if="showPopover"
           ref="popoverRef"
-          class="fixed z-50 min-w-48 max-w-96 rounded-lg border border-gray-200 bg-white p-3 shadow-lg dark:border-dark-600 dark:bg-dark-800"
+          class="fixed z-50 flex flex-col overflow-hidden rounded-lg border border-gray-200 bg-white p-3 shadow-lg dark:border-dark-600 dark:bg-dark-800"
           :style="popoverStyle"
         >
-          <div class="mb-2 flex items-center justify-between">
-            <span class="text-xs font-medium text-gray-500 dark:text-gray-400">
+          <div class="mb-2 flex shrink-0 items-center justify-between gap-2">
+            <span class="min-w-0 break-words text-xs font-medium text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.groupCountTotal', { count: groups.length }) }}
             </span>
             <button :aria-label="t('consoleFields.group')"
               @click="showPopover = false"
-              class="rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-dark-700 dark:hover:text-gray-300"
+              class="min-h-11 min-w-11 shrink-0 rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-dark-700 dark:hover:text-gray-300"
             >
               <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
           </div>
-          <div class="flex flex-wrap gap-1.5 max-h-64 overflow-y-auto">
+          <div class="flex min-h-0 max-h-64 flex-wrap gap-1.5 overflow-y-auto">
             <GroupBadge
               v-for="group in groups"
               :key="group.id"
@@ -81,7 +81,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { popoverLayout } from '@/utils/floatingPanel'
 import { useOwnedPopover } from '@/composables/overlayLifecycle'
 import { useI18n } from 'vue-i18n'
 import GroupBadge from '@/components/common/GroupBadge.vue'
@@ -120,30 +121,22 @@ const hiddenCount = computed(() => {
   return props.groups.length - (props.maxDisplay - 1)
 })
 
-// Popover 位置样式
-const popoverStyle = computed(() => {
-  if (!moreButtonRef.value) return {}
-  const rect = moreButtonRef.value.getBoundingClientRect()
-  const viewportHeight = window.innerHeight
-  const viewportWidth = window.innerWidth
-
-  let top = rect.bottom + 8
-  let left = rect.left
-
-  // 如果下方空间不足，显示在上方
-  if (top + 280 > viewportHeight) {
-    top = Math.max(8, rect.top - 280)
-  }
-
-  // 如果右侧空间不足，向左偏移
-  if (left + 384 > viewportWidth) {
-    left = Math.max(8, viewportWidth - 392)
-  }
-
-  return {
-    top: `${top}px`,
-    left: `${left}px`
-  }
+const popoverStyle = ref<ReturnType<typeof popoverLayout>>()
+const updatePopoverPosition = () => {
+  if (!showPopover.value || !moreButtonRef.value) return
+  popoverStyle.value = popoverLayout(moreButtonRef.value.getBoundingClientRect(), {
+    width: document.documentElement.clientWidth || window.innerWidth,
+    height: window.innerHeight
+  }, 384, 336)
+}
+watch(showPopover, updatePopoverPosition)
+onMounted(() => {
+  window.addEventListener('resize', updatePopoverPosition)
+  window.addEventListener('scroll', updatePopoverPosition, true)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', updatePopoverPosition)
+  window.removeEventListener('scroll', updatePopoverPosition, true)
 })
 
 </script>

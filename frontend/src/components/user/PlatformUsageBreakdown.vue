@@ -1,27 +1,17 @@
 <template>
-  <div class="group/usage relative text-sm">
+  <div class="text-sm">
     <div class="flex items-center gap-1.5">
       <span class="text-gray-500 dark:text-gray-400">{{ t('admin.users.today') }}:</span>
       <span class="font-medium text-gray-900 dark:text-white">${{ today.toFixed(4) }}</span>
-      <Icon
-        v-if="hasBreakdown"
-        name="infoCircle"
-        size="xs"
-        class="text-gray-400 dark:text-gray-500"
-      />
-    </div>
-    <div class="mt-0.5 flex items-center gap-1.5">
-      <span class="text-gray-500 dark:text-gray-400">{{ t('admin.users.total') }}:</span>
-      <span class="font-medium text-gray-900 dark:text-white">${{ total.toFixed(4) }}</span>
-    </div>
-
-    <div
-      v-if="hasBreakdown"
-      class="pointer-events-none absolute left-full top-0 z-50 ml-2 min-w-[220px] whitespace-nowrap rounded-md bg-gray-900 px-3 py-2 text-xs text-white opacity-0 shadow-xl transition-opacity duration-100 group-hover/usage:opacity-100 dark:bg-dark-600"
-    >
+      <HelpTooltip v-if="hasBreakdown" width-class="w-80">
+        <template #trigger>
+          <button type="button" :aria-label="t('admin.users.platformBreakdown')" class="inline-flex items-center text-gray-400 dark:text-gray-500">
+            <Icon name="infoCircle" size="xs" />
+          </button>
+        </template>
       <div class="mb-1.5 flex items-center justify-between gap-3 border-b border-white/10 pb-1 text-2xs opacity-80">
         <span>{{ t('admin.users.platformBreakdown') }}</span>
-        <span class="font-mono">{{ t('admin.users.today') }} / {{ t('admin.users.total') }}</span>
+        <span class="shrink-0 text-right font-mono">{{ t('admin.users.today') }} / {{ t('admin.users.total') }}</span>
       </div>
       <div
         v-for="item in sortedBreakdown"
@@ -29,15 +19,21 @@
         class="flex items-center justify-between gap-3 py-0.5"
         :class="{ 'opacity-70 italic': item.isOther }"
       >
-        <span class="capitalize">
+        <span class="min-w-0 [overflow-wrap:anywhere] capitalize">
           {{ item.isOther ? t('admin.users.platformOther') : platformLabel(item.platform) }}
         </span>
-        <span class="font-mono">
+        <span class="shrink-0 text-right font-mono">
           ${{ formatDisplayAmount(item.today_actual_cost, 2) }}
           <span class="opacity-50">/</span>
           ${{ formatDisplayAmount(item.total_actual_cost, 2) }}
         </span>
       </div>
+      </HelpTooltip>
+    </div>
+    <div class="mt-0.5 flex items-center gap-1.5">
+      <span class="text-gray-500 dark:text-gray-400">{{ t('admin.users.total') }}:</span>
+      <span class="font-medium text-gray-900 dark:text-white">${{ total.toFixed(4) }}</span>
+
     </div>
   </div>
 </template>
@@ -48,6 +44,7 @@ import { formatAmount as formatDisplayAmount } from '@/utils/consoleDisplay'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
+import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import type { PlatformUsage } from '@/api/admin/dashboard'
 
 const props = defineProps<{

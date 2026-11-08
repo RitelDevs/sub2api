@@ -51,7 +51,9 @@ def reconcile_account(account_id, key, state_dir, backup_dir):
     if state == 'degraded':
         if marker is None:
             marker = {'version': 1, 'isolation_group_id': group_id,
-                      'group_ids': groups, 'group_allowed_models': acl(before)}
+                      'group_ids': groups, 'group_allowed_models': acl(before),
+                      'ordered_group_ids': [g['group_id'] for g in sorted(before.get('account_groups') or [],
+                          key=lambda g: (g.get('priority', 0), g['group_id']))]}
             extra[MARKER] = marker
         elif not isinstance(marker, dict) or marker.get('version') != 1 or marker.get('isolation_group_id') != group_id:
             return {'id': account_id, 'skipped': 'isolation_marker_conflict'}
@@ -62,10 +64,11 @@ def reconcile_account(account_id, key, state_dir, backup_dir):
         if (not isinstance(marker, dict) or marker.get('version') != 1
                 or marker.get('isolation_group_id') != group_id or groups != [group_id] or acl(before)):
             return {'id': account_id, 'skipped': 'isolation_membership_changed'}
-        target_groups = marker.get('group_ids')
+        target_groups = marker.get('ordered_group_ids', marker.get('group_ids'))
         target_acl = marker.get('group_allowed_models')
         if (not isinstance(target_groups, list) or any(type(i) is not int or i <= 0 for i in target_groups)
-                or len(set(target_groups)) != len(target_groups) or not isinstance(target_acl, dict)
+                or len(set(target_groups)) != len(target_groups)
+                or set(target_groups) != set(marker.get('group_ids') or []) or not isinstance(target_acl, dict)
                 or any(str(i) not in {str(g) for g in target_groups} or not isinstance(models, list)
                        or any(not isinstance(model, str) for model in models) for i, models in target_acl.items())):
             raise ValueError('invalid saved isolation membership')

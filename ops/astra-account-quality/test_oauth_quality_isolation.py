@@ -21,7 +21,8 @@ class IsolationTests(unittest.TestCase):
         (self.root / 'quality-isolation.json').write_text(json.dumps({'group_id': 30}))
         self.a = {'id': 88, 'platform': 'openai', 'type': 'oauth', 'status': 'inactive',
                   'schedulable': True, 'proxy_id': 2, 'priority': 20, 'concurrency': 100, 'load_factor': 20, 'group_ids': [3, 12],
-                  'account_groups': [{'group_id': 3, 'allowed_models': ['luna']}],
+                  'account_groups': [{'group_id': 3, 'priority': 2, 'allowed_models': ['luna']},
+                                     {'group_id': 12, 'priority': 1, 'allowed_models': []}],
                   'credentials': {'access_token': 'synthetic-token'},
                   'extra': {'unrelated': True, 'quality_candy': {'state': 'degraded'},
                             'openai_gateway_borrow_quality_pending': False,
@@ -91,7 +92,7 @@ class IsolationTests(unittest.TestCase):
         self.a['extra']['quality_candy']['state'] = 'healthy'
         self.gets = 0
         self.assertTrue(self.run_account()['applied'])
-        self.assertEqual(self.a['group_ids'], [3, 12])
+        self.assertEqual(self.a['group_ids'], [12, 3])
         self.assertEqual(m.acl(self.a), {'3': ['luna']})
         self.assertNotIn(m.MARKER, self.a['extra'])
 
@@ -220,6 +221,22 @@ class IsolationTests(unittest.TestCase):
             self.assertTrue(m.disable_routing('synthetic-key', self.root / 'receipts')['updated'])
             self.assertEqual(m.disable_routing('synthetic-key', self.root / 'receipts')['skipped'], 'unchanged')
         self.assertEqual(len(self.puts), 1)
+
+
+
+    def test_isolation_marker_preserves_original_group_priority_order(self):
+        self.run_account()
+        self.assertEqual(self.a['extra'][m.MARKER]['ordered_group_ids'], [12, 3])
+        self.a['extra']['quality_candy']['state'] = 'healthy'
+        self.run_account()
+        self.assertEqual(self.puts[-1]['group_ids'], [12, 3])
+
+    def test_old_marker_without_order_restores_saved_group_ids(self):
+        self.run_account()
+        self.a['extra'][m.MARKER].pop('ordered_group_ids')
+        self.a['extra']['quality_candy']['state'] = 'healthy'
+        self.run_account()
+        self.assertEqual(self.puts[-1]['group_ids'], [3, 12])
 
 
 if __name__ == '__main__':

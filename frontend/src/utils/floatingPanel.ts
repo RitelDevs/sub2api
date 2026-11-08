@@ -59,7 +59,7 @@ export const getFloatingPanelPosition = (
 }
 
 /** CSS adapter for selection menus, sharing the same viewport boundary calculation. */
-export function popoverLayout(rect: Pick<DOMRect, 'left' | 'top' | 'bottom' | 'width'>, viewport: { width: number; height: number }, preferredWidth = 200, preferredHeight = 372) {
+export function popoverLayout(rect: Pick<DOMRect, 'left' | 'top' | 'bottom' | 'width'>, viewport: { width: number; height: number }, preferredWidth = 200, preferredHeight = 372): Record<string, string> {
   const position = getFloatingPanelPosition(
     { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.left + rect.width }, viewport.width, viewport.height,
     { alignment: 'start', viewportPadding: 8, gap: 4, maxWidth: Math.max(preferredWidth, rect.width), maxHeightRatio: 1, minComfortableHeight: preferredHeight }

@@ -116,6 +116,42 @@ describe('Batch image detail shared records', () => {
     expect(mocks.error).not.toHaveBeenCalled()
   })
 
+  it('bounds prompt and action popovers at a narrow bottom edge and retains internal scrolling', async () => {
+    vi.stubGlobal('innerWidth', 320)
+    vi.stubGlobal('innerHeight', 320)
+    const wrapper = await openBatch()
+    const trigger = detailTable(wrapper).findAll('.batch-prompt-trigger')[0].element as HTMLElement
+    vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue(new DOMRect(290, 250, 22, 28))
+    ;(wrapper.vm as any).showPromptPopover({currentTarget:trigger}, 'long-unbroken-prompt'.repeat(100))
+    await flushPromises()
+    const popover = document.body.querySelector<HTMLElement>('.batch-prompt-popover')!
+    expect(popover.style.left).toBe('8px')
+    expect(popover.style.width).toBe('304px')
+    expect(popover.style.bottom).toBe('74px')
+    expect(popover.style.maxHeight).toBe('238px')
+    popover.querySelector('p')!.dispatchEvent(new Event('scroll'))
+    await flushPromises()
+    expect(document.body.querySelector('.batch-prompt-popover')).toBe(popover)
+    window.dispatchEvent(new Event('scroll'))
+    await flushPromises()
+    expect(document.body.querySelector('.batch-prompt-popover')).toBeNull()
+
+    ;(wrapper.vm as any).toggleMoreMenu(job('parent'), {currentTarget:trigger})
+    await flushPromises()
+    const menu = document.body.querySelector<HTMLElement>('[data-testid="batch-job-more-menu"]')!
+    expect(menu.style.left).toBe('136px')
+    expect(menu.style.width).toBe('176px')
+    expect(menu.style.bottom).toBe('74px')
+    expect(menu.style.maxHeight).toBe('238px')
+    menu.dispatchEvent(new Event('scroll'))
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="batch-job-more-menu"]')).toBe(menu)
+    window.dispatchEvent(new Event('resize'))
+    await flushPromises()
+    expect(document.body.querySelector('[data-testid="batch-job-more-menu"]')).toBeNull()
+    expect(mocks.copy).not.toHaveBeenCalled()
+  })
+
   it('retains row DOM and focus across background refresh, failure and retry', async () => {
     const wrapper = await openBatch()
     const table = detailTable(wrapper)

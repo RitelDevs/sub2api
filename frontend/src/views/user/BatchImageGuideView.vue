@@ -251,7 +251,9 @@
     <Teleport to="body">
       <div
         v-if="openMoreJobId"
-        class="fixed z-[9999] w-44 overflow-hidden rounded-xl bg-white py-1 text-sm shadow-lg ring-1 ring-black/5 dark:bg-dark-800 dark:ring-white/10"
+        ref="moreMenuRef"
+        data-testid="batch-job-more-menu"
+        class="fixed z-[9999] overflow-y-auto whitespace-normal [overflow-wrap:anywhere] rounded-xl bg-white py-1 text-sm shadow-lg ring-1 ring-black/5 dark:bg-dark-800 dark:ring-white/10"
         :style="moreMenuStyle"
         @click.stop
       >
@@ -286,22 +288,22 @@
       <div
         v-if="promptPopover.visible"
         ref="promptPopoverRef"
-        class="batch-prompt-popover fixed z-[9999] rounded-lg border border-gray-200 bg-white p-3 text-sm text-gray-800 shadow-xl ring-1 ring-black/5 dark:border-dark-700 dark:bg-dark-900 dark:text-gray-100 dark:ring-white/10"
+        class="batch-prompt-popover flex min-h-0 flex-col overflow-hidden fixed z-[9999] rounded-lg border border-gray-200 bg-white p-3 text-sm text-gray-800 shadow-xl ring-1 ring-black/5 dark:border-dark-700 dark:bg-dark-900 dark:text-gray-100 dark:ring-white/10"
         :style="promptPopover.style"
         @mouseenter="cancelPromptPopoverClose"
         @mouseleave="schedulePromptPopoverClose"
       >
-        <div class="mb-2 flex items-center justify-between gap-3">
-          <span class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('batchImage.promptPopover.title') }}</span>
+        <div class="mb-2 flex shrink-0 items-start justify-between gap-3">
+          <span class="min-w-0 whitespace-normal [overflow-wrap:anywhere] text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('batchImage.promptPopover.title') }}</span>
           <button
             type="button"
-            class="rounded-md px-2 py-1 text-xs font-medium text-primary-600 transition-colors hover:bg-primary-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/30 dark:text-primary-300 dark:hover:bg-primary-900/20"
+            class="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-primary-600 transition-colors hover:bg-primary-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/30 dark:text-primary-300 dark:hover:bg-primary-900/20"
             @click="copyPromptPopover"
           >
             {{ t('common.copy') }}
           </button>
         </div>
-        <p class="max-h-48 overflow-y-auto whitespace-pre-wrap break-words leading-6 selection:bg-primary-100 selection:text-primary-900 dark:selection:bg-primary-900/60 dark:selection:text-primary-100">
+        <p class="min-h-0 max-h-48 overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere] leading-6 selection:bg-primary-100 selection:text-primary-900 dark:selection:bg-primary-900/60 dark:selection:text-primary-100">
           {{ promptPopover.text }}
         </p>
       </div>
@@ -720,6 +722,7 @@ const fieldLabelScope = useFieldLabelId()
 
 import AppHeading from '@/components/common/AppHeading.vue'
 import { useOwnedPopover } from '@/composables/overlayLifecycle'
+import { popoverLayout } from '@/utils/floatingPanel'
 import ConfirmationPrompt from '@/components/common/ConfirmationPrompt.vue'
 import { useConfirmation } from '@/composables/useConfirmation'
 
@@ -894,6 +897,7 @@ const availableBatchImageModels = ref<Array<{ value: string; label: string }>>([
 const modelLoadError = ref('')
 const openMoreJobId = ref('')
 const moreMenuStyle = ref<Record<string, string>>({})
+const moreMenuRef = ref<HTMLElement | null>(null)
 const promptPopover = reactive({
   visible: false,
   text: '',
@@ -1381,15 +1385,18 @@ function toggleMoreMenu(job: BatchImageJobRow, event: MouseEvent) {
   const trigger = event.currentTarget as HTMLElement | null
   const rect = trigger?.getBoundingClientRect()
   if (!rect) return
-  const menuWidth = 176
-  const margin = 8
-  const left = Math.max(margin, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - margin))
-  const top = Math.min(rect.bottom + margin, window.innerHeight - 96)
-  moreMenuStyle.value = {
-    left: `${left}px`,
-    top: `${Math.max(margin, top)}px`,
-  }
+  moreMenuStyle.value = popoverLayout(rect, { width: window.innerWidth, height: window.innerHeight }, 176, 140)
   openMoreJobId.value = job.id
+}
+
+function closeMoreMenuOnScroll(event: Event) {
+  if (event.target instanceof Node && moreMenuRef.value?.contains(event.target)) return
+  closeMoreMenu()
+}
+
+function closePromptPopoverOnScroll(event: Event) {
+  if (event.target instanceof Node && promptPopoverRef.value?.contains(event.target)) return
+  closePromptPopover()
 }
 
 function cancelPromptPopoverClose() {
@@ -1450,21 +1457,8 @@ function showPromptPopover(event: MouseEvent | FocusEvent, text: string) {
 function openPromptPopover(target: HTMLElement, value: string) {
   const rect = target.getBoundingClientRect()
   if (!rect) return
-  const viewportWidth = window.innerWidth || 1280
-  const viewportHeight = window.innerHeight || 720
-  const width = Math.min(440, Math.max(320, viewportWidth - 32))
-  const left = Math.max(16, Math.min(rect.left, viewportWidth - width - 16))
-  const estimatedHeight = 178
-  const preferredTop = rect.bottom + 8
-  const top = preferredTop + estimatedHeight > viewportHeight
-    ? Math.max(16, rect.top - estimatedHeight - 8)
-    : preferredTop
   promptPopover.text = value
-  promptPopover.style = {
-    left: `${left}px`,
-    top: `${top}px`,
-    width: `${width}px`,
-  }
+  promptPopover.style = popoverLayout(rect, { width: window.innerWidth, height: window.innerHeight }, 440, 260)
   promptPopover.visible = true
 }
 
@@ -2570,9 +2564,9 @@ onMounted(() => {
   }, 60 * 60 * 1000)
   document.addEventListener('click', closeMoreMenu)
   window.addEventListener('resize', closeMoreMenu)
-  window.addEventListener('scroll', closeMoreMenu, true)
+  window.addEventListener('scroll', closeMoreMenuOnScroll, true)
   window.addEventListener('resize', closePromptPopover)
-  window.addEventListener('scroll', closePromptPopover, true)
+  window.addEventListener('scroll', closePromptPopoverOnScroll, true)
 })
 
 watch(
@@ -2605,9 +2599,9 @@ onBeforeUnmount(() => {
   clearItemPreviews()
   document.removeEventListener('click', closeMoreMenu)
   window.removeEventListener('resize', closeMoreMenu)
-  window.removeEventListener('scroll', closeMoreMenu, true)
+  window.removeEventListener('scroll', closeMoreMenuOnScroll, true)
   window.removeEventListener('resize', closePromptPopover)
-  window.removeEventListener('scroll', closePromptPopover, true)
+  window.removeEventListener('scroll', closePromptPopoverOnScroll, true)
 })
 
 // Register after the parent state exists; hidden/replaced callers cancel pending decisions.

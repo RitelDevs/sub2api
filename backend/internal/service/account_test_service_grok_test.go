@@ -642,3 +642,40 @@ func TestAccountTestService_GrokRealtimeModeDialFailure(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"type":"error"`)
 	require.Contains(t, rec.Body.String(), "Realtime")
 }
+
+// The V3 arithmetic probe uses the Pelican entry point. Assert the upstream
+// sees its question rather than the quota probe's greeting.
+func TestGrokMonitorProbePreservesQuestion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, accountType := range []string{AccountTypeAPIKey, AccountTypeOAuth} {
+		for _, mode := range []string{AccountTestModeDefault, AccountTestModeGrokText} {
+			t.Run(accountType+"/"+mode, func(t *testing.T) {
+				account := &Account{ID: 13, Platform: PlatformGrok, Type: accountType, Status: StatusActive, Schedulable: true, Concurrency: 1,
+					Credentials: map[string]any{"api_key": "synthetic-key", "access_token": "synthetic-token", "refresh_token": "synthetic-refresh", "expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339)}}
+				repo := &mockAccountRepoForGemini{accountsByID: map[int64]*Account{account.ID: account}}
+				upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK,
+					Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+					Body:   io.NopCloser(strings.NewReader("data: {\"type\":\"response.output_text.delta\",\"delta\":\"60\"}\n\ndata: {\"type\":\"response.completed\"}\n\n"))}}
+				svc := &AccountTestService{accountRepo: repo, grokTokenProvider: NewGrokTokenProvider(repo, nil), httpUpstream: upstream}
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodPost, "/synthetic-monitor-probe", nil)
+				question := "What is 12 * 5? Reply with the number only."
+				var err error
+				if mode == AccountTestModeDefault {
+					err = svc.TestPelicanAccountConnection(c, account.ID, "grok-4.7", question, "low")
+				} else {
+					c.Request = c.Request.WithContext(withPelicanTestOptions(c.Request.Context(), pelicanTestOptions{prompt: question, reasoningEffort: "low"}))
+					err = svc.TestAccountConnection(c, account.ID, "grok-4.7", question, mode)
+				}
+				require.NoError(t, err)
+				require.Equal(t, question, gjson.GetBytes(upstream.lastBody, "input").String())
+				require.Equal(t, "low", gjson.GetBytes(upstream.lastBody, "reasoning.effort").String())
+				require.Equal(t, "grok-4.7", gjson.GetBytes(upstream.lastBody, "model").String())
+				require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
+				require.Contains(t, recorder.Body.String(), `"text":"60"`)
+				require.Contains(t, recorder.Body.String(), `"type":"test_complete"`)
+			})
+		}
+	}
+}

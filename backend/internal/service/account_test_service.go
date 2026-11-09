@@ -1563,6 +1563,14 @@ func (s *AccountTestService) testGrokResponsesConnection(c *gin.Context, ctx con
 	s.prepareGrokTestSSE(c)
 
 	payloadBytes, err := buildGrokQuotaProbeBody(testModelID)
+	if options, ok := pelicanTestOptionsFromContext(ctx); ok {
+		// Monitor/Pelican tests must send their question, not the quota greeting.
+		payload := map[string]any{"model": testModelID, "input": promptOrDefault(options.prompt), "stream": true}
+		if effort, keep := normalizeGrokReasoningEffortValue(options.reasoningEffort, testModelID); grokSupportsReasoningEffort(testModelID) && keep {
+			payload["reasoning"] = map[string]any{"effort": effort}
+		}
+		payloadBytes, err = json.Marshal(payload)
+	}
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create Grok test payload")
 	}

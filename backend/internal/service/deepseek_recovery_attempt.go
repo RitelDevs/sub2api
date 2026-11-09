@@ -769,7 +769,7 @@ func (b *deepSeekValidatedBody) validateCC(r gjson.Result, stream bool) error {
 				return err
 			}
 		}
-		if t := msg.Get("function_call"); t.IsObject() {
+		if t := msg.Get("function_call"); t.IsObject() && DeepSeekRecoveryToolPayloadPresent("function_call", t.Value()) {
 			if err := b.tool("legacy:"+choice.Get("index").String(), t.Get("name"), t.Get("arguments"), !stream, false); err != nil {
 				return err
 			}

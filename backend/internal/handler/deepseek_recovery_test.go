@@ -349,11 +349,14 @@ func TestDeepSeekRecoveryHandlersStructuredOutputDoesNotAppendRestart(t *testing
 
 func TestDeepSeekRecoveryOperationObservation(t *testing.T) {
 	for _, protocol := range []string{"chat", "messages"} {
-		for _, scenario := range []string{"recovered", "tool", "reasoning_only", "budget"} {
+		for _, scenario := range []string{"recovered", "tool", "reasoning_only", "budget", "incomplete_tool"} {
 			t.Run(protocol+"/"+scenario, func(t *testing.T) {
 				u := &deepSeekRecoveryTestUpstream{response: func(n int, _ *http.Request) (int, string) {
 					if scenario == "recovered" && n == 1 {
 						return 502, `{"error":{"message":"upstream failed"}}`
+					}
+					if scenario == "incomplete_tool" {
+						return 200, deepSeekChunk(`{"tool_calls":[{"index":0,"id":"call1","type":"function","function":{"name":"read","arguments":"{"}}]}`, "null") + deepSeekChunk(`{}`, `"tool_calls"`) + "data: [DONE]\n\n"
 					}
 					if scenario == "tool" {
 						return 200, deepSeekChunk(`{"tool_calls":[{"index":0,"id":"call1","type":"function","function":{"name":"read","arguments":"{}"}}]}`, "null") + deepSeekChunk(`{}`, `"tool_calls"`) + "data: [DONE]\n\n"
@@ -393,11 +396,75 @@ func TestDeepSeekRecoveryOperationObservation(t *testing.T) {
 					require.Equal(t, "incomplete", op.FinalOutcome)
 					require.Equal(t, "reasoning_only", op.Reason)
 					require.Nil(t, op.FirstUsableMS)
+				case "incomplete_tool":
+					require.Equal(t, "failed", op.FinalOutcome)
+					require.Equal(t, "deepseek_incomplete_tool_call", op.Reason)
+					require.Equal(t, 1, op.AttemptCount)
 				case "budget":
 					require.Equal(t, "incomplete", op.FinalOutcome)
 					require.Equal(t, "output_budget", op.Reason)
 				}
 			})
 		}
+	}
+}
+
+func TestDeepSeekRecoveryHandlersRecoverEmptyToolPlaceholders(t *testing.T) {
+	for _, protocol := range []string{"chat", "messages"} {
+		for _, placeholder := range []string{`"tool_calls":[]`, `"function_call":{}`, `"function_call":{"name":"","arguments":""}`} {
+			t.Run(protocol+placeholder, func(t *testing.T) {
+				u := &deepSeekRecoveryTestUpstream{response: func(n int, _ *http.Request) (int, string) {
+					if n > 1 {
+						return 200, deepSeekSuccess()
+					}
+					return 200, deepSeekChunk(`{"reasoning_content":"thinking",`+placeholder+`}`, "null")
+				}}
+				h, c, rec, usage := deepSeekHandlerFixture(t, protocol, u)
+				if protocol == "chat" {
+					h.ChatCompletions(c)
+				} else {
+					h.Messages(c)
+				}
+				require.Len(t, u.ids, 2, rec.Body.String())
+				require.NotEqual(t, u.ids[0], u.ids[1])
+				require.Contains(t, rec.Body.String(), "SUCCESS")
+				require.Contains(t, rec.Body.String(), "正在重新生成")
+				require.Len(t, usage.created, 1)
+				bill := <-usage.created
+				require.Equal(t, u.ids[1], bill.AccountID)
+				require.Equal(t, 3, bill.OutputTokens)
+			})
+		}
+	}
+}
+
+func TestDeepSeekRecoveryHandlersAccept192TextPlaceholders(t *testing.T) {
+	for _, protocol := range []string{"chat", "messages"} {
+		t.Run(protocol, func(t *testing.T) {
+			u := &deepSeekRecoveryTestUpstream{response: func(int, *http.Request) (int, string) {
+				return 200, deepSeekChunk(`{"role":"assistant","content":"","reasoning_content":"","tool_calls":[]}`, "null") +
+					deepSeekChunk(`{"content":"OK","tool_calls":[]}`, "null") +
+					deepSeekChunk(`{"role":null,"content":"","reasoning_content":"","tool_calls":[],"function_call":{"name":"","arguments":""}}`, `"stop"`) +
+					"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":1,\"total_tokens\":10}}\n\ndata: [DONE]\n\n"
+			}}
+			h, c, rec, usage := deepSeekHandlerFixture(t, protocol, u)
+			if protocol == "chat" {
+				h.ChatCompletions(c)
+			} else {
+				h.Messages(c)
+			}
+			require.Len(t, u.ids, 1, rec.Body.String())
+			require.Contains(t, rec.Body.String(), "OK")
+			require.NotContains(t, rec.Body.String(), "error")
+			require.Len(t, usage.created, 1)
+			bill := <-usage.created
+			require.Equal(t, 1, bill.OutputTokens)
+			require.Equal(t, u.ids[0], bill.AccountID)
+			if protocol == "chat" {
+				require.Contains(t, rec.Body.String(), "[DONE]")
+			} else {
+				require.Contains(t, rec.Body.String(), "message_stop")
+			}
+		})
 	}
 }

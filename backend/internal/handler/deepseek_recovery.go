@@ -180,13 +180,14 @@ func (h *OpenAIGatewayHandler) runDeepSeekRecovery(c *gin.Context, in deepSeekRe
 			h.submitDeepSeekRecoveryUsage(c, child, in, account, result, log)
 			return
 		}
+		failureReason := service.DeepSeekRecoveryFailureReason(forwardErr)
 		var observationFailure *service.UpstreamFailoverError
 		if errors.As(forwardErr, &observationFailure) && observationFailure.Reason == service.GatewayFailureReason("deepseek_no_answer") {
 			requesttiming.ObserveOperationSource(c.Request.Context(), requesttiming.OperationEvidence{Protocol: in.protocol, FailureReason: "no_answer", Complete: true})
 		} else if c.Request.Context().Err() == nil && !sink.ClientGone() {
-			requesttiming.ObserveOperationSource(c.Request.Context(), requesttiming.OperationEvidence{Protocol: in.protocol, Terminal: "failed", FailureReason: "deepseek_attempt_failed", Complete: true})
+			requesttiming.ObserveOperationSource(c.Request.Context(), requesttiming.OperationEvidence{Protocol: in.protocol, Terminal: "failed", FailureReason: failureReason, Complete: true})
 		}
-		requesttiming.OperationAttemptFailed(c.Request.Context(), "deepseek_attempt_failed")
+		requesttiming.OperationAttemptFailed(c.Request.Context(), failureReason)
 		service.RecordDeepSeekRecoveryFailure(c, account, result, attempts, forwardErr, attempt.Outcome())
 		outcome := attempt.Outcome()
 		var upstreamFailure *service.UpstreamFailoverError

@@ -440,3 +440,46 @@ func TestDeepSeekRecoverySinkSerializesHeartbeatWithFrames(t *testing.T) {
 	require.NoError(t, w.CommitSuccess())
 	require.Len(t, recoverySinkFrames(t, rec.Body.String()), 101)
 }
+
+func TestDeepSeekRecoverySinkEmptyToolPlaceholdersCanRetry(t *testing.T) {
+	for _, field := range []string{"tool_calls", "function_call"} {
+		t.Run(field, func(t *testing.T) {
+			w, rec := recoverySinkTestWriter(t, "chat", true)
+			var empty any = []any{}
+			if field == "function_call" {
+				empty = map[string]any{}
+			}
+			recoverySinkWrite(t, w, recoverySinkChat(map[string]any{field: empty}, nil, nil))
+			require.False(t, w.ToolExposed())
+			require.False(t, w.BusinessStarted())
+			require.Empty(t, rec.Body.String())
+			recoverySinkWrite(t, w, recoverySinkChat(map[string]any{"reasoning_content": "thinking", field: empty}, nil, nil))
+			require.Contains(t, rec.Body.String(), "thinking")
+			require.False(t, w.ToolExposed())
+			require.Error(t, w.EndAttempt(errors.New("upstream interrupted")))
+			require.True(t, w.CanRetry())
+			require.NoError(t, w.BeginAttempt())
+			recoverySinkWrite(t, w, recoverySinkChat(map[string]any{"content": "winner"}, "stop", nil))
+			require.NoError(t, w.EndAttempt(nil))
+			require.NoError(t, w.CommitSuccess())
+			require.Contains(t, rec.Body.String(), "winner")
+		})
+	}
+}
+
+func TestDeepSeekRecoverySinkPartialToolCarriersStillStopRetry(t *testing.T) {
+	for _, delta := range []map[string]any{
+		{"tool_calls": []any{map[string]any{"index": 0}}},
+		{"tool_calls": []any{map[string]any{"id": "call_1"}}},
+		{"tool_calls": []any{map[string]any{"function": map[string]any{"arguments": "{"}}}},
+		{"tool_calls": []any{map[string]any{}}},
+		{"function_call": map[string]any{"arguments": "{"}},
+	} {
+		w, rec := recoverySinkTestWriter(t, "chat", true)
+		recoverySinkWrite(t, w, recoverySinkChat(delta, nil, nil))
+		require.NotEmpty(t, rec.Body.String())
+		require.True(t, w.ToolExposed())
+		require.Error(t, w.EndAttempt(errors.New("interrupted")))
+		require.False(t, w.CanRetry())
+	}
+}

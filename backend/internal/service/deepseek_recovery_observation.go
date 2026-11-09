@@ -8,6 +8,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// DeepSeekRecoveryFailureReason returns a credential-free structured reason;
+// untyped transport errors retain the generic classification.
+func DeepSeekRecoveryFailureReason(cause error) string {
+	var failover *UpstreamFailoverError
+	if errors.As(cause, &failover) && failover.Reason != "" {
+		return string(failover.Reason)
+	}
+	return "deepseek_attempt_failed"
+}
+
 // Failed attempts are provider diagnostics, never customer usage commands.
 // Keep known usage and explicitly unknown cost available for reconciliation;
 // do not invent a zero-cost customer row or consume the winner's dedup key.
@@ -17,7 +27,7 @@ func RecordDeepSeekRecoveryFailure(c *gin.Context, account *Account, result *Ope
 	if errors.As(cause, &failover) && failover.StatusCode > 0 {
 		status = failover.StatusCode
 	}
-	detail := map[string]any{"attempt": ordinal, "observation_only": true, "provider_cost": "unknown", "source": outcome}
+	detail := map[string]any{"attempt": ordinal, "observation_only": true, "provider_cost": "unknown", "source": outcome, "failure_reason": DeepSeekRecoveryFailureReason(cause)}
 	requestID := ""
 	if result != nil {
 		requestID = result.RequestID

@@ -70,6 +70,9 @@ func TestDeepSeekRecoverySourceJSON(t *testing.T) {
 		name, path, raw     string
 		fail, tool, refusal bool
 	}{
+		{"cc_empty_legacy_text", "/v1/chat/completions", `{"choices":[{"message":{"content":"hello","function_call":{}},"finish_reason":"stop"}]}`, false, false, false},
+		{"cc_empty_tools_text", "/v1/chat/completions", `{"choices":[{"message":{"content":"hello","tool_calls":[]},"finish_reason":"stop"}]}`, false, false, false},
+		{"cc_blank_legacy_text", "/v1/chat/completions", `{"choices":[{"message":{"content":"hello","function_call":{"name":"","arguments":""}},"finish_reason":"stop"}]}`, false, false, false},
 		{"cc_text", "/v1/chat/completions", `{"choices":[{"message":{"content":"hello"},"finish_reason":"stop"}]}`, false, false, false},
 		{"cc_refusal", "/v1/chat/completions", `{"choices":[{"message":{"content":null,"refusal":"I cannot help"},"finish_reason":"stop"}]}`, false, false, true},
 		{"cc_empty_filter", "/v1/chat/completions", `{"choices":[{"message":{"content":""},"finish_reason":"content_filter"}]}`, false, false, true},

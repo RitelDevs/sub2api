@@ -320,7 +320,10 @@ func deepSeekRecoveryTool(v any) bool {
 				continue
 			}
 			if k == "tool_calls" || k == "function_call" || k == "tool_use" {
-				return true
+				if service.DeepSeekRecoveryToolPayloadPresent(k, v) {
+					return true
+				}
+				continue
 			}
 			if k == "type" {
 				if t, ok := v.(string); ok && (strings.Contains(t, "tool") || t == "input_json_delta" || strings.Contains(t, "function_call")) {

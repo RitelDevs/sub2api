@@ -26,11 +26,14 @@ type OpenAIWeeklyQuotaAccountLister interface {
 }
 
 type OpenAIWeeklyQuotaTier struct {
-	Plan         string  `json:"plan"`
-	Label        string  `json:"label"`
-	WeeklyLimit  float64 `json:"weekly_limit"`
-	AccountCount int     `json:"account_count"`
-	Remaining    float64 `json:"remaining"`
+	Plan             string  `json:"plan"`
+	Label            string  `json:"label"`
+	WeeklyLimit      float64 `json:"weekly_limit"`
+	AccountCount     int     `json:"account_count"`
+	SchedulableCount int     `json:"schedulable_count"`
+	RateLimitedCount int     `json:"rate_limited_count"`
+	DegradedCount    int     `json:"degraded_count"`
+	Remaining        float64 `json:"remaining"`
 }
 
 type OpenAIWeeklyQuotaExcluded struct {
@@ -78,6 +81,7 @@ type openAIWeeklyQuotaRow struct {
 	accountID            int64
 	maxConcurrency       int
 	concurrencyAvailable bool
+	status               string
 }
 
 // CollectOpenAIWeeklyQuota reads the full OAuth pool, ignoring UI query filters.
@@ -103,9 +107,21 @@ func CollectOpenAIWeeklyQuota(ctx context.Context, lister OpenAIWeeklyQuotaAccou
 	var totalUnits int64
 	var accountIDs []int64
 	for _, row := range rows {
+		if row.reason == "inactive" {
+			continue // Invalid, expired or disabled accounts appear in no aggregate.
+		}
+		if row.tier >= 0 {
+			tier := &result.Tiers[row.tier]
+			switch row.status {
+			case "degraded":
+				tier.DegradedCount++
+			case "schedulable":
+				tier.SchedulableCount++
+			case "rate_limited":
+				tier.RateLimitedCount++
+			}
+		}
 		switch row.reason {
-		case "inactive":
-			result.Excluded.Inactive++
 		case "degraded":
 			result.Excluded.Degraded++
 		case "unsupported_plan":
@@ -201,16 +217,8 @@ func scanOpenAIWeeklyQuota(ctx context.Context, lister OpenAIWeeklyQuotaAccountL
 
 func evaluateOpenAIWeeklyQuota(a *Account, now time.Time) openAIWeeklyQuotaRow {
 	row := openAIWeeklyQuotaRow{tier: -1}
-	if a.Status != StatusActive || !a.Schedulable {
+	if a.Status != StatusActive || !a.Schedulable || (a.AutoPauseOnExpired && a.ExpiresAt != nil && !now.Before(*a.ExpiresAt)) {
 		row.reason = "inactive"
-		return row
-	}
-	// Consume the quality owner's persisted account classification. Its Astra
-	// result also controls Sol; per-model observations and probe freshness are
-	// not a new classification or an automatic recovery of this stored state.
-	quality, _ := a.Extra["quality_candy"].(map[string]any)
-	if quality["state"] == "degraded" {
-		row.reason = "degraded"
 		return row
 	}
 	row.accountID, row.maxConcurrency = a.ID, a.Concurrency
@@ -232,6 +240,28 @@ func evaluateOpenAIWeeklyQuota(a *Account, now time.Time) openAIWeeklyQuotaRow {
 		row.reason = "unsupported_plan"
 		return row
 	}
+	// Consume the quality owner's persisted account classification. Its Astra
+	// result also controls Sol; per-model observations and probe freshness are
+	// not a new classification or an automatic recovery of this stored state.
+	quality, _ := a.Extra["quality_candy"].(map[string]any)
+	if quality["state"] == "degraded" {
+		row.status = "degraded"
+		row.reason = "degraded"
+		return row
+	}
+	row.concurrencyAvailable = a.IsSchedulable()
+	for _, window := range []string{"7d", "5h"} {
+		if window == "5h" && plan != "plus" {
+			continue
+		}
+		if used, known := resolveOpenAIQuotaUtilization(a.Extra, window, now); known && used >= 1 {
+			row.concurrencyAvailable = false
+		}
+	}
+	row.status = "rate_limited"
+	if row.concurrencyAvailable {
+		row.status = "schedulable"
+	}
 	used, at, reason := openAIWeeklyQuotaSnapshot(a.Extra, now)
 	row.reason = reason
 	if reason != "" {
@@ -243,6 +273,9 @@ func evaluateOpenAIWeeklyQuota(a *Account, now time.Time) openAIWeeklyQuotaRow {
 	if plan == "plus" && row.concurrencyAvailable {
 		used5h, known := resolveOpenAIQuotaUtilization(a.Extra, "5h", now)
 		row.concurrencyAvailable = !(known && used5h >= 1)
+	}
+	if row.concurrencyAvailable {
+		row.status = "schedulable"
 	}
 	row.snapshot = at
 	row.remaining = int64(math.Round(tiers[row.tier].WeeklyLimit * (1 - used/100) * openAIWeeklyQuotaScale))

@@ -7,6 +7,16 @@ import (
 	"strings"
 )
 
+// Inactive degraded accounts remain at rest until an administrator enables them.
+// The recorded classification deliberately does not expire during that rest.
+func (a *Account) isInactiveDegradedOpenAI() bool {
+	if a == nil || !a.IsOpenAIOAuth() || a.Status != "inactive" {
+		return false
+	}
+	quality, _ := a.Extra["quality_candy"].(map[string]any)
+	return quality["state"] == "degraded"
+}
+
 const QualityActionObserveOnly = "observe_only"
 const QualityActionRemoveModel = "remove_models"
 const QualityActionIsolateModels = "isolate_models"

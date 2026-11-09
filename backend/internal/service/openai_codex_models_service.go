@@ -1726,6 +1726,9 @@ func (c *openAIModelsCache) set(key string, manifest *OpenAIModelsResponse, now 
 // passed through verbatim. Custom API key manifests receive only the narrowly
 // scoped compatibility adjustments required by custom-provider Codex clients.
 func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, account *Account, clientVersion, ifNoneMatch string) (*OpenAIModelsResponse, error) {
+	if account.isInactiveDegradedOpenAI() {
+		return nil, infraerrors.Conflict("OPENAI_ACCOUNT_RESTING", "Inactive degraded account is resting; model discovery is disabled")
+	}
 	if account != nil && account.IsExcelBPSEnabled() {
 		return s.fetchExcelBPSCodexManifest(ctx, account, ifNoneMatch)
 	}

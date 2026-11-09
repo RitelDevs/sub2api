@@ -17,6 +17,9 @@ import (
 // API keys use the standard endpoint; OAuth reuses the authenticated, cached
 // Codex source. Account mappings and group policy are applied after this cache.
 func (s *OpenAIGatewayService) FetchOpenAIModelsList(ctx context.Context, account *Account) (*OpenAIModelsResponse, error) {
+	if account.isInactiveDegradedOpenAI() {
+		return nil, infraerrors.Conflict("OPENAI_ACCOUNT_RESTING", "Inactive degraded account is resting; model discovery is disabled")
+	}
 	if account != nil && account.IsExcelBPSEnabled() {
 		return s.fetchExcelBPSAccountModels(ctx, account)
 	}

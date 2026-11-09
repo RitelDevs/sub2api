@@ -738,6 +738,22 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 	}
 
 	applyExtraToUsage(usage, account.Extra, now)
+	if account.isInactiveDegradedOpenAI() {
+		// List mounts, manual refresh and batch reads all share this boundary.
+		// Retain recorded windows without manufacturing a fresh observation.
+		usage.Source = "passive"
+		// A reset without a new observation does not establish zero usage.
+		if usage.FiveHour != nil && usage.FiveHour.ResetsAt != nil && !usage.FiveHour.ResetsAt.After(now) {
+			usage.FiveHour = nil
+		}
+		if usage.SevenDay != nil && usage.SevenDay.ResetsAt != nil && !usage.SevenDay.ResetsAt.After(now) {
+			usage.SevenDay = nil
+		}
+		usage.UpdatedAt = opsTime(account.Extra["codex_usage_updated_at"])
+		usage.ErrorCode = "account_resting"
+		usage.Error = "Inactive degraded account is resting; upstream probes are disabled"
+		return usage, nil
+	}
 
 	if (force || shouldRefreshOpenAICodexSnapshot(account, usage, now)) && s.shouldProbeOpenAICodexSnapshot(account.ID, now, force) {
 		if account.IsShadow() || account.IsExcelBPSEnabled() {

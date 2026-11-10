@@ -3,6 +3,7 @@
 package clienterror
 
 import (
+	"encoding/json"
 	"regexp"
 	"strconv"
 	"strings"
@@ -64,7 +65,8 @@ func cleanJSON(payload []byte, messageJSON bool) ([]byte, bool) {
 	root := gjson.ParseBytes(payload)
 	if messageJSON && root.Type == gjson.String {
 		if clean := Message(root.String()); clean != root.String() {
-			return []byte(strconv.Quote(clean)), true
+			encoded, _ := json.Marshal(clean) // Encoding a string cannot fail.
+			return encoded, true
 		}
 	}
 	if !root.IsObject() && !root.IsArray() {

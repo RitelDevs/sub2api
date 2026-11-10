@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/clienterror"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/Wei-Shaw/sub2api/internal/requestcapture"
 	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
@@ -42,6 +43,9 @@ func (c *captureUpstreamFrameConn) ReadFrame(ctx context.Context) (coderws.Messa
 
 // WriteCapturedWSClient observes successfully delivered downstream frames.
 func WriteCapturedWSClient(ctx context.Context, conn *coderws.Conn, t coderws.MessageType, payload []byte) error {
+	// Sanitize only the downstream copy; upstream capture, classification and
+	// accounting retain their original payload and correlation identifiers.
+	payload, _ = clienterror.JSON(payload)
 	err := conn.Write(ctx, t, payload)
 	capture := requestcapture.FromContext(ctx)
 	if err == nil {

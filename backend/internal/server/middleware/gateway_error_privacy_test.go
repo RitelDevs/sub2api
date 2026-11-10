@@ -70,6 +70,36 @@ func TestGatewayErrorPrivacyHTTPJSON(t *testing.T) {
 	}
 }
 
+func TestGatewayErrorPrivacyOuterPanicRecovery(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(Recovery(), RequestLogger(), ClientRequestID(), GatewayErrorPrivacy())
+	r.GET("/v1/responses", func(c *gin.Context) {
+		c.Header("X-Request-ID", "panic-private-id")
+		panic("test panic")
+	})
+	response := httptest.NewRecorder()
+	r.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/responses", nil))
+	require.Equal(t, http.StatusInternalServerError, response.Code)
+	require.Empty(t, response.Header().Get("X-Request-ID"))
+	require.Empty(t, response.Header().Get("X-Client-Request-ID"))
+	require.NotContains(t, response.Body.String(), "panic-private-id")
+}
+
+func TestGatewayErrorPrivacyMultilineSSEStaysParseable(t *testing.T) {
+	frame := []byte("event: error\ndata: {\"type\":\"error\",\ndata: \"error\":{\"message\":\"Bad (request id: private)\"}}\n\n")
+	clean := sanitizeGatewaySSEFrame(frame)
+	var data []string
+	for _, line := range strings.Split(string(clean), "\n") {
+		if strings.HasPrefix(line, "data:") {
+			data = append(data, strings.TrimPrefix(line[5:], " "))
+		}
+	}
+	payload := strings.Join(data, "\n")
+	require.True(t, gjson.Valid(payload), payload)
+	require.Equal(t, "Bad", gjson.Get(payload, "error.message").String())
+}
+
 func TestGatewayErrorPrivacyFragmentedSSE(t *testing.T) {
 	success := "event: response.output_text.delta\r\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Keep (request id: user-prose)\",\"response_id\":\"resp_keep\",\"call_id\":\"call_keep\"}\r\n\r\n"
 	failed := "event: response.failed\r\ndata: {\"type\":\"response.failed\",\"request_id\":\"outer-secret\",\"response\":{\"id\":\"resp_keep\",\"status\":\"failed\",\"error\":{\"code\":\"context_length_exceeded\",\"message\":\"Context window is full. (request id: upstream-1) (request id: upstream-2)\"}}}\r\n\r\n"

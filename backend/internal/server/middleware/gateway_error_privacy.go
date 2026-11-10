@@ -20,7 +20,11 @@ func GatewayErrorPrivacy() gin.HandlerFunc {
 		original := c.Writer
 		w := &gatewayPrivacyWriter{ResponseWriter: original}
 		c.Writer = w
-		defer func() { c.Writer = original }()
+		defer func() {
+			// Outer panic recovery can write after this middleware unwinds.
+			removeGatewayRequestIDHeaders(original.Header())
+			c.Writer = original
+		}()
 		c.Next()
 		if err := w.finish(); err != nil {
 			_ = c.Error(err)
@@ -207,7 +211,7 @@ func sanitizeGatewaySSEFrame(frame []byte) []byte {
 		if bytes.HasPrefix(raw, []byte("data:")) {
 			if !emitted {
 				out.WriteString("data: ")
-				out.Write(cleaned)
+				out.Write(bytes.ReplaceAll(cleaned, []byte{'\n'}, []byte("\ndata: ")))
 				if bytes.HasSuffix(raw, []byte("\r\n")) {
 					out.WriteString("\r\n")
 				} else if bytes.HasSuffix(raw, []byte{'\n'}) {

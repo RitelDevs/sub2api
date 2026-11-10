@@ -11,7 +11,7 @@ import (
 func TestMessageRemovesRepeatedRequestIDAnnotations(t *testing.T) {
 	message := "Context window is full. Reduce conversation history, system prompt, or tools."
 	for _, suffix := range []string{
-		" (request id: 202611101359298561903808268d9d6LJoeWRbN) (request id: 202611101359298575778388268d9d6PTXtoi60)",
+		" (request id: 20261110000000000000000000000000TESTA) (request id: 20261110000000000000000000000000TESTB)",
 		" (REQUEST_ID=req_123) [Request-ID: req_456]",
 		"（请求 ID：req_123）【上游请求编号：req_456】",
 		" (RequestID: req_123) (upstream_request_id=req_456)",
@@ -29,7 +29,7 @@ func TestMessageRemovesRepeatedRequestIDAnnotations(t *testing.T) {
 }
 
 func TestErrorJSONCleansKnownHTTPErrorWithoutDiscriminator(t *testing.T) {
-	payload := []byte(`{ "message":"Context window is full. Reduce conversation history, system prompt, or tools. (request id: 202611101359298561903808268d9d6LJoeWRbN) (request id: 202611101359298575778388268d9d6PTXtoi60)","request_id":"secret","output":[{"text":"(request id: user-text)"}] }`)
+	payload := []byte(`{ "message":"Context window is full. Reduce conversation history, system prompt, or tools. (request id: 20261110000000000000000000000000TESTA) (request id: 20261110000000000000000000000000TESTB)","request_id":"secret","output":[{"text":"(request id: user-text)"}] }`)
 	clean, changed := ErrorJSON(payload)
 	require.True(t, changed)
 	require.Equal(t, "Context window is full. Reduce conversation history, system prompt, or tools.", gjson.GetBytes(clean, "message").String())

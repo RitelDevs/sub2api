@@ -19,7 +19,7 @@ class IsolationTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         (self.root / 'quality-isolation.json').write_text(json.dumps({'group_id': 30}))
-        self.a = {'id': 88, 'platform': 'openai', 'type': 'oauth', 'status': 'inactive',
+        self.a = {'id': 88, 'platform': 'openai', 'type': 'oauth', 'status': 'active',
                   'schedulable': True, 'proxy_id': 2, 'priority': 20, 'concurrency': 100, 'load_factor': 20, 'group_ids': [3, 12],
                   'account_groups': [{'group_id': 3, 'priority': 2, 'allowed_models': ['luna']},
                                      {'group_id': 12, 'priority': 1, 'allowed_models': []}],
@@ -64,7 +64,7 @@ class IsolationTests(unittest.TestCase):
         with patch.object(m.legacy, 'admin', side_effect=self.api):
             return m.reconcile_account(88, 'synthetic-key', self.root, self.root / 'receipts')
 
-    def test_degraded_moves_only_group_keeps_inactive_and_managed_policy(self):
+    def test_degraded_moves_only_group_keeps_active_and_managed_policy(self):
         before = copy.deepcopy(self.a)
         self.assertTrue(self.run_account()['applied'])
         self.assertEqual(self.a['group_ids'], [30])
@@ -78,6 +78,26 @@ class IsolationTests(unittest.TestCase):
         backups = list((self.root / 'receipts').glob('*.before.json'))
         self.assertEqual(len(backups), 1)
         self.assertNotIn('synthetic-token', backups[0].read_text())
+
+    def test_paused_historical_quality_does_not_write_or_record(self):
+        for status, schedulable in [('inactive', False), ('paused', False), ('active', False)]:
+            for quality in ['healthy', 'degraded']:
+                with self.subTest(status=status, quality=quality):
+                    self.setUp()
+                    self.a.update(status=status, schedulable=schedulable)
+                    self.a['extra']['quality_candy']['state'] = quality
+                    if quality == 'healthy':
+                        self.a['extra'][m.MARKER] = {'version': 1, 'isolation_group_id': 30,
+                            'group_ids': [3, 12], 'ordered_group_ids': [12, 3],
+                            'group_allowed_models': {'3': ['luna']}}
+                        self.a['group_ids'] = [30]
+                        self.a['account_groups'] = []
+                    original = copy.deepcopy(self.a)
+                    self.assertEqual(self.run_account(), {'id': 88, 'skipped': 'paused_or_inactive'})
+                    self.assertEqual(self.gets, 1)
+                    self.assertFalse(self.puts)
+                    self.assertEqual(self.a, original)
+                    self.assertFalse((self.root / 'receipts').exists())
 
     def test_repeated_degraded_does_not_overwrite_original_groups(self):
         self.run_account()

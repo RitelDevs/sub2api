@@ -44,6 +44,8 @@ def reconcile_account(account_id, key, state_dir, backup_dir):
     before = legacy.admin('GET', path, key)
     if before.get('id') != account_id or before.get('platform') != 'openai' or before.get('type') != 'oauth':
         raise ValueError('isolation account identity mismatch')
+    if before.get('status') != 'active' or before.get('schedulable') is not True:
+        return {'id': account_id, 'skipped': 'paused_or_inactive'}
     extra = copy.deepcopy(before.get('extra') or {})
     state = (extra.get('quality_candy') or {}).get('state')
     marker = extra.get(MARKER)

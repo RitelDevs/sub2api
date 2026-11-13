@@ -13,11 +13,12 @@ import (
 
 func performanceFixture(tps, ttft, degradation float64) PrioritySchedulingSignal {
 	now := time.Now()
-	return PrioritySchedulingSignal{Performance: &AccountPerformance{
+	metrics := &AccountPerformance{
 		AvgTPS: &tps, AvgTTFTMs: &ttft, DegradationPercent: &degradation,
 		TPSSamples: 20, TTFTSamples: 20, QualitySamples: 10,
 		WindowStart: now.Add(-time.Hour), WindowEnd: now,
-	}, ProfitSamples: 20, Revenue: 10, BaseCost: 2}
+	}
+	return PrioritySchedulingSignal{Performance: metrics, ScopedPerformance: cloneAccountPerformance(metrics), ProfitSamples: 20, Revenue: 10, BaseCost: 2}
 }
 
 func TestPriorityUnifiedPerformanceScoreAndLiveSelection(t *testing.T) {
@@ -57,7 +58,7 @@ func TestPriorityUnifiedPerformanceIgnoresLegacyMeasurements(t *testing.T) {
 	after := scorePriorityCandidate(cfg, account, signal, time.Now())
 	require.Equal(t, before.Score, after.Score)
 	require.Equal(t, 4000.0, *after.SelectedTTFTMs)
-	require.Equal(t, "account_performance", after.LatencyMeasurement)
+	require.Equal(t, "scoped_account_performance", after.LatencyMeasurement)
 	require.NotContains(t, after.Reasons, "quality_below_target")
 }
 
@@ -67,13 +68,15 @@ func TestPriorityUnifiedPerformanceHTTPAndUnknownEvidence(t *testing.T) {
 	signal := performanceFixture(30, 4000, 0)
 	percent := 25.0
 	signal.Performance.UpstreamError = upstreamstats.Evidence{Source: "process_local_http_responses", Failures: 1, Total: 4, Percent: &percent}
-	score := scorePriorityCandidate(cfg, priorityCandidate(1, .1, 0), signal, time.Now())
+	account := priorityCandidate(1, .1, 0)
+	account.priorityErrors = PriorityErrorEvidence{ErrorRate: float64Ptr(.25), SmoothedRate: .25, Failures: 1, Successes: 3}
+	score := scorePriorityCandidate(cfg, account, signal, time.Now())
 	require.InDelta(t, .875, score.ErrorPenalty, 1e-8)
 	require.InDelta(t, score.BaseScore*.875, score.Score, 1e-8)
 	require.Equal(t, int64(1), score.Failures)
 	cfg.ErrorRateWeight = 0
 	require.Equal(t, 1.0, scorePriorityCandidate(cfg, priorityCandidate(1, .9, 0), signal, time.Now()).ErrorPenalty)
-	signal.Performance.AvgTPS = nil
+	signal.ScopedPerformance.AvgTPS = nil
 	require.Contains(t, scorePriorityCandidate(cfg, priorityCandidate(1, .1, 0), signal, time.Now()).Reasons, "tps_insufficient")
 	signal.Performance.UpstreamError.Total = 0
 	require.Nil(t, scorePriorityCandidate(cfg, priorityCandidate(1, .1, 0), signal, time.Now()).ErrorRate)
@@ -95,7 +98,7 @@ func TestPriorityUnifiedPerformanceAverageControlsAdmission(t *testing.T) {
 	require.True(t, priorityLatencyMeasured(cfg, score), "measured zero TTFT is valid")
 	require.False(t, score.LatencyStopped)
 	invalid := math.NaN()
-	fast.Performance.AvgTTFTMs = &invalid
+	fast.ScopedPerformance.AvgTTFTMs = &invalid
 	require.Contains(t, scorePriorityCandidate(cfg, item, fast, time.Now()).Reasons, "latency_insufficient")
 }
 
@@ -107,6 +110,7 @@ func TestPriorityUnifiedPerformanceSnapshotOwnsMetricPointers(t *testing.T) {
 	signal := performanceFixture(30, 4000, 0)
 	cachePercent := 70.0
 	signal.Performance.AvgCachePercent = &cachePercent
+	signal.ScopedPerformance.AvgCachePercent = float64Ptr(cachePercent)
 	score := scorePriorityCandidate(cfg, priorityCandidate(1, .1, 0), signal, time.Now())
 	*score.Performance.AvgCachePercent = 99
 	require.Equal(t, 70.0, *signal.Performance.AvgCachePercent)
@@ -114,9 +118,13 @@ func TestPriorityUnifiedPerformanceSnapshotOwnsMetricPointers(t *testing.T) {
 	*score.Performance.AvgTTFTMs = 999
 	require.Equal(t, 30.0, *signal.Performance.AvgTPS)
 	require.Equal(t, 4000.0, *signal.Performance.AvgTTFTMs)
+	*score.ScopedPerformance.AvgTPS = 1
+	*score.ScopedPerformance.AvgTTFTMs = 2
+	require.Equal(t, 30.0, *signal.ScopedPerformance.AvgTPS)
+	require.Equal(t, 4000.0, *signal.ScopedPerformance.AvgTTFTMs)
 }
 
-func TestPriorityUnifiedPerformanceStickyUsesSameHTTPSource(t *testing.T) {
+func TestPriorityStickyUsesCurrentRequestErrorEvidence(t *testing.T) {
 	cfg := DefaultPrioritySchedulingConfig()
 	cfg.Enabled = true
 	signal := performanceFixture(30, 4000, 0)
@@ -128,11 +136,63 @@ func TestPriorityUnifiedPerformanceStickyUsesSameHTTPSource(t *testing.T) {
 	req := OpenAIAccountScheduleRequest{Platform: PlatformOpenAI, RequestedModel: "fixture", UseUpstreamTokenCost: true}
 	pool := []openAIAccountCandidateScore{priorityCandidate(1, .1, 0)}
 	require.Eventually(t, func() bool { return gateway.priorityHistory(req, cfg, pool).ready() }, time.Second, time.Millisecond)
+	_, _, _, escape := scheduler.shouldEscapeStickyForRequest(req, 1, openAIStickyEscapeConfig{enabled: true, errorRate: .2})
+	require.False(t, escape, "account-wide HTTP failures leave the current binding intact")
+	other := req
+	other.RequestedModel = "other-model"
+	for i := 0; i < 20; i++ {
+		scheduler.stats.attempts.report(priorityRequestAttemptKey(other, 1), false, time.Now())
+	}
+	_, _, _, escape = scheduler.shouldEscapeStickyForRequest(req, 1, openAIStickyEscapeConfig{enabled: true, errorRate: .2})
+	require.False(t, escape, "another model keeps its own error evidence")
+	for i := 0; i < 20; i++ {
+		scheduler.stats.attempts.report(priorityRequestAttemptKey(req, 1), i < 10, time.Now())
+	}
 	reason, rate, _, escape := scheduler.shouldEscapeStickyForRequest(req, 1, openAIStickyEscapeConfig{enabled: true, errorRate: .2})
 	require.True(t, escape)
 	require.Equal(t, "error_rate", reason)
-	require.Equal(t, .5, rate)
+	require.InDelta(t, .4, rate, 1e-9)
 	req.PreserveStickyBinding = true
 	_, _, _, escape = scheduler.shouldEscapeStickyForRequest(req, 1, openAIStickyEscapeConfig{enabled: true, errorRate: .2})
 	require.False(t, escape)
+}
+
+func TestPriorityGlobalMetricsCannotChangeScopedScoreOrLatencyStop(t *testing.T) {
+	cfg := DefaultPrioritySchedulingConfig()
+	cfg.LatencyPenaltyMode = PriorityLatencyStop
+	cfg.CacheWeight = 20
+	signal := performanceFixture(30, 4000, 0)
+	signal.ScopedPerformance.AvgCachePercent = float64Ptr(80)
+	signal.ScopedPerformance.CacheSamples = 20
+	item := priorityCandidate(1, .1, 0)
+	now := time.Now()
+	before := scorePriorityCandidate(cfg, item, signal, now)
+
+	mixed := signal
+	mixed.Performance = performanceFixture(1, 90000, 100).Performance
+	mixed.Performance.AvgCachePercent = float64Ptr(0)
+	mixed.Performance.CacheSamples = 1000
+	mixed.Performance.UpstreamError = upstreamstats.Evidence{
+		Source: "process_local_http_responses", Total: 100, Failures: 90, Percent: float64Ptr(90),
+	}
+	item.errorRate = .9
+	after := scorePriorityCandidate(cfg, item, mixed, now)
+	require.Equal(t, before.Score, after.Score)
+	require.Equal(t, before.Tier, after.Tier)
+	require.Equal(t, before.Reasons, after.Reasons)
+	require.Equal(t, before.SelectedTTFTMs, after.SelectedTTFTMs)
+	require.False(t, after.LatencyStopped)
+	require.Equal(t, 90000.0, *after.Performance.AvgTTFTMs, "the dashboard retains the global display value")
+
+	slow := mixed
+	slow.ScopedPerformance = cloneAccountPerformance(signal.ScopedPerformance)
+	slow.ScopedPerformance.AvgTTFTMs = float64Ptr(20000)
+	require.True(t, priorityLatencyStopped(cfg, item, slow, now), "current request evidence controls the latency stop")
+
+	missing := mixed
+	missing.ScopedPerformance = nil
+	unknown := scorePriorityCandidate(cfg, item, missing, now)
+	require.Contains(t, unknown.Reasons, "latency_insufficient")
+	require.Contains(t, unknown.Reasons, "tps_insufficient")
+	require.False(t, unknown.LatencyStopped)
 }

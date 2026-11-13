@@ -294,6 +294,6 @@ func TestPriorityPenaltyReviewFreshnessDeadline(t *testing.T) {
 	require.True(t, later.LatencyStopped)
 	require.False(t, later.LatencyRecovery)
 	recovered := 4000.0
-	signal.Performance.AvgTTFTMs = &recovered
+	signal.ScopedPerformance.AvgTTFTMs = &recovered
 	require.False(t, scorePriorityCandidate(cfg, candidate, signal, visible).LatencyStopped)
 }

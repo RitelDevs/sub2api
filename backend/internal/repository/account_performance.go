@@ -116,19 +116,61 @@ func readAccountPerformanceWindowMinutes(ctx context.Context, db sqlExecutor) (i
 	return service.ParseAccountPerformanceWindowMinutes(value)
 }
 
-func readAccountPerformance(ctx context.Context, db sqlExecutor, ids []int64, now time.Time) (map[int64]service.AccountPerformance, error) {
+func readAccountPerformance(ctx context.Context, db sqlExecutor, ids []int64, now time.Time, scopes ...*service.PrioritySchedulingQuery) (map[int64]service.AccountPerformance, error) {
 	out := make(map[int64]service.AccountPerformance, len(ids))
 	if len(ids) == 0 {
 		return out, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	minutes, err := readAccountPerformanceWindowMinutes(ctx, db)
-	if err != nil {
-		return nil, err
+	var scope *service.PrioritySchedulingQuery
+	if len(scopes) > 0 {
+		scope = scopes[0]
 	}
-	since := now.Add(-time.Duration(minutes) * time.Minute)
-	rows, err := db.QueryContext(ctx, performanceMetricsSQL, pq.Array(ids), since, now)
+	querySQL := performanceMetricsSQL
+	var since time.Time
+	var args []any
+	if scope == nil {
+		minutes, err := readAccountPerformanceWindowMinutes(ctx, db)
+		if err != nil {
+			return nil, err
+		}
+		since = now.Add(-time.Duration(minutes) * time.Minute)
+		args = []any{pq.Array(ids), since, now}
+	} else {
+		model := strings.TrimSpace(scope.Model)
+		if model == "" || scope.UsageSince.IsZero() || !scope.UsageSince.Before(now) {
+			return out, nil
+		}
+		since = scope.UsageSince
+		effort := ""
+		if scope.ObservationEffort != nil {
+			effort = *scope.ObservationEffort
+		}
+		qualityModel := strings.TrimSpace(scope.QualityModel)
+		if qualityModel == "" {
+			qualityModel = model
+		}
+		qualitySince := scope.QualitySince
+		if qualitySince.IsZero() {
+			qualitySince = since
+		}
+		args = []any{pq.Array(ids), since, now, model, scope.GroupID, effort, qualityModel, qualitySince}
+		querySQL = strings.Replace(querySQL,
+			"WHERE u.account_id=ANY($1) AND u.created_at >= $2",
+			`WHERE u.account_id=ANY($1) AND u.created_at >= $2 AND u.created_at <= $3
+			 AND COALESCE(NULLIF(u.requested_model,''),u.model)=$4
+			 AND u.group_id IS NOT DISTINCT FROM $5::bigint
+			 AND COALESCE(u.reasoning_effort,'')=$6`, 1)
+		// Retain complete multi-model round validation before selecting the
+		// requested quality model's verdicts from that completed round.
+		qualityFilter := " FILTER (WHERE COALESCE(NULLIF(r.pelican_config->>'model_id',''),p.model_id)=$7)"
+		querySQL = strings.Replace(querySQL, " AS failed,", qualityFilter+" AS failed,", 1)
+		querySQL = strings.Replace(querySQL, " AS passed\n FROM scheduled_test_plans", qualityFilter+" AS passed\n FROM scheduled_test_plans", 1)
+		querySQL = strings.Replace(querySQL, "AND r.created_at >= $2", "AND r.created_at >= $8", 1)
+		querySQL = strings.Replace(querySQL, "HAVING MIN(r.started_at)>=$2", "HAVING MIN(r.started_at)>=$8", 1)
+	}
+	rows, err := db.QueryContext(ctx, querySQL, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -148,12 +190,14 @@ func readAccountPerformance(ctx context.Context, db sqlExecutor, ids []int64, no
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// Read and the transactional evaluator share the exact process-local
-	// response store and configured window, including incomplete windows.
-	evidence := upstreamstats.Default.Snapshot(ids, since, now)
-	for id, m := range out {
-		m.UpstreamError = evidence[id]
-		out[id] = m
+	if scope == nil {
+		// Account-wide monitoring keeps its shared response evidence. Request
+		// scheduling uses its separate model/group/effort attempt store.
+		evidence := upstreamstats.Default.Snapshot(ids, since, now)
+		for id, m := range out {
+			m.UpstreamError = evidence[id]
+			out[id] = m
+		}
 	}
 	return out, nil
 }

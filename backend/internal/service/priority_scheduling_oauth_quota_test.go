@@ -108,9 +108,9 @@ func TestPriorityOAuthQuotaEvidenceAndCapacity(t *testing.T) {
 			a.loadKnown = false
 		}, 0},
 		{"errors", func(c *PrioritySchedulingConfig, a *openAIAccountCandidateScore, _ *PrioritySchedulingSignal) {
-			c.ErrorRateWeight = 0 // Existing account EWMA contract.
+			c.ErrorRateWeight = 0 // Scoped evidence controls quota preference.
 			a.errorRate = .5
-		}, 0},
+		}, 8},
 		{"scoped_errors", func(_ *PrioritySchedulingConfig, a *openAIAccountCandidateScore, _ *PrioritySchedulingSignal) {
 			a.priorityErrors.SmoothedRate = .5
 		}, 0},

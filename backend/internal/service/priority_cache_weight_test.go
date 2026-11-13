@@ -25,8 +25,10 @@ func TestPriorityCacheWeightScoresAndSelection(t *testing.T) {
 			cfg := priorityCacheConfig(t, mode, 100)
 			low, high := performanceFixture(30, 4000, 0), performanceFixture(30, 4000, 0)
 			lowPercent, highPercent := 10.0, 90.0
-			low.Performance.AvgCachePercent, low.Performance.CacheSamples = &lowPercent, 20
-			high.Performance.AvgCachePercent, high.Performance.CacheSamples = &highPercent, 20
+			low.Performance.AvgCachePercent = float64Ptr(50)
+			high.Performance.AvgCachePercent = float64Ptr(50)
+			low.ScopedPerformance.AvgCachePercent, low.ScopedPerformance.CacheSamples = &lowPercent, 20
+			high.ScopedPerformance.AvgCachePercent, high.ScopedPerformance.CacheSamples = &highPercent, 20
 			now := time.Now()
 			before := scorePriorityCandidate(cfg, priorityCandidate(1, .1, 0), low, now)
 			after := scorePriorityCandidate(cfg, priorityCandidate(2, .1, 0), high, now)
@@ -61,7 +63,7 @@ func TestPriorityCacheWeightDefaultAndMissingEvidence(t *testing.T) {
 			{nil, 0}, {float64Ptr(100), 0}, {float64Ptr(90), 4}, {float64Ptr(-1), 20}, {float64Ptr(101), 20},
 		} {
 			signal := performanceFixture(30, 4000, 0)
-			signal.Performance.AvgCachePercent, signal.Performance.CacheSamples = tc.value, tc.samples
+			signal.ScopedPerformance.AvgCachePercent, signal.ScopedPerformance.CacheSamples = tc.value, tc.samples
 			score := scorePriorityCandidate(cfg, item, signal, time.Now())
 			if weight == 0 {
 				require.Equal(t, unchanged.Score, score.Score)
@@ -78,7 +80,7 @@ func TestPriorityCacheWeightDefaultAndMissingEvidence(t *testing.T) {
 		cfg := priorityCacheConfig(t, "custom", 100)
 		cfg.QualityWeight, cfg.LatencyWeight, cfg.LoadWeight, cfg.CostWeight = 0, 0, 0, 0
 		require.NoError(t, ValidatePrioritySchedulingConfig(cfg))
-		base.Performance.AvgCachePercent, base.Performance.CacheSamples = &value, cfg.MinSamples
+		base.ScopedPerformance.AvgCachePercent, base.ScopedPerformance.CacheSamples = &value, cfg.MinSamples
 		score := scorePriorityCandidate(cfg, item, base, time.Now())
 		require.Equal(t, value, score.BaseScore)
 		require.NotContains(t, score.Reasons, "cache_insufficient")

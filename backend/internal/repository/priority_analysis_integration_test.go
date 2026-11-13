@@ -78,22 +78,33 @@ func TestPriorityAnalysisPostgresScopeWindowAndCompletePool(t *testing.T) {
 		return service.PrioritySchedulingScore{}
 	}
 	require.Equal(t, 1, find(got).ProfitSamples)
-	require.Equal(t, 4, find(got).Samples, "account performance includes all models and groups in its global window")
+	require.Equal(t, 1, find(got).Samples)
+	require.Equal(t, 4, find(got).Performance.TTFTSamples, "the account display keeps its global window")
 	require.NotNil(t, find(got).SelectedTTFTMs)
-	require.InDelta(t, 5274.5, *find(got).SelectedTTFTMs, .01)
+	require.InDelta(t, 100, *find(got).SelectedTTFTMs, .01)
 	q.Minutes = 60
 	wide, err := service.ReadPriorityAnalysis(ctx, accounts, usage, cfg, q)
 	require.NoError(t, err)
 	require.Equal(t, 2, find(wide).ProfitSamples)
-	require.Equal(t, find(got).Samples, find(wide).Samples)
-	require.Equal(t, find(got).SelectedTTFTMs, find(wide).SelectedTTFTMs)
+	require.Equal(t, 2, find(wide).Samples)
+	require.InDelta(t, 550, *find(wide).SelectedTTFTMs, .01)
+	displayMetrics := func(metrics *service.AccountPerformance) service.AccountPerformance {
+		require.NotNil(t, metrics)
+		value := *metrics
+		require.Equal(t, time.Hour, value.WindowEnd.Sub(value.WindowStart))
+		value.WindowStart, value.WindowEnd = time.Time{}, time.Time{}
+		return value
+	}
+	require.Equal(t, displayMetrics(find(got).Performance), displayMetrics(find(wide).Performance))
 	require.Equal(t, got.Snapshot.ConfigRevision, wide.Snapshot.ConfigRevision, "display window is not a saved configuration mutation")
 	q.Model = "no-samples"
 	empty, err := service.ReadPriorityAnalysis(ctx, accounts, usage, cfg, q)
 	require.NoError(t, err)
 	require.Equal(t, "ready", empty.Snapshot.HistoryStatus)
 	require.Zero(t, find(empty).ProfitSamples)
-	require.Equal(t, find(got).Samples, find(empty).Samples, "changing the financial model must not erase shared account evidence")
+	require.Zero(t, find(empty).Samples)
+	require.Nil(t, find(empty).SelectedTTFTMs)
+	require.Equal(t, displayMetrics(find(got).Performance), displayMetrics(find(empty).Performance), "the account display keeps its global evidence")
 	// Enforce a true read-only PostgreSQL session after fixture setup. No data
 	// mutator can hide behind a successful GET implementation in this assertion.
 	_, err = tx.ExecContext(ctx, `SET LOCAL transaction_read_only = on`)

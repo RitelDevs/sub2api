@@ -7,14 +7,12 @@ func (s *defaultOpenAIAccountScheduler) shouldEscapeStickyForRequest(req OpenAIA
 			if !cfg.enabled || priorityLatencyOwnershipBound(req) || req.DisableStickyEscape || req.EncryptedReasoning {
 				return "", 0, 0, false
 			}
-			history := s.service.priorityHistory(req, priority, []openAIAccountCandidateScore{{account: &Account{ID: id}}})
-			if metrics := history.signals[id].Performance; metrics != nil && priority.ErrorRateWeight > 0 {
-				if rate := performanceUpstreamErrorRate(metrics.UpstreamError); rate != nil && *rate > cfg.errorRate {
-					return "error_rate", *rate, 0, true
-				}
+			evidence := s.priorityErrorEvidence(req, priority, id, s.stats.currentTime())
+			if priority.ErrorRateWeight > 0 && evidence.ErrorRate != nil && evidence.SmoothedRate > cfg.errorRate {
+				return "error_rate", evidence.SmoothedRate, 0, true
 			}
-			// Average TTFT admission/escape is already handled by the shared
-			// priority path; never substitute independent attempt/EWMA evidence.
+			// TTFT admission/escape uses the same request-scoped history as
+			// priority scoring; account-wide response totals cannot replace it.
 			return "", 0, 0, false
 		}
 	}

@@ -223,6 +223,7 @@ func (s *OpenAIGatewayService) prioritySchedulingRuntimeConfig() PrioritySchedul
 }
 
 type PrioritySchedulingSignal struct {
+	ScopedPerformance      *AccountPerformance `json:"-"`
 	Performance            *AccountPerformance `json:"performance,omitempty"`
 	SelectedTTFTMs         *float64            `json:"selected_ttft_ms"`
 	LatestBadLatencyAt     *time.Time          `json:"latest_bad_latency_at,omitempty"`
@@ -322,13 +323,14 @@ type PrioritySchedulingSnapshot struct {
 }
 
 func scorePriorityCandidate(c PrioritySchedulingConfig, item openAIAccountCandidateScore, signal PrioritySchedulingSignal, now time.Time) PrioritySchedulingScore {
-	// The aliases remain in snapshots for older clients. Scoring uses the
-	// account-performance metrics, never a separate model/quantile population.
-	metrics := cloneAccountPerformance(signal.Performance)
-	signal.Performance = metrics
+	// Preserve account-wide metrics for display, but never use them as a
+	// fallback when this request's model/group/effort evidence is missing.
+	metrics := cloneAccountPerformance(signal.ScopedPerformance)
+	signal.ScopedPerformance = metrics
+	signal.Performance = cloneAccountPerformance(signal.Performance)
 	signal.Samples, signal.QualitySamples, signal.QualityPassed = 0, 0, 0
 	signal.SelectedTTFTMs = nil
-	signal.LatencyPercentile, signal.LatencyMeasurement = 0, "account_performance"
+	signal.LatencyPercentile, signal.LatencyMeasurement = 0, "scoped_account_performance"
 	if metrics != nil {
 		signal.Samples, signal.SelectedTTFTMs = metrics.TTFTSamples, metrics.AvgTTFTMs
 		signal.QualitySamples = metrics.QualitySamples
@@ -457,7 +459,7 @@ func scorePriorityCandidate(c PrioritySchedulingConfig, item openAIAccountCandid
 			out.Reasons = append(out.Reasons, "cache_insufficient")
 		}
 	}
-	if c.ErrorRateWeight == 0 && item.errorRate > .2 {
+	if c.ErrorRateWeight > 0 && item.priorityErrors.SmoothedRate > .2 {
 		degraded = true
 		out.Reasons = append(out.Reasons, "recent_errors")
 	}
@@ -472,23 +474,9 @@ func scorePriorityCandidate(c PrioritySchedulingConfig, item openAIAccountCandid
 	}
 	out.BaseScore = 100 * (w[0]*quality + w[1]*latency + w[2]*throughput + w[3]*cost + c.CacheWeight*cache) / sum
 	out.PriorityErrorEvidence = item.priorityErrors
-	out.ErrorPenalty = 1 - clamp01(item.errorRate)
+	out.ErrorPenalty = 1
 	if c.ErrorRateWeight > 0 {
 		out.ErrorPenalty = priorityErrorPenalty(c, item.priorityErrors)
-	}
-	if metrics != nil {
-		if rate := performanceUpstreamErrorRate(metrics.UpstreamError); rate != nil {
-			penalty := math.Max(.1, 1-c.ErrorRateWeight/100**rate)
-			if penalty <= out.ErrorPenalty {
-				out.PriorityErrorEvidence = PriorityErrorEvidence{ErrorRate: rate, SmoothedRate: *rate, Failures: metrics.UpstreamError.Failures, Successes: metrics.UpstreamError.Total - metrics.UpstreamError.Failures, ObservedAt: metrics.WindowEnd, WindowMinutes: int(metrics.WindowEnd.Sub(metrics.WindowStart) / time.Minute)}
-				out.ErrorSamples = int(metrics.UpstreamError.Failures)
-			}
-			out.ErrorPenalty = math.Min(out.ErrorPenalty, penalty)
-			if c.ErrorRateWeight > 0 && *rate > .2 && !slices.Contains(out.Reasons, "recent_errors") {
-				degraded = true
-				out.Reasons = append(out.Reasons, "recent_errors")
-			}
-		}
 	}
 	out.Score = out.BaseScore * out.ErrorPenalty
 	if degraded {
@@ -600,14 +588,14 @@ func applyPriorityCandidate(c PrioritySchedulingConfig, item *openAIAccountCandi
 	if item.account.IsOpenAIApiKey() {
 		explorationMissing = qualityReady && (score.ProfitSamples < c.MinSamples || score.Samples < c.MinSamples)
 	}
-	// Missing/new model-scoped evidence must not promote an account whose
-	// existing runtime health already shows an unsafe failure rate.
-	item.priorityExploration = item.errorRate <= .2 &&
+	// Missing scoped evidence must not bypass a known failure rate for the
+	// same request population. Other-model runtime averages are display only.
+	item.priorityExploration =
 		(!score.LatencyRecovery || c.RecoveryExplorationPercent > 0) &&
-		score.Tier == "insufficient" && (c.ErrorRateWeight == 0 || item.priorityErrors.SmoothedRate <= .2) &&
-		(!score.LatencyRecovery || (qualityReady && score.LatestQualityPassed != nil && *score.LatestQualityPassed)) &&
-		(explorationMissing || score.LatencyRecovery) &&
-		item.loadKnown && score.LoadPercent != nil && *score.LoadPercent < c.MaxLoadPercent
+			score.Tier == "insufficient" && (c.ErrorRateWeight == 0 || item.priorityErrors.SmoothedRate <= .2) &&
+			(!score.LatencyRecovery || (qualityReady && score.LatestQualityPassed != nil && *score.LatestQualityPassed)) &&
+			(explorationMissing || score.LatencyRecovery) &&
+			item.loadKnown && score.LoadPercent != nil && *score.LoadPercent < c.MaxLoadPercent
 	item.priorityOAuthSpare = priorityOAuthQuotaSpare(c, *item, score, now)
 	item.priorityAPIStandby = false
 	return score

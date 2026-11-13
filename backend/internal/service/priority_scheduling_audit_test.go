@@ -66,12 +66,17 @@ func TestPrioritySnapshotUsesSharedPerformanceWithoutMovingSelectionTime(t *test
 	req := OpenAIAccountScheduleRequest{Platform: PlatformOpenAI, RequestedModel: "test", UseUpstreamTokenCost: true}
 	plan := openAIAccountLoadPlan{candidates: []openAIAccountCandidateScore{priorityCandidate(1, .1, 0)}, topK: 1}
 	require.Eventually(t, func() bool { return g.priorityHistory(req, c, plan.candidates).ready() }, time.Second, time.Millisecond)
+	scheduler.stats = newOpenAIAccountRuntimeStats()
+	g.openaiAccountStats = scheduler.stats
+	for i := 0; i < 4; i++ {
+		scheduler.stats.attempts.report(priorityRequestAttemptKey(req, 1), i < 3, time.Now())
+	}
 	scheduler.applyPriorityScheduling(req, &plan)
 	first := g.PrioritySchedulingSnapshot()
 	require.NotNil(t, first)
 	require.Equal(t, int64(3), first.Candidates[0].Successes)
 	require.Equal(t, int64(1), first.Candidates[0].Failures)
-	require.Equal(t, 60, first.Candidates[0].WindowMinutes)
+	require.Equal(t, c.ErrorRateWindowMinutes, first.Candidates[0].WindowMinutes)
 	last := g.PrioritySchedulingSnapshot()
 	require.Equal(t, first.At, last.At)
 	require.Equal(t, first.Candidates[0].Performance, last.Candidates[0].Performance)

@@ -23,5 +23,6 @@ func withAccountPerformanceFixture(signal PrioritySchedulingSignal) PrioritySche
 		metrics.DegradationPercent = &degradation
 	}
 	signal.Performance = metrics
+	signal.ScopedPerformance = cloneAccountPerformance(metrics)
 	return signal
 }

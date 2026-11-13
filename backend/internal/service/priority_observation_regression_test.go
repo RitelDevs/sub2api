@@ -210,9 +210,9 @@ func TestPriorityObservationStickyPenaltyAndExpiry(t *testing.T) {
 	// escaped session back to its former owner.
 	svc.priorityScheduling.mu.Lock()
 	signal = entry.signals[1]
-	signal.Performance = cloneAccountPerformance(signal.Performance)
+	signal.ScopedPerformance = cloneAccountPerformance(signal.ScopedPerformance)
 	recoveredTTFT := 500.0
-	signal.Performance.AvgTTFTMs = &recoveredTTFT
+	signal.ScopedPerformance.AvgTTFTMs = &recoveredTTFT
 	entry.signals[1] = signal
 	svc.priorityScheduling.mu.Unlock()
 	selected, _ = selectTurn("penalty-recovered", "", map[int64]struct{}{2: {}})

@@ -1233,6 +1233,9 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 	filtered []*Account,
 	loadMap map[int64]*AccountLoadInfo,
 ) openAIAccountLoadPlan {
+	scopedFeedback := req.ObservationEffortScoped ||
+		(req.Platform == PlatformOpenAI && req.UseUpstreamTokenCost && req.RequiredImageCapability == "" &&
+			priorityApplies(s.service.prioritySchedulingRuntimeConfig(), req))
 	allCandidates := make([]openAIAccountCandidateScore, 0, len(filtered))
 	for _, account := range filtered {
 		loadInfo, loadKnown := loadMap[account.ID]
@@ -1243,7 +1246,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 		errorRate, ttft, hasTTFT := 0.0, 0.0, false
 		if s.stats != nil {
 			errorRate, ttft, hasTTFT = s.stats.snapshot(account.ID)
-			if req.ObservationEffortScoped {
+			if scopedFeedback {
 				e := s.stats.attempts.snapshot(priorityRequestAttemptKey(req, account.ID), s.stats.currentTime(), 10, 5)
 				errorRate, ttft, hasTTFT = 0, 0, false
 				if e.Successes+e.Failures >= 5 {

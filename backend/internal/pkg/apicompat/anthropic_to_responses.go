@@ -23,7 +23,8 @@ func AnthropicToResponsesWithMinOutputTokens(req *AnthropicRequest, minOutputTok
 }
 
 type AnthropicToResponsesOptions struct {
-	MinOutputTokens int
+	MinOutputTokens                int
+	DeferReasoningEffortValidation bool
 	// OpenAIEncryptedReasoning accepts the OpenAI ciphertext format instead of
 	// the legacy compatible-provider format. Set only for a known OpenAI target;
 	// a model name or signature prefix does not authenticate the issuing account.
@@ -34,12 +35,12 @@ type AnthropicToResponsesOptions struct {
 // upstream, rather than guessing it from a client-controlled model alias.
 func AnthropicToResponsesWithOptions(req *AnthropicRequest, opts AnthropicToResponsesOptions) (*ResponsesRequest, error) {
 	requestedEffort := anthropicReasoningEffort(req)
-	effort := openai.NormalizeGPT61SolReasoningEffort(req.Model, requestedEffort)
-	if err := openai.ValidateGPT61SolReasoningEffort(req.Model, effort); err != nil {
-		return nil, err
-	}
-	if err := openai.ValidateGPT61TerraReasoningEffort(req.Model, effort); err != nil {
-		return nil, err
+	effort := requestedEffort
+	if !opts.DeferReasoningEffortValidation {
+		effort = openai.NormalizeGPT61SolReasoningEffort(req.Model, effort)
+		if err := openai.ValidateGPT61ReasoningEffort(req.Model, effort); err != nil {
+			return nil, err
+		}
 	}
 	input, err := convertAnthropicToResponsesInput(req.System, req.Messages, opts.OpenAIEncryptedReasoning)
 	if err != nil {
@@ -332,7 +333,7 @@ func anthropicAssistantToResponses(raw json.RawMessage, openAIReasoning bool) ([
 			// native Anthropic signatures or another provider's opaque payload.
 			// The upstream still validates the ciphertext and its account scope.
 			classifiedSignature := strings.TrimSpace(sig)
-			if classifiedSignature == "" || strings.HasPrefix(classifiedSignature, "gAAAA") != openAIReasoning {
+			if classifiedSignature == "" || strings.HasPrefix(classifiedSignature, "ccswitch-openai-reasoning-v1:") || strings.HasPrefix(classifiedSignature, "gAAAA") != openAIReasoning {
 				continue
 			}
 			if err := flushText(); err != nil {

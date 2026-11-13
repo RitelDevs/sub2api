@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/upstreamstats"
+
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
 )
@@ -53,12 +55,20 @@ WITH source AS (
  AVG(output_tokens*1000.0/NULLIF(duration_ms,0)) FILTER(WHERE output_tokens>=2 AND duration_ms>0) AS tps,
  COUNT(*) FILTER(WHERE output_tokens>=2 AND duration_ms>0) AS tps_n,
  AVG(first_token_ms) FILTER(WHERE stream AND first_token_ms>=0 AND first_token_ms<=duration_ms AND output_tokens>=2) AS ttft,
- COUNT(*) FILTER(WHERE stream AND first_token_ms>=0 AND first_token_ms<=duration_ms AND output_tokens>=2) AS ttft_n
+ COUNT(*) FILTER(WHERE stream AND first_token_ms>=0 AND first_token_ms<=duration_ms AND output_tokens>=2) AS ttft_n,
+ AVG(100.0*cache_read_tokens/NULLIF(input_tokens::numeric+cache_read_tokens+cache_creation_tokens,0))
+  FILTER(WHERE input_tokens>=0 AND cache_read_tokens>=0 AND cache_creation_tokens>=0) AS cache_percent,
+ COUNT(*) FILTER(WHERE input_tokens>=0 AND cache_read_tokens>=0 AND cache_creation_tokens>=0
+  AND input_tokens::numeric+cache_read_tokens+cache_creation_tokens>0) AS cache_n
  FROM successful GROUP BY account_id
 ), rounds AS (
  SELECT p.account_id,p.id,r.quality_round_id,
- bool_or(r.quality_judgment->>'verdict'='incorrect' AND r.status='failed' AND r.error_message IN ('answer_mismatch','state_degraded')) AS failed,
- bool_and(COALESCE(r.quality_judgment->>'verdict'='correct' AND r.status='success',false)) AS passed
+ bool_or(r.quality_judgment->>'verdict'='incorrect' AND r.status='failed' AND r.error_message IN ('answer_mismatch','state_degraded')
+    AND (COALESCE(r.pelican_config->>'question_kind','')<>'random_reasoning'
+      OR r.pelican_config->'quality_batch'->>'decision'='peer_passed')) AS failed,
+ bool_and(COALESCE(r.quality_judgment->>'verdict'='correct' AND r.status='success'
+    AND (COALESCE(r.pelican_config->>'question_kind','')<>'random_reasoning'
+      OR r.pelican_config->'quality_batch'->>'decision'='passed'),false)) AS passed
  FROM scheduled_test_plans p JOIN scheduled_test_results r ON r.plan_id=p.id
  WHERE p.account_id=ANY($1) AND p.enabled AND jsonb_typeof(p.pelican_config->'quality')='object'
  -- Probe records are created after execution. The indexed completion-time
@@ -68,7 +78,7 @@ WITH source AS (
  GROUP BY p.account_id,p.id,r.quality_round_id
  HAVING MIN(r.started_at)>=$2 AND MAX(r.finished_at)<=$3 AND MIN(r.started_at)>=MAX(p.updated_at)
  AND bool_and(r.finished_at IS NOT NULL AND r.finished_at>=r.started_at)
- AND bool_and(r.quality_action<>'' AND r.quality_action<>'stale_run')
+ AND bool_and(r.quality_action NOT IN ('','stale_run','comparison_pending'))
  AND bool_and(COALESCE(r.pelican_config->>'parallel_count','1') ~ '^[1-8]$')
  AND bool_and(r.pelican_config->'model_ids' IS NULL OR
   (jsonb_typeof(r.pelican_config->'model_ids')='array'
@@ -81,7 +91,7 @@ WITH source AS (
  COUNT(*) FILTER(WHERE passed OR failed) AS quality_n FROM rounds GROUP BY account_id
 )
 SELECT ids.id,u.tps,COALESCE(u.tps_n,0),u.ttft,COALESCE(u.ttft_n,0),q.degraded,COALESCE(q.quality_n,0),
- COALESCE(m.config,'{}'),COALESCE(m.revision,0),COALESCE(m.paused,false),COALESCE(m.pause_generation,0),m.paused_at,COALESCE(m.reason,'')
+ COALESCE(m.config,'{}'),COALESCE(m.revision,0),COALESCE(m.paused,false),COALESCE(m.pause_generation,0),m.paused_at,COALESCE(m.reason,''),u.cache_percent,COALESCE(u.cache_n,0)
 FROM unnest($1::bigint[]) ids(id)
 JOIN accounts a ON a.id=ids.id AND a.deleted_at IS NULL
 LEFT JOIN usage u ON u.account_id=ids.id LEFT JOIN quality q ON q.account_id=ids.id
@@ -126,7 +136,7 @@ func readAccountPerformance(ctx context.Context, db sqlExecutor, ids []int64, no
 	for rows.Next() {
 		var m service.AccountPerformance
 		var config []byte
-		if err := rows.Scan(&m.AccountID, &m.AvgTPS, &m.TPSSamples, &m.AvgTTFTMs, &m.TTFTSamples, &m.DegradationPercent, &m.QualitySamples, &config, &m.Revision, &m.Paused, &m.PauseGeneration, &m.PausedAt, &m.Reason); err != nil {
+		if err := rows.Scan(&m.AccountID, &m.AvgTPS, &m.TPSSamples, &m.AvgTTFTMs, &m.TTFTSamples, &m.DegradationPercent, &m.QualitySamples, &config, &m.Revision, &m.Paused, &m.PauseGeneration, &m.PausedAt, &m.Reason, &m.AvgCachePercent, &m.CacheSamples); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(config, &m.Config); err != nil {
@@ -135,7 +145,17 @@ func readAccountPerformance(ctx context.Context, db sqlExecutor, ids []int64, no
 		m.WindowStart, m.WindowEnd = since, now
 		out[m.AccountID] = m
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Read and the transactional evaluator share the exact process-local
+	// response store and configured window, including incomplete windows.
+	evidence := upstreamstats.Default.Snapshot(ids, since, now)
+	for id, m := range out {
+		m.UpstreamError = evidence[id]
+		out[id] = m
+	}
+	return out, nil
 }
 func (r *accountPerformanceRepository) Read(ctx context.Context, ids []int64, now time.Time) (map[int64]service.AccountPerformance, error) {
 	return readAccountPerformance(ctx, r.db, ids, now)
@@ -163,7 +183,8 @@ func performancePaused(ctx context.Context, db sqlExecutor, ids []int64) (map[in
 	if len(ids) == 0 {
 		return out, nil
 	}
-	rows, err := db.QueryContext(ctx, `SELECT account_id FROM account_performance_monitors WHERE paused AND account_id=ANY($1)`, pq.Array(ids))
+	rows, err := db.QueryContext(ctx, `SELECT account_id FROM account_performance_monitors WHERE paused AND account_id=ANY($1)
+UNION SELECT account_id FROM ai_ops_controls WHERE ai_paused AND account_id=ANY($1)`, pq.Array(ids))
 	if err != nil {
 		return nil, err
 	}

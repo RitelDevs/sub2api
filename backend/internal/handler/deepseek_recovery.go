@@ -232,7 +232,7 @@ func (h *OpenAIGatewayHandler) runDeepSeekRecovery(c *gin.Context, in deepSeekRe
 	if finalContext != nil && lastResult != nil && (sink.ToolExposed() || sink.ClientGone()) {
 		h.submitDeepSeekRecoveryUsage(c, finalContext, in, lastAccount, lastResult, log)
 	}
-	log.Warn("deepseek.recovery_exhausted", zap.Int("attempts", attempts), zap.Bool("tool_exposed", sink.ToolExposed()))
+	log.Warn("deepseek.recovery_exhausted", zap.Int("attempts", attempts), zap.Bool("tool_exposed", sink.ToolExposed()), zap.Error(lastErr))
 }
 
 func startDeepSeekRecoveryHeartbeat(ctx context.Context, sink *deepSeekRecoveryStream, cancel context.CancelFunc) func() {

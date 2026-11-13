@@ -25,6 +25,11 @@ func TestSubscriptionOverflowOutboxIsAtomicWithSuccessfulBilling(t *testing.T) {
 			require.NoError(t, err)
 			defer db.Close()
 			expectDeletedKeySettlementPrefix(mock)
+			mock.ExpectQuery("SELECT balance::text,status FROM users").WithArgs(int64(42)).
+				WillReturnRows(sqlmock.NewRows([]string{"balance", "status"}).AddRow("98.75000000", "active"))
+			mock.ExpectQuery("UPDATE auto_credit_config SET debit_epoch").
+				WithArgs(int64(42), "usage:7:overflow-request").
+				WillReturnRows(sqlmock.NewRows([]string{"debit_epoch"}))
 			expect := mock.ExpectExec("INSERT INTO subscription_overflow_email_outbox.*ON CONFLICT.*DO NOTHING")
 			failure := errors.New("outbox unavailable")
 			if fail {

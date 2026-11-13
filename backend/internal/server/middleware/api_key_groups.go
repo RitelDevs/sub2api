@@ -18,6 +18,28 @@ func isMultiGroupBillingInfoRequest(c *gin.Context, key *service.APIKey) bool {
 	return c.Request.URL.Path == "/v1/sub2api/billing" && len(key.ConfiguredGroupIDs()) > 1
 }
 
+const modelListingRefreshKey = "api_key.model_listing_refresh"
+const modelListingClientPolicyKey = "api_key.model_listing_client_policy"
+
+type modelListingRefresh func(context.Context) ([]*service.APIKey, error)
+
+func GetModelListingGroups(c *gin.Context) ([]*service.APIKey, bool) {
+	return GetAPIKeyModelDiscoveryGroups(c)
+}
+
+// RefreshModelListingGroups runs synchronously after a queued directory request
+// acquires its key slot. Queue revalidation pins one billing group; discovery
+// must also recheck every other bound group's current permissions.
+func RefreshModelListingGroups(c *gin.Context) ([]*service.APIKey, error) {
+	value, _ := c.Get(modelListingRefreshKey)
+	refresh, ok := value.(modelListingRefresh)
+	if !ok {
+		groups, _ := GetAPIKeyModelDiscoveryGroups(c)
+		return groups, nil
+	}
+	return refresh(c.Request.Context())
+}
+
 func selectAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subscriptions *service.SubscriptionService, cfg *config.Config, key *service.APIKey, google bool) (*service.APIKey, error) {
 	var err error
 	key, err = applySecurityPenalty(c, keys, key)
@@ -56,6 +78,9 @@ func selectAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subsc
 	if len(models) == 0 && c.Query("model") != "" {
 		models = []string{c.Query("model")}
 	}
+	if service.IsAPIKeyModelPolicyPath(c.Request.URL.Path) {
+		models = service.APIKeyModelCandidates(key, models)
+	}
 	kind := "token"
 	path := c.Request.URL.Path
 	if strings.Contains(path, "/images/") {
@@ -69,6 +94,13 @@ func selectAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subsc
 	if penaltyErr != nil {
 		return nil, infraerrors.ServiceUnavailable("security_penalty_unavailable", "请求权限检查暂时不可用")
 	}
+	canRecoverBalance := false
+	if checkBilling && key.User != nil && groupBalanceNeedsRecovery(key.User.Balance, cfg) {
+		canRecoverBalance, err = keys.CanRecoverAutoCreditAdmission(c.Request.Context(), key)
+		if err != nil {
+			return nil, infraerrors.ServiceUnavailable("AUTO_CREDIT_UNAVAILABLE", "Credit authorization unavailable")
+		}
+	}
 	accepts := func(candidate *service.APIKey) bool {
 		group := candidate.Group
 		if (path == "/v1/tools/search" || path == "/v1/tools/fetch") && group.Platform != service.PlatformDeepseek {
@@ -80,10 +112,10 @@ func selectAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subsc
 		if penaltyConfig.Applies(key.UserID) && !penaltyConfig.ObserveOnly && penaltyConfig.Policy == "session_route_then_block" && penaltyConfig.TargetGroupID != nil && group.ID == *penaltyConfig.TargetGroupID {
 			return false
 		}
-		if checkBilling && !group.IsSubscriptionType() && apiKeyBalanceBelowAuthThreshold(candidate.User.Balance, cfg) {
+		if checkBilling && !group.IsSubscriptionType() && groupBalanceNeedsRecovery(candidate.User.Balance, cfg) && !canRecoverBalance {
 			return false
 		}
-		if google && group.Platform != service.PlatformGemini && group.Platform != service.PlatformAntigravity && group.Platform != service.PlatformComposite {
+		if google && !groupAllowsGooglePlatform(path, group) {
 			return false
 		}
 		if strings.HasPrefix(path, "/antigravity/") && group.Platform != service.PlatformAntigravity {
@@ -103,12 +135,19 @@ func selectAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subsc
 		if !isAPIKeyModelDiscoveryRequest(c) && group.BlockSubagents && service.IsCodexSubagentRequest(c, body) {
 			return false
 		}
-		if group.CodexCLIOnly && !isAPIKeyModelDiscoveryRequest(c) {
+		if group.CodexCLIOnly {
 			policy := service.CodexRestrictionPolicy{EngineFingerprintSignals: openai.DefaultEngineFingerprintSignals}
+			checkClient := !isAPIKeyModelDiscoveryRequest(c)
+			if value, exists := c.Get(modelListingClientPolicyKey); exists {
+				if loadPolicy, ok := value.(func() service.CodexRestrictionPolicy); ok {
+					policy = loadPolicy()
+					checkClient = true
+				}
+			}
 			if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead {
 				policy.EngineFingerprintSignals = nil
 			}
-			if !service.DetectCodexGroupClient(c, group, policy, body).Matched {
+			if checkClient && !service.DetectCodexGroupClient(c, group, policy, body).Matched {
 				return false
 			}
 		}
@@ -124,6 +163,20 @@ func selectAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subsc
 				err = infraerrors.Forbidden("NO_ELIGIBLE_API_KEY_GROUP", "No selected group permits model discovery")
 			} else {
 				SetAPIKeyModelDiscoveryGroups(c, groups)
+				if key.ConcurrencyLimit > 0 {
+					c.Set(modelListingRefreshKey, modelListingRefresh(func(ctx context.Context) ([]*service.APIKey, error) {
+						latest, err := keys.GetByKeyUncached(ctx, key.Key)
+						if err != nil {
+							return nil, err
+						}
+						if latest == nil || latest.ID != key.ID || latest.UserID != key.UserID || latest.User == nil ||
+							!latest.User.IsActive() || !latest.IsActive() || latest.IsExpired() || latest.IsQuotaExhausted() {
+							return nil, infraerrors.Forbidden("MODEL_LISTING_UNAVAILABLE", "Model listing authorization changed")
+						}
+						return keys.ModelDiscoveryGroups(ctx, latest, accepts)
+					}))
+				}
+
 				selected = groups[0]
 			}
 		}
@@ -145,4 +198,30 @@ func selectAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subsc
 	}
 	SetOpsFallbackAPIKey(c, selected)
 	return selected, nil
+}
+
+// Multi-group choice must use the same spendable floor as billing preflight;
+// authentication's <=0 threshold remains unchanged for ordinary single groups.
+func groupBalanceNeedsRecovery(balance float64, cfg *config.Config) bool {
+	return balance <= 0 || cfg != nil && cfg.Billing.MinimumBalanceReserve > 0 && balance < cfg.Billing.MinimumBalanceReserve
+}
+
+// groupAllowsGooglePlatform 决定 Google 入站（/v1beta）能否使用这个分组。
+// Gemini、Antigravity、Composite 维持原语义。其他分组只在 /v1beta/models 上放行，
+// 后续把请求转成该分组上游实际支持的协议，而不是一律打上游 /v1beta/models。
+func groupAllowsGooglePlatform(path string, group *service.Group) bool {
+	if group == nil {
+		return false
+	}
+	switch group.Platform {
+	case service.PlatformGemini, service.PlatformAntigravity, service.PlatformComposite:
+		return true
+	}
+	if strings.HasPrefix(path, "/antigravity/") {
+		return false
+	}
+	if path != "/v1beta/models" && !strings.HasPrefix(path, "/v1beta/models/") {
+		return false
+	}
+	return service.PlatformAcceptsGeminiInboundBridge(group.Platform)
 }

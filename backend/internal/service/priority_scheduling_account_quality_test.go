@@ -18,7 +18,7 @@ func TestPriorityOAuthLatestAccountConfirmationControlsSolAndAstra(t *testing.T)
 	// Historical independent Sol and old aggregate failures cannot veto the
 	// account's newest completed Astra confirmation (three correct of four).
 	bad := false
-	signal := PrioritySchedulingSignal{Samples: 20, P90TTFTMs: 500, QualityPassed: 1, QualitySamples: 20, LatestQualityPassed: &bad, ProfitSamples: 20, Revenue: 0, BaseCost: 10000}
+	signal := withAccountPerformanceFixture(PrioritySchedulingSignal{Samples: 20, P90TTFTMs: 500, QualityPassed: 1, QualitySamples: 20, LatestQualityPassed: &bad, ProfitSamples: 20, Revenue: 0, BaseCost: 10000})
 	svc := priorityGateway(cfg, &priorityReaderStub{signal: map[int64]PrioritySchedulingSignal{a.ID: signal}})
 	for _, model := range []string{"gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol"} {
 		candidate := openAIAccountCandidateScore{account: a, loadKnown: true, loadInfo: &AccountLoadInfo{AccountID: a.ID}}
@@ -49,7 +49,7 @@ func TestPriorityOAuthIncompleteNewClassificationCannotUseLegacyPass(t *testing.
 		candidate.account = a
 		a.Concurrency = 10
 		passed := true
-		score := scorePriorityCandidate(DefaultPrioritySchedulingConfig(), candidate, PrioritySchedulingSignal{Samples: 20, P90TTFTMs: 500, QualityPassed: 20, QualitySamples: 20, LatestQualityPassed: &passed}, now)
+		score := scorePriorityCandidate(DefaultPrioritySchedulingConfig(), candidate, withAccountPerformanceFixture(PrioritySchedulingSignal{Samples: 20, P90TTFTMs: 500, QualityPassed: 20, QualitySamples: 20, LatestQualityPassed: &passed}), now)
 		require.Equal(t, "insufficient", score.Tier)
 		require.Nil(t, score.LatestQualityPassed)
 		require.Contains(t, score.Reasons, "quality_unknown")
@@ -65,7 +65,7 @@ func TestPriorityRequiredBorrowUsesVerifiedRouteAndRejectsMissingRoute(t *testin
 	// The raw native record belongs to another identity and fails helper
 	// validation: only the revision-bound route proof can qualify this account.
 	item := openAIAccountCandidateScore{account: a, loadKnown: true, loadInfo: &AccountLoadInfo{AccountID: a.ID}}
-	signal := PrioritySchedulingSignal{Samples: 20, P90TTFTMs: 500, QualityPassed: 0, QualitySamples: 20}
+	signal := withAccountPerformanceFixture(PrioritySchedulingSignal{Samples: 20, P90TTFTMs: 500, QualityPassed: 0, QualitySamples: 20})
 	cfg := DefaultPrioritySchedulingConfig()
 	for _, model := range []string{"gpt-6-astra", "gpt-6.1-sol"} {
 		expires := now.Add(time.Minute)
@@ -104,9 +104,9 @@ func TestPriorityOAuthSnapshotRetainsSanitizedQualityDecision(t *testing.T) {
 	require.True(t, *projection.priorityQualityPassed)
 	*item.priorityQualityPassed = false
 	require.True(t, *projection.priorityQualityPassed, "snapshot owns its decision")
-	score := scorePriorityCandidate(cfg, projection, PrioritySchedulingSignal{Samples: 20, P90TTFTMs: 500}, now)
+	score := scorePriorityCandidate(cfg, projection, withAccountPerformanceFixture(PrioritySchedulingSignal{Samples: 20, P90TTFTMs: 500}), now)
 	require.Equal(t, "eligible", score.Tier)
-	score = scorePriorityCandidate(cfg, projection, PrioritySchedulingSignal{Samples: 20, P90TTFTMs: 500}, projection.priorityQualityExpires)
+	score = scorePriorityCandidate(cfg, projection, withAccountPerformanceFixture(PrioritySchedulingSignal{Samples: 20, P90TTFTMs: 500}), projection.priorityQualityExpires)
 	require.Nil(t, score.LatestQualityPassed, "dashboard cannot keep expired proof alive")
 }
 
@@ -150,7 +150,7 @@ func TestPriorityEightyPercentIsBusyClassificationNotHardLimit(t *testing.T) {
 	healthy := true
 	item.account.Type, item.account.Status, item.account.Schedulable = AccountTypeOAuth, StatusActive, true
 	cfg := DefaultPrioritySchedulingConfig()
-	score := applyPriorityCandidate(cfg, &item, PrioritySchedulingSignal{Samples: 20, P90TTFTMs: 500, LatestQualityPassed: &healthy}, time.Now())
+	score := applyPriorityCandidate(cfg, &item, withAccountPerformanceFixture(PrioritySchedulingSignal{Samples: 20, P90TTFTMs: 500, LatestQualityPassed: &healthy}), time.Now())
 	require.Contains(t, score.Reasons, "busy")
 	require.False(t, item.priorityUnhealthy)
 	order := buildPrioritySelectionOrder([]openAIAccountCandidateScore{item}, OpenAIAccountScheduleRequest{})
@@ -180,7 +180,7 @@ func TestPriorityAccountQualityScopeMapsOnceAndDoesNotInventLunaEvidence(t *test
 		item := openAIAccountCandidateScore{account: a, loadKnown: true, loadInfo: &AccountLoadInfo{}}
 		svc.capturePriorityOAuthQuality(OpenAIAccountScheduleRequest{RequestedModel: tc.model}, &item, now, 24*time.Hour)
 		passed := true
-		score := scorePriorityCandidate(cfg, item, PrioritySchedulingSignal{Samples: 20, P90TTFTMs: 500, LatestQualityPassed: &passed}, now)
+		score := scorePriorityCandidate(cfg, item, withAccountPerformanceFixture(PrioritySchedulingSignal{Samples: 20, P90TTFTMs: 500, LatestQualityPassed: &passed}), now)
 		require.Equal(t, tc.known, score.LatestQualityPassed != nil, tc.model)
 		fallback := newPrioritySnapshotInput(OpenAIAccountScheduleRequest{RequestedModel: tc.model}, cfg, []openAIAccountCandidateScore{{account: a, loadKnown: true, loadInfo: &AccountLoadInfo{}}}, now)
 		require.Equal(t, tc.known, fallback.candidates[0].priorityQualityPassed != nil, tc.model)
@@ -197,7 +197,7 @@ func TestPriorityOAuthExplorationIgnoresProfitSamples(t *testing.T) {
 		for _, passed := range []*bool{nil, boolPtr(true), boolPtr(false)} {
 			candidate := priorityCandidate(1, .1, 0)
 			candidate.account.Type = AccountTypeOAuth
-			signal := PrioritySchedulingSignal{Samples: samples, P90TTFTMs: 100, LatestQualityPassed: passed}
+			signal := withAccountPerformanceFixture(PrioritySchedulingSignal{Samples: samples, P90TTFTMs: 100, LatestQualityPassed: passed})
 			applyPriorityCandidate(cfg, &candidate, signal, now)
 			expected := candidate.priorityExploration
 			for _, profitSamples := range []int{0, cfg.MinSamples, cfg.MinSamples * 10} {

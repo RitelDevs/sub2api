@@ -61,7 +61,7 @@
           <button type="button" class="btn btn-secondary" @click="refreshData">{{ t('common.refresh') }}</button>
         </div>
         <p v-if="endpointStatsLoading" role="status" class="text-sm text-gray-500">{{ pageCopy.loading }}</p>
-        <UsageStatsCards v-else-if="usageStats" :stats="usageStats" />
+        <UsageStatsCards show-rate :rate-window="usageStatsWindow" :notice-user-id="props.observerMode ? undefined : authStore.user?.id" v-else-if="usageStats" :stats="usageStats" />
       </template>
       <div v-if="usagePage === 'analysis' && activeTab === 'analysis'" class="space-y-4">
         <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -115,6 +115,7 @@
           <UsageTable
             enable-timing-details
             :toolbar-target="activeTab === 'usage' ? tableToolbarTarget : null"
+            :notice-user-id="props.observerMode ? undefined : authStore.user?.id"
             flat
             :data="usageLogs"
             :loading="loading"
@@ -213,6 +214,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, watch, provide } from 
 import { observerUsageAPI } from '@/api/observerUsage'
 import { observerUsageContext } from '@/components/admin/usage/observerUsageContext'
 import { useI18n } from 'vue-i18n'
+import { useAuthStore } from '@/stores/auth'
 import { saveAs } from 'file-saver'
 import { useRoute, useRouter } from 'vue-router'
 import { parseAdminUsageLocation, adminUsageLocationQuery, type UsagePage, type UsageDetailTab } from './adminUsageLocation'
@@ -224,6 +226,7 @@ import ColumnSettings from '@/components/common/ColumnSettings.vue'
 import { formatReasoningEffort } from '@/utils/format'
 import { formatUsageCacheRate, showUsageCacheRate } from '@/utils/usageCacheRate'
 import { resolveUsageRequestType, requestTypeToLegacyStream } from '@/utils/usageRequestType'
+import { resolveUsageStatsWindow, type UsageRateWindow } from '@/utils/usageRate'
 import AppLayout from '@/components/layout/AppLayout.vue'; import InfiniteListSentinel from '@/components/common/InfiniteListSentinel.vue'; import { useInfiniteList } from '@/composables/useInfiniteList'; import Select from '@/components/common/Select.vue'; import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import UsageStatsCards from '@/components/admin/usage/UsageStatsCards.vue'; import UsageFilters from '@/components/admin/usage/UsageFilters.vue'
 import UsageTable from '@/components/admin/usage/UsageTable.vue'; import UsageExportProgress from '@/components/admin/usage/UsageExportProgress.vue'
@@ -246,6 +249,7 @@ const props = withDefaults(defineProps<{ observerMode?: boolean }>(), { observer
 provide(observerUsageContext, props.observerMode)
 const { t, locale } = useI18n()
 const appStore = useAppStore()
+const authStore = useAuthStore()
 type DistributionMetric = 'tokens' | 'actual_cost'
 type EndpointSource = 'inbound' | 'upstream' | 'path'
 type ModelDistributionSource = 'requested' | 'upstream' | 'mapping'
@@ -255,6 +259,7 @@ const usagePage = ref<UsagePage>('records')
 const pageCopy = computed(() => consoleUiMessages(locale?.value ?? 'en').adminUsage)
 const tableToolbarTarget = ref<HTMLElement | null>(null)
 const usageStats = ref<AdminUsageStatsResponse | null>(null); const exporting = ref(false)
+const usageStatsWindow = ref<UsageRateWindow | null>(null)
 const trendData = ref<TrendDataPoint[]>([]); const requestedModelStats = ref<ModelStat[]>([]); const upstreamModelStats = ref<ModelStat[]>([]); const mappingModelStats = ref<ModelStat[]>([]); const groupStats = ref<GroupStat[]>([]); const chartsLoading = ref(false); const modelStatsLoading = ref(false); const granularity = ref<'day' | 'hour'>('hour')
 const modelDistributionMetric = ref<DistributionMetric>('tokens')
 const modelDistributionSource = ref<ModelDistributionSource>('requested')
@@ -446,17 +451,25 @@ const loadStats = async (force = false) => {
   const seq = ++statsReqSeq
   statsReadError.value = false
   usageStats.value = null
+  // Pin endpoint-specific defaults so the request and RPM/TPM share one range.
+  const rateWindow = resolveUsageStatsWindow(
+    { start: filters.value.start_date, end: filters.value.end_date, now: Date.now() },
+    props.observerMode ? 'observer' : 'admin'
+  )
   endpointStatsLoading.value = true
   try {
     const requestType = filters.value.request_type
     const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filters.value.stream
     const s = await (props.observerMode ? observerUsageAPI.getStats : adminAPI.usage.getStats)({
       ...filters.value,
+      start_date: rateWindow.start,
+      end_date: rateWindow.end,
       stream: legacyStream === null ? undefined : legacyStream,
       ...(force ? { nocache: 1 } : {}),
     })
     if (seq !== statsReqSeq) return
     usageStats.value = s
+    usageStatsWindow.value = rateWindow
     inboundEndpointStats.value = s.endpoints || []
     upstreamEndpointStats.value = s.upstream_endpoints || []
     endpointPathStats.value = s.endpoint_paths || []

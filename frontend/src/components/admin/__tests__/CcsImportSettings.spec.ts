@@ -213,9 +213,9 @@ describe('CcsImportSettings', () => {
     expect(wrapper.vm.validate()).toBeNull()
   })
 
-  it('loads default profiles with Astra and preserves an explicitly empty config', () => {
+  it('loads the configured Sol default and preserves an explicitly empty config', () => {
     const defaults = createDefaultCcSwitchImportConfig()
-    expect(defaults.profiles.find(profile => profile.platform === 'openai')?.parameters.model).toBe('gpt-6-astra')
+    expect(defaults.profiles.find(profile => profile.platform === 'openai')?.parameters.model).toBe('gpt-6.1-sol')
     const { wrapper, value } = mountEditor({ profiles: [] })
     expect(value.value.profiles).toEqual([])
     expect(wrapper.find('[data-testid="ccs-param-model"]').exists()).toBe(false)

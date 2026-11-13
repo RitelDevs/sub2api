@@ -105,17 +105,18 @@ func (r *poolHealthAccountRepo) snapshot() ([]OAuthRefreshPageOptions, []int64, 
 }
 
 type poolHealthRefresher struct {
-	err            error
-	delay          time.Duration
-	startDelays    []time.Duration
-	ignoreContext  bool
-	cancel         context.CancelFunc
-	newCredentials map[string]any
-	calls          atomic.Int64
-	active         atomic.Int64
-	maxActive      atomic.Int64
-	startMu        sync.Mutex
-	startTimes     []time.Time
+	err                error
+	delay              time.Duration
+	startDelays        []time.Duration
+	ignoreContext      bool
+	waitForContextDone bool
+	cancel             context.CancelFunc
+	newCredentials     map[string]any
+	calls              atomic.Int64
+	active             atomic.Int64
+	maxActive          atomic.Int64
+	startMu            sync.Mutex
+	startTimes         []time.Time
 }
 
 type countingRefreshAttemptGate struct {
@@ -305,6 +306,9 @@ func (r *poolHealthRefresher) Refresh(ctx context.Context, _ *Account) (map[stri
 	}
 	if r.cancel != nil {
 		r.cancel()
+	}
+	if r.waitForContextDone {
+		<-ctx.Done()
 	}
 	if delay > 0 {
 		if r.ignoreContext {
@@ -936,8 +940,7 @@ func TestTokenRefreshService_ParentCancellationStopsRetryWithoutAccountMutation(
 func TestTokenRefreshService_LateSuccessPastAttemptDeadlineIsRejected(t *testing.T) {
 	repo := &poolHealthAccountRepo{}
 	refresher := &poolHealthRefresher{
-		delay:         30 * time.Millisecond,
-		ignoreContext: true,
+		waitForContextDone: true,
 	}
 	svc := newPoolHealthService(repo, refresher, config.TokenRefreshConfig{MaxRetries: 1})
 	svc.attemptTimeoutOverride = 10 * time.Millisecond
@@ -982,12 +985,12 @@ func (c overdueRefreshContext) Deadline() (time.Time, bool) { return c.deadline,
 func TestOAuthRefreshContextError_DeadlineDoesNotDependOnTimerCallback(t *testing.T) {
 	ctx := overdueRefreshContext{Context: context.Background(), deadline: time.Now().Add(-time.Second)}
 	require.NoError(t, ctx.Err())
-	require.ErrorIs(t, oauthRefreshContextError(ctx), context.DeadlineExceeded)
+	require.ErrorIs(t, refreshContextErr(ctx), context.DeadlineExceeded)
 	ctx.deadline = time.Now().Add(time.Hour)
-	require.NoError(t, oauthRefreshContextError(ctx))
+	require.NoError(t, refreshContextErr(ctx))
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	require.ErrorIs(t, oauthRefreshContextError(canceled), context.Canceled)
+	require.ErrorIs(t, refreshContextErr(canceled), context.Canceled)
 }
 
 func TestRateLimitedRefreshExecutor_DeadlineCrossedAtAdmissionDoesNotCallProvider(t *testing.T) {

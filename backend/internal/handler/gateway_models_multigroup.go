@@ -29,6 +29,11 @@ func (h *GatewayHandler) multiGroupModels(c *gin.Context, groups []*service.APIK
 			return
 		}
 		defer release()
+		groups, err = middleware.RefreshModelListingGroups(c)
+		if err != nil {
+			writeOpenAIModelsError(c, http.StatusServiceUnavailable, "api_error", "Model listing authorization changed; please retry")
+			return
+		}
 	}
 	field, idField := "data", "id"
 	if codex {
@@ -134,13 +139,15 @@ func (h *GatewayHandler) discoveryGroupCatalogue(ctx context.Context, key *servi
 	}
 	var ids []string
 	var err error
-	if platform == service.PlatformComposite {
+	if !codex {
+		ids, err = h.gatewayService.GetGroupModelCatalog(ctx, group.ID, platform)
+	} else if platform == service.PlatformComposite {
 		endpoint := ""
 		if codex {
 			endpoint = service.CompositeRouteEndpointResponses
 		}
 		ids, err = h.compositeAvailableModelsForDiscovery(ctx, &group.ID, endpoint, true)
-		if len(ids) == 0 {
+		if ids == nil {
 			ids = service.DefaultModelIDsForPlatform(platform)
 		}
 	} else {
@@ -150,7 +157,7 @@ func (h *GatewayHandler) discoveryGroupCatalogue(ctx context.Context, key *servi
 		return nil, err
 	}
 	if codex {
-		if len(ids) == 0 {
+		if ids == nil {
 			ids = defaultCodexModelIDsForPlatform(platform)
 		}
 		if group.ModelAllowlistEnabled() {
@@ -162,6 +169,8 @@ func (h *GatewayHandler) discoveryGroupCatalogue(ctx context.Context, key *servi
 	}
 	var entries any
 	switch {
+	case ids != nil && len(ids) == 0:
+		entries = []any{}
 	case platform == service.PlatformDeepseek && group.Platform == service.PlatformDeepseek:
 		entries = h.deepSeekModelEntries(ctx, group, ids)
 	case group.ModelAllowlistEnabled():

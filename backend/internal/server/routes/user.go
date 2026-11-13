@@ -52,6 +52,10 @@ func RegisterUserRoutes(
 			user.POST("/qq/confirm", h.User.QQConfirm)
 			user.DELETE("/qq", h.User.QQUnbind)
 			user.PUT("/qq/preferences", h.User.QQPreferences)
+			if h.Admin != nil && h.Admin.Setting != nil {
+				user.GET("/key-risks", h.Admin.Setting.GetMyKeyRisks)
+				user.POST("/key-risks/:id/acknowledge", h.Admin.Setting.AcknowledgeMyKeyRisk)
+			}
 			if h.Admin != nil && h.Admin.PromptAudit != nil {
 				user.GET("/security/summary", h.Admin.PromptAudit.MyPenaltySummary)
 				user.GET("/security/events", h.Admin.PromptAudit.MyPenaltyEvents)

@@ -53,7 +53,7 @@ func TestPriorityOAuthCostChangesLeaveRoutingAndBillingSeparate(t *testing.T) {
 	item.account.Credentials = map[string]any{"plan_type": "self_serve_business_prolite"}
 	item.account.Extra = map[string]any{"priority_teams_first_used_at": time.Now().Format(time.RFC3339)}
 	healthy := true
-	signal := PrioritySchedulingSignal{Samples: 93, P90TTFTMs: 1000, QualityPassed: 10, QualitySamples: 10, LatestQualityPassed: &healthy, ProfitSamples: 93, Revenue: 2.8177, BaseCost: 10.8098}
+	signal := withAccountPerformanceFixture(PrioritySchedulingSignal{Samples: 93, P90TTFTMs: 1000, QualityPassed: 10, QualitySamples: 10, LatestQualityPassed: &healthy, ProfitSamples: 93, Revenue: 2.8177, BaseCost: 10.8098})
 	score := scorePriorityCandidate(c, item, signal, time.Now())
 	require.Nil(t, score.Rate)
 	require.Nil(t, score.Profit)
@@ -81,7 +81,7 @@ func TestPriorityConfigIgnoresRetiredPurchaseWindow(t *testing.T) {
 	item.account.Type = AccountTypeOAuth
 	item.account.Credentials = map[string]any{"plan_type": "team"}
 	item.account.Extra = nil
-	score := scorePriorityCandidate(c, item, PrioritySchedulingSignal{ProfitSamples: 5, Revenue: 10, BaseCost: 20}, time.Now())
+	score := scorePriorityCandidate(c, item, withAccountPerformanceFixture(PrioritySchedulingSignal{ProfitSamples: 5, Revenue: 10, BaseCost: 20}), time.Now())
 	require.Equal(t, "not_applicable", score.EconomicsSource)
 	require.Nil(t, score.Profit)
 	require.NotContains(t, score.Reasons, "teams_window_unavailable")
@@ -125,7 +125,7 @@ func TestUpstreamProbeCostMultiplierToSync(t *testing.T) {
 	// Profit reads only the saved cost; expiry must not restore the old default.
 	item := priorityCandidate(1, 7, 20)
 	item.account.Extra = map[string]any{AccountCostMultiplierExtraKey: value, UpstreamBillingProbeExtraKey: snapshot}
-	score := scorePriorityCandidate(DefaultPrioritySchedulingConfig(), item, PrioritySchedulingSignal{ProfitSamples: 20, Revenue: 50, BaseCost: 100}, now.Add(24*time.Hour))
+	score := scorePriorityCandidate(DefaultPrioritySchedulingConfig(), item, withAccountPerformanceFixture(PrioritySchedulingSignal{ProfitSamples: 20, Revenue: 50, BaseCost: 100}), now.Add(24*time.Hour))
 	require.InDelta(t, 28, score.TheoreticalCost, 1e-9)
 	require.Equal(t, 7.0, item.account.BillingRateMultiplier())
 }

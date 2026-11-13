@@ -21,7 +21,9 @@ func TestGatewayErrorPrivacyPreservesInternalErrorCapture(t *testing.T) {
 			"message":    "Context window is full. (request id: private-upstream-id)",
 			"request_id": "private-upstream-id",
 		}})
-		captured = append([]byte(nil), c.Writer.(*opsCaptureWriter).capturedBytes()...)
+		captureWriter, ok := c.Writer.(*opsCaptureWriter)
+		require.True(t, ok)
+		captured = append([]byte(nil), captureWriter.capturedBytes()...)
 	})
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/responses", nil))

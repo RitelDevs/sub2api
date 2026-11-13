@@ -24,7 +24,7 @@ func TestOpsErrorLogClientStatusIsDistinctFromEffectiveUpstreamStatus(t *testing
 		t.Run(fmt.Sprint(client), func(t *testing.T) {
 			db, m, err := sqlmock.New()
 			require.NoError(t, err)
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 			repo := NewOpsRepository(db)
 			now := time.Now()
 			list := []driver.Value{int64(1), now, "upstream", "upstream_error", "provider", "upstream_http", "error", int64(402), client, "anthropic", "test-model", false, nil, nil, "", "client-rid", "rid", "safe-message", nil, "", nil, int64(194), "account", int64(18), "group", nil, "/v1/messages", false, "", "", "test-model", "test-model", "", nil, "", nil}
@@ -37,7 +37,9 @@ func TestOpsErrorLogClientStatusIsDistinctFromEffectiveUpstreamStatus(t *testing
 			if client == nil {
 				require.Nil(t, got.Errors[0].ClientStatusCode)
 			} else {
-				require.Equal(t, int(client.(int64)), *got.Errors[0].ClientStatusCode)
+				status, ok := client.(int64)
+				require.True(t, ok)
+				require.Equal(t, int(status), *got.Errors[0].ClientStatusCode)
 			}
 			detail := []driver.Value{int64(1), now, "upstream", "upstream_error", "provider", "upstream_http", "error", int64(402), client, "anthropic", "test-model", false, nil, nil, "client-rid", "rid", "safe-message", "", int64(402), "safe-upstream", "", "", false, nil, "", nil, int64(194), "account", int64(18), "group", nil, "/v1/messages", false, "", "", "test-model", "test-model", nil, "", nil, nil, nil, nil, nil, "", "", nil}
 			m.ExpectQuery("(?s)SELECT.*e.status_code,.*FROM ops_error_logs").WithArgs(int64(1)).WillReturnRows(clientStatusRows(detail))

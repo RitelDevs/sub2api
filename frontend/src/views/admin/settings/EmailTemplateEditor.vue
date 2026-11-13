@@ -55,6 +55,7 @@
           <div>
             <label class="input-label" for="email-template-event">
               {{ t("admin.settings.emailTemplates.event") }}
+              <NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.vipAutoCreditEmail" :user-id="auth.user?.id" />
             </label>
             <select
               id="email-template-event"
@@ -238,6 +239,9 @@ import { useConfirmation } from '@/composables/useConfirmation'
 
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import NewFeatureBadge from "@/components/common/NewFeatureBadge.vue";
+import { NEW_FEATURE_NOTICES } from "@/constants/newFeatureNotices";
+import { useAuthStore } from "@/stores/auth";
 import { adminAPI } from "@/api";
 import type {
   EmailTemplateEventOption,
@@ -264,6 +268,8 @@ const fallbackPlaceholders = [
   "{{threshold}}",
   "{{recharge_url}}",
   "{{recharge_amount}}",
+  "{{credit_amount}}",
+  "{{ledger_id}}",
   "{{order_id}}",
   "{{unsubscribe_url}}",
   "{{account_id}}",
@@ -342,8 +348,10 @@ interface EventDisplayMeta {
 }
 
 
+const auth = useAuthStore();
 
 const eventDisplayKeys: Record<string, Record<keyof EventDisplayMeta, string>> = {
+  "balance.auto_credit_success": { label: "autoCredit.title", timing: "autoCredit.notifyEmailHelp", categoryLabel: "consoleInline.billing_81f94d" },
   "auth.verify_code": {
     "label": "consoleInline.emailVerificationCode_29c6c7",
     "timing": "consoleInline.sentForRegistrationEmailBindingOAuthPending_70888f",
@@ -369,6 +377,7 @@ const eventDisplayKeys: Record<string, Record<keyof EventDisplayMeta, string>> =
     "timing": "consoleInline.sentByTheBackgroundJobWhenAn_c2d1cd",
     "categoryLabel": "consoleInline.subscription_38237b"
   },
+  "balance.forecast": { label: "admin.settings.balanceForecast.title", timing: "admin.settings.balanceForecast.description", categoryLabel: "consoleInline.billing_81f94d" },
   "balance.low": {
     "label": "consoleInline.lowBalanceAlert_f322aa",
     "timing": "consoleInline.sentWhenAUserSBalanceDrops_e62b2c",

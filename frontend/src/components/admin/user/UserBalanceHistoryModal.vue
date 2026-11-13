@@ -94,7 +94,7 @@
       </div>
 
       <!-- History list -->
-      <DocumentRows v-else :items="history" item-key="id" :estimate-height="104" class="divide-y divide-gray-200 dark:divide-dark-600">
+      <DocumentRows v-else :items="history" :item-key="item => `${item.type}:${item.id}`" :estimate-height="104" class="divide-y divide-gray-200 dark:divide-dark-600">
         <template #default="{ item }"><div
           class="py-4"
         >
@@ -113,6 +113,14 @@
                 <p class="text-sm font-medium text-gray-900 dark:text-white">
                   {{ getItemTitle(item) }}
                 </p>
+                <template v-if="item.auto_credit">
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-dark-400">
+                    {{ t('autoCredit.beforeAfter', { before: Number(item.auto_credit.balance_before).toFixed(2), after: Number(item.auto_credit.balance_after).toFixed(2) }) }}
+                  </p>
+                  <p v-if="item.auto_credit.settled_at" class="mt-0.5 text-xs text-gray-500 dark:text-dark-400">
+                    {{ t('autoCredit.collectedBy', { id: item.auto_credit.settled_by }) }} · {{ formatDateTime(item.auto_credit.settled_at) }}
+                  </p>
+                </template>
                 <!-- Notes (admin adjustment reason) -->
                 <p
                   v-if="item.notes"
@@ -132,7 +140,13 @@
                 {{ formatValue(item) }}
               </p>
               <p
-                v-if="isAdminType(item.type)"
+                v-if="item.auto_credit"
+                class="text-xs text-gray-500 dark:text-dark-400"
+              >
+                #{{ item.auto_credit.ledger_id }} · {{ t(`autoCredit.${item.auto_credit.status}`) }}
+              </p>
+              <p
+                v-else-if="isAdminType(item.type)"
                 class="text-xs text-gray-400 dark:text-dark-500"
               >
                 {{ t('redeem.adminAdjustment') }}
@@ -182,7 +196,7 @@ const totalRecharged = ref(0)
 const typeFilter = ref('')
 const historyList = useInfiniteList<BalanceHistoryItem>({
   pageSize: 15,
-  keyOf: item => item.id,
+  keyOf: item => `${item.type}:${item.id}`,
   fetchPage: async (page, signal) => {
     const user = props.user
     if (!props.show || !user) return { items: [], total: 0 }
@@ -206,6 +220,7 @@ const typeOptions = computed(() => [
   { value: 'affiliate_signup_bonus', label: t('admin.users.typeAffiliateSignupBonus') },
   { value: 'affiliate_first_recharge_bonus', label: t('admin.users.typeAffiliateFirstRechargeBonus') },
   { value: 'admin_balance', label: t('admin.users.typeAdminBalance') },
+  { value: 'auto_credit', label: t('autoCredit.title') },
   { value: 'concurrency', label: t('admin.users.typeConcurrency') },
   { value: 'admin_concurrency', label: t('admin.users.typeAdminConcurrency') },
   { value: 'subscription', label: t('admin.users.typeSubscription') }
@@ -226,7 +241,7 @@ async function loadHistory() {
 const isAdminType = (type: string) => type === 'admin_balance' || type === 'admin_concurrency'
 
 // Helper: check if balance type (includes admin_balance)
-const isBalanceType = (type: string) => type === 'balance' || type === 'admin_balance' || type === 'affiliate_balance' || type === 'affiliate_signup_bonus' || type === 'affiliate_first_recharge_bonus'
+const isBalanceType = (type: string) => type === 'balance' || type === 'admin_balance' || type === 'affiliate_balance' || type === 'affiliate_signup_bonus' || type === 'affiliate_first_recharge_bonus' || type === 'auto_credit'
 
 // Helper: check if subscription type
 const isSubscriptionType = (type: string) => type === 'subscription'
@@ -280,6 +295,8 @@ const getValueColor = (item: BalanceHistoryItem) => {
 // Item title
 const getItemTitle = (item: BalanceHistoryItem) => {
   switch (item.type) {
+    case 'auto_credit':
+      return t('autoCredit.title')
     case 'balance':
       return t('redeem.balanceAddedRedeem')
     case 'affiliate_balance':
@@ -303,6 +320,7 @@ const getItemTitle = (item: BalanceHistoryItem) => {
 
 // Format display value
 const formatValue = (item: BalanceHistoryItem) => {
+  if (item.auto_credit) return `+$${Number(item.auto_credit.amount).toFixed(2)}`
   if (isBalanceType(item.type)) {
     const sign = item.value >= 0 ? '+' : ''
     return `${sign}$${item.value.toFixed(2)}`

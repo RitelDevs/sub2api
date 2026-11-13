@@ -210,17 +210,17 @@ func sanitizeGatewaySSEFrame(frame []byte) []byte {
 	for _, raw := range lines {
 		if bytes.HasPrefix(raw, []byte("data:")) {
 			if !emitted {
-				out.WriteString("data: ")
-				out.Write(bytes.ReplaceAll(cleaned, []byte{'\n'}, []byte("\ndata: ")))
+				_, _ = out.WriteString("data: ")
+				_, _ = out.Write(bytes.ReplaceAll(cleaned, []byte{'\n'}, []byte("\ndata: ")))
 				if bytes.HasSuffix(raw, []byte("\r\n")) {
-					out.WriteString("\r\n")
+					_, _ = out.WriteString("\r\n")
 				} else if bytes.HasSuffix(raw, []byte{'\n'}) {
-					out.WriteByte('\n')
+					_ = out.WriteByte('\n')
 				}
 				emitted = true
 			}
 		} else {
-			out.Write(raw)
+			_, _ = out.Write(raw)
 		}
 	}
 	return out.Bytes()

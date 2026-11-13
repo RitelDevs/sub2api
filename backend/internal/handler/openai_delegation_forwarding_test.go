@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -27,6 +28,8 @@ func TestOpenAIResponsesDelegationAfterWebSearchReachesUpstream(t *testing.T) {
 			upstream := &excelBPSFailoverUpstream{answer: func(int) *http.Response { return excelBPSCompleted() }}
 			h := newOpenAIResponsesFailoverTestHandler(t, upstream)
 			c, rec := newOpenAIResponsesFailoverTestContext(t, context.Background())
+			key, _ := middleware.GetAPIKeyFromContext(c)
+			key.AllowLongContext = true
 			request := map[string]any{
 				"model": "gpt-6-astra", "stream": false,
 				"input": []any{

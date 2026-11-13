@@ -51,7 +51,7 @@ func TestGatewayErrorPrivacyHTTPJSON(t *testing.T) {
 			defer server.Close()
 			resp, err := http.Get(server.URL + "/v1/responses")
 			require.NoError(t, err)
-			defer resp.Body.Close()
+			defer func() { require.NoError(t, resp.Body.Close()) }()
 			body, err := io.ReadAll(resp.Body)
 			require.NoError(t, err)
 			require.Equal(t, http.StatusBadRequest, resp.StatusCode)
@@ -122,7 +122,7 @@ func TestGatewayErrorPrivacyFragmentedSSE(t *testing.T) {
 	defer server.Close()
 	resp, err := http.Get(server.URL + "/v1/responses")
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { require.NoError(t, resp.Body.Close()) }()
 	reader := bufio.NewReader(resp.Body)
 	first := make([]byte, len(success))
 	_, err = io.ReadFull(reader, first)
@@ -174,11 +174,11 @@ type privacyCaptureWriter struct {
 }
 
 func (w *privacyCaptureWriter) Write(p []byte) (int, error) {
-	w.body.Write(p)
+	_, _ = w.body.Write(p)
 	return w.ResponseWriter.Write(p)
 }
 func (w *privacyCaptureWriter) WriteString(s string) (int, error) {
-	w.body.WriteString(s)
+	_, _ = w.body.WriteString(s)
 	return w.ResponseWriter.WriteString(s)
 }
 
@@ -205,11 +205,11 @@ func TestGatewayErrorPrivacyKeepsSuccessfulContentLength(t *testing.T) {
 	defer server.Close()
 	head, err := http.Head(server.URL + "/v1/videos/test/content")
 	require.NoError(t, err)
-	defer head.Body.Close()
+	defer func() { require.NoError(t, head.Body.Close()) }()
 	require.Equal(t, int64(1000), head.ContentLength)
 	partial, err := http.Get(server.URL + "/v1/videos/test/content")
 	require.NoError(t, err)
-	defer partial.Body.Close()
+	defer func() { require.NoError(t, partial.Body.Close()) }()
 	body, err := io.ReadAll(partial.Body)
 	require.NoError(t, err)
 	require.Equal(t, 206, partial.StatusCode)

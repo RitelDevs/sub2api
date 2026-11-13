@@ -149,7 +149,16 @@ func TestOpenAIWSSSEAccelerationRequestTimingLoopback(t *testing.T) {
 			require.Equal(t, tc.outcome, data.Outcome)
 			require.Contains(t, data.Events, openAIOAuthWSSSEAccelerationReason)
 			require.Equal(t, OpenAITTFTModeSemantic, data.TTFTMode)
-			require.Empty(t, data.Attempts, "do not fabricate HTTP transport attempts for WS")
+			require.Len(t, data.Attempts, 1)
+			attempt := data.Attempts[0]
+			require.Equal(t, "http", attempt.Route.Downstream)
+			require.Equal(t, "websocket", attempt.Route.Upstream)
+			require.Equal(t, "ctx_pool", attempt.Route.Mode)
+			require.Equal(t, openAIOAuthWSSSEAccelerationReason, attempt.Route.Reason)
+			require.Equal(t, "sse", attempt.Route.ResponseFormat)
+			require.Equal(t, tc.terminal, attempt.Terminal)
+			require.NotContains(t, attempt.Events, "response_headers")
+			require.NotContains(t, attempt.Events, "first_byte")
 			require.Contains(t, data.Events, "first_flush", "the metadata frame should actually flush")
 			_, visible := data.Events["first_visible"]
 			require.Equal(t, tc.visible, visible)
@@ -184,10 +193,18 @@ func TestOpenAIWSSSEAccelerationTimingDoesNotAffectNativeWS(t *testing.T) {
 	require.NotNil(t, result.FirstTokenMs)
 	require.Equal(t, "response.completed", result.UpstreamTerminalEvent)
 	require.NotContains(t, data.Events, openAIOAuthWSSSEAccelerationReason)
-	require.NotContains(t, data.Events, "first_visible")
+	require.Contains(t, data.Events, "first_visible")
 	require.NotContains(t, data.Events, "first_output_flush")
-	require.Empty(t, data.Terminal)
+	require.Equal(t, "completed", data.Terminal)
 	require.Empty(t, data.TTFTMode)
+	require.Len(t, data.Attempts, 1)
+	attempt := data.Attempts[0]
+	require.Equal(t, "websocket", attempt.Route.Upstream)
+	require.Equal(t, "ctx_pool", attempt.Route.Mode)
+	require.Equal(t, "ws_v2_enabled", attempt.Route.Reason)
+	require.Equal(t, "completed", attempt.Terminal)
+	require.NotContains(t, attempt.Events, "response_headers")
+	require.NotContains(t, attempt.Events, "first_byte")
 }
 
 func TestOpenAIWSSSEAccelerationTimingDoesNotClaimFailedFlush(t *testing.T) {

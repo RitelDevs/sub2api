@@ -95,7 +95,7 @@ func (r *accountTokenGuardV2Repository) ListAccounts(ctx context.Context) ([]ser
 	return result, rows.Err()
 }
 
-func (r *accountTokenGuardV2Repository) ClaimDue(ctx context.Context, owner string, leaseDuration time.Duration, limit int) ([]service.AccountTokenGuardV2Record, error) {
+func (r *accountTokenGuardV2Repository) ClaimDue(ctx context.Context, owner string, leaseDuration time.Duration, limit int, dueBefore time.Time) ([]service.AccountTokenGuardV2Record, error) {
 	if limit <= 0 {
 		limit = 10
 	}
@@ -105,17 +105,17 @@ func (r *accountTokenGuardV2Repository) ClaimDue(ctx context.Context, owner stri
 			FROM account_token_guard_v2_accounts AS monitored
 			JOIN accounts AS account ON account.id = monitored.account_id
 			WHERE monitored.enabled = TRUE AND account.deleted_at IS NULL
-				AND (monitored.next_probe_at <= NOW()
-					OR (monitored.auto_relogin_enabled AND NOT monitored.auto_relogin_exhausted
+				AND ((monitored.next_probe_at <= NOW() AND monitored.next_probe_at <= $4)
+					OR (monitored.updated_at <= $4 AND monitored.auto_relogin_enabled AND NOT monitored.auto_relogin_exhausted
 						AND monitored.probe_state IN ('ok', 'pending')
 						AND (monitored.cooldown_until IS NULL OR monitored.cooldown_until <= NOW())
 						AND account.platform = 'openai' AND account.type = 'oauth' AND account.status = 'error'
 						AND (account.error_message LIKE 'Token revoked (401):%'
 							OR account.error_message LIKE 'Unauthorized (401):%'))
-					OR EXISTS (SELECT 1 FROM openai_oauth_reauth_tasks AS task
+					OR (monitored.updated_at <= $4 AND EXISTS (SELECT 1 FROM openai_oauth_reauth_tasks AS task
 						WHERE task.account_id = monitored.account_id AND task.id > monitored.last_counted_task_id
 							AND task.oauth_profile = 'codex' AND task.status IN ('succeeded', 'failed')
-							AND NOT EXISTS (SELECT 1 FROM openai_totp_rotations AS rotation WHERE rotation.task_id = task.id)))
+							AND NOT EXISTS (SELECT 1 FROM openai_totp_rotations AS rotation WHERE rotation.task_id = task.id))))
 				AND (monitored.lease_until IS NULL OR monitored.lease_until < NOW())
 			ORDER BY monitored.next_probe_at ASC, monitored.account_id ASC
 			LIMIT $1
@@ -133,7 +133,7 @@ func (r *accountTokenGuardV2Repository) ClaimDue(ctx context.Context, owner stri
 			guard.cooldown_until, guard.blocked_reason,
 			COALESCE(guard.lease_owner, ''), guard.lease_until,
 			guard.created_at, guard.updated_at, guard.refresh_failure_code, guard.last_refresh_failure_at
-	`, limit, owner, int64(leaseDuration.Seconds()))
+	`, limit, owner, int64(leaseDuration.Seconds()), dueBefore)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +182,7 @@ func (r *accountTokenGuardV2Repository) CompleteProbe(ctx context.Context, accou
 			lease_owner = NULL,
 			lease_until = NULL,
 			updated_at = NOW()
-		WHERE account_id = $1 AND lease_owner = $2
+		WHERE account_id = $1 AND lease_owner = $2 AND lease_until > NOW()
 	`, accountID, owner, result.ProbeState, result.ProbeDetail, result.FailStreak,
 		result.LastProbeAt, result.LastReauthAt, result.NextProbeAt,
 		result.CooldownUntil, result.BlockedReason)
@@ -197,6 +197,16 @@ func (r *accountTokenGuardV2Repository) CompleteProbe(ctx context.Context, accou
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+// ReleaseProbe abandons a claim without advancing its schedule or inspection
+// history. Each claim has its own owner token, so a late release cannot clear a
+// replacement claim after this lease expires.
+func (r *accountTokenGuardV2Repository) ReleaseProbe(ctx context.Context, accountID int64, owner string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE account_token_guard_v2_accounts
+		SET lease_owner = NULL, lease_until = NULL, updated_at = NOW()
+		WHERE account_id = $1 AND lease_owner = $2`, accountID, owner)
+	return err
 }
 
 func (r *accountTokenGuardV2Repository) MarkReauthRequested(ctx context.Context, accountID int64, requestedAt, cooldownUntil time.Time) error {

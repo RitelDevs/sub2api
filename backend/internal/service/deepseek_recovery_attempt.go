@@ -306,7 +306,7 @@ func (s *OpenAIGatewayService) doDeepSeekRecoveryUpstream(req *http.Request, pro
 	raw := resp.Body
 	closeBody := sync.OnceFunc(func() { _ = raw.Close() })
 	stopBody := context.AfterFunc(ctx, func() {
-		a.fail(context.Cause(ctx))
+		_ = a.fail(context.Cause(ctx))
 		closeBody()
 	})
 	a.mu.Lock()
@@ -408,7 +408,7 @@ func (b *deepSeekValidatedBody) Close() error {
 	b.closeSource()
 	b.release()
 	if !b.attempt.Outcome().Terminal && b.attempt.Err() == nil {
-		b.attempt.fail(deepSeekRecoveryFailure("missing_terminal", 0))
+		_ = b.attempt.fail(deepSeekRecoveryFailure("missing_terminal", 0))
 	}
 	return nil
 }

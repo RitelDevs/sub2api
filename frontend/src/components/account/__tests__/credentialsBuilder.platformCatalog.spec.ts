@@ -18,6 +18,7 @@ import {
   providerAccountModes,
   providerHasModelCatalog,
   providerNativeProtocols,
+  providerModeLabel,
   providerRoutesByModel,
   resolveProviderAccountMode
 } from '../credentialsBuilder'
@@ -98,6 +99,22 @@ describe('credentialsBuilder built-in Cline provider', () => {
     const relay = { platform: 'cline', type: 'apikey', credentials: { base_url: 'https://relay.example.com/v1' } }
     expect(cnQuotaCellVisible(relay)).toBe(false)
     expect(cnBalanceCellVisible(relay)).toBe(false)
+  })
+
+  it('shows Mistral monthly budget window and remaining balance for official-host API keys only', () => {
+    expect(cnQuotaCellVisible({ platform: 'mistral', type: 'apikey', credentials: {} })).toBe(true)
+    expect(cnBalanceCellVisible({ platform: 'mistral', type: 'apikey', credentials: {} })).toBe(true)
+    expect(cnQuotaCellVisible({ platform: 'mistral', type: 'apikey', credentials: { base_url: 'https://api.mistral.ai/v1' } })).toBe(true)
+    const relay = { platform: 'mistral', type: 'apikey', credentials: { base_url: 'https://relay.example.com/v1' } }
+    expect(cnQuotaCellVisible(relay)).toBe(false)
+    expect(cnBalanceCellVisible(relay)).toBe(false)
+  })
+
+  it('labels provider modes', () => {
+    const t = (key: string) => key
+    expect(providerModeLabel('payg', t)).toBe('admin.accounts.cnProviders.accountMode.payg')
+    expect(providerModeLabel('go', t)).toBe('admin.accounts.opencodeGo.accountMode.go')
+    expect(providerModeLabel('standard', t)).toBe('standard')
   })
 })
 

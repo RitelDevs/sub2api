@@ -19,7 +19,12 @@ export type OrderStatus =
   | 'REFUNDED'
   | 'REFUND_FAILED'
 
-export type PaymentType = 'alipay' | 'wxpay' | 'alipay_direct' | 'wxpay_direct' | 'stripe' | 'easypay' | 'airwallex' | 'squarespace' | 'gelv' | 'gelv_alipay'
+export type BEpusdtPaymentType =
+  | `usdt.${'trc20' | 'erc20' | 'bep20' | 'polygon' | 'aptos' | 'solana' | 'xlayer' | 'arbitrum' | 'plasma' | 'ton'}`
+  | `usdc.${'trc20' | 'erc20' | 'bep20' | 'polygon' | 'aptos' | 'solana' | 'xlayer' | 'arbitrum' | 'base'}`
+  | 'tron.trx' | 'ethereum.eth' | 'bsc.bnb' | 'ton.gram'
+
+export type PaymentType = 'alipay' | 'wxpay' | 'alipay_direct' | 'wxpay_direct' | 'stripe' | 'easypay' | 'airwallex' | 'squarespace' | 'gelv' | 'gelv_alipay' | 'bepusdt' | BEpusdtPaymentType
 
 export type OrderType = 'balance' | 'subscription'
 export type SubscriptionRenewalMode = 'restart' | 'extend'
@@ -73,6 +78,12 @@ export interface PaymentConfig {
   stripe_publishable_key: string
 }
 
+export interface MethodFeeRates {
+  fee_rate: number
+  fee_rate_min?: number
+  fee_rate_max?: number
+}
+
 export interface TopupOption {
   cash_cny: number
   credits: number
@@ -80,7 +91,7 @@ export interface TopupOption {
   ios_credits?: number
 }
 
-export interface MethodLimit {
+export interface MethodLimit extends MethodFeeRates {
   /** Input amount contract; Alipay accepts CNY cash, not net site credits. */
   amount_currency?: string
   amount_step?: number
@@ -95,6 +106,7 @@ export interface MethodLimit {
   single_max: number
   fee_rate: number
   available: boolean
+  sub_methods?: Record<string, MethodFeeRates>
 }
 
 /** Response from /payment/limits API */
@@ -270,6 +282,10 @@ export interface ProviderInstance {
   payment_mode: string
   refund_enabled: boolean
   allow_user_refund: boolean
+  /** null / absent inherits the global fee; zero explicitly disables fees. */
+  fee_rate?: number | null
+  /** Keys omitted from this map inherit the instance default. */
+  method_fee_rates?: Record<string, number>
   limits: string
   sort_order: number
 }
@@ -279,6 +295,7 @@ export interface ProviderInstance {
 export interface CreateOrderRequest {
   amount: number
   payment_type: string
+  payment_subtype?: string
   order_type: string
   quote_token?: string
   plan_id?: number
@@ -314,6 +331,7 @@ export interface CreateOrderResult {
   status?: OrderStatus
   payment_claim_mode?: PaymentClaimMode
   order_id: number
+  payment_subtype?: string
   amount: number
   retail_quote?: RetailQuote
   pay_url?: string

@@ -1788,8 +1788,8 @@ func TestGPT61SolAcceptsLegacyDisabledReasoningForLowCompatibility(t *testing.T)
 		`{"model":"public","thinking":{"type":"disabled"}}`,
 		`{"model":"gpt-6.1-sol-minimal"}`,
 	} {
-		require.NoError(t, validateGPT61SolCompatRequest([]byte(body), "gpt-6.1-sol"))
-		require.NoError(t, validateGPT61SolCompatRequest([]byte(body), "gpt-6-sol"))
+		require.NoError(t, validateGPT61CompatRequest([]byte(body), "gpt-6.1-sol"))
+		require.NoError(t, validateGPT61CompatRequest([]byte(body), "gpt-6-sol"))
 	}
 	for _, effort := range []string{"none", "minimal"} {
 		out, changed, err := normalizeGPT6ResponsesSampling([]byte(`{"model":"gpt-6.1-sol","reasoning_effort":"`+effort+`"}`), "gpt-6.1-sol")

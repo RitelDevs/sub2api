@@ -132,53 +132,58 @@ const (
 // APIKeyMutation represents an operation that mutates the APIKey nodes in the graph.
 type APIKeyMutation struct {
 	config
-	op                   Op
-	typ                  string
-	id                   *int64
-	created_at           *time.Time
-	updated_at           *time.Time
-	deleted_at           *time.Time
-	concurrency_limit    *int
-	addconcurrency_limit *int
-	key                  *string
-	name                 *string
-	status               *string
-	last_used_at         *time.Time
-	ip_whitelist         *[]string
-	appendip_whitelist   []string
-	ip_blacklist         *[]string
-	appendip_blacklist   []string
-	quota                *float64
-	addquota             *float64
-	quota_used           *float64
-	addquota_used        *float64
-	expires_at           *time.Time
-	rate_limit_5h        *float64
-	addrate_limit_5h     *float64
-	rate_limit_1d        *float64
-	addrate_limit_1d     *float64
-	rate_limit_7d        *float64
-	addrate_limit_7d     *float64
-	usage_5h             *float64
-	addusage_5h          *float64
-	usage_1d             *float64
-	addusage_1d          *float64
-	usage_7d             *float64
-	addusage_7d          *float64
-	window_5h_start      *time.Time
-	window_1d_start      *time.Time
-	window_7d_start      *time.Time
-	clearedFields        map[string]struct{}
-	user                 *int64
-	cleareduser          bool
-	group                *int64
-	clearedgroup         bool
-	usage_logs           map[int64]struct{}
-	removedusage_logs    map[int64]struct{}
-	clearedusage_logs    bool
-	done                 bool
-	oldValue             func(context.Context) (*APIKey, error)
-	predicates           []predicate.APIKey
+	op                     Op
+	typ                    string
+	id                     *int64
+	created_at             *time.Time
+	updated_at             *time.Time
+	deleted_at             *time.Time
+	concurrency_limit      *int
+	addconcurrency_limit   *int
+	key                    *string
+	name                   *string
+	status                 *string
+	model_mapping          *map[string]string
+	reasoning_effort       *string
+	allow_long_context     *bool
+	context_token_limit    *int
+	addcontext_token_limit *int
+	last_used_at           *time.Time
+	ip_whitelist           *[]string
+	appendip_whitelist     []string
+	ip_blacklist           *[]string
+	appendip_blacklist     []string
+	quota                  *float64
+	addquota               *float64
+	quota_used             *float64
+	addquota_used          *float64
+	expires_at             *time.Time
+	rate_limit_5h          *float64
+	addrate_limit_5h       *float64
+	rate_limit_1d          *float64
+	addrate_limit_1d       *float64
+	rate_limit_7d          *float64
+	addrate_limit_7d       *float64
+	usage_5h               *float64
+	addusage_5h            *float64
+	usage_1d               *float64
+	addusage_1d            *float64
+	usage_7d               *float64
+	addusage_7d            *float64
+	window_5h_start        *time.Time
+	window_1d_start        *time.Time
+	window_7d_start        *time.Time
+	clearedFields          map[string]struct{}
+	user                   *int64
+	cleareduser            bool
+	group                  *int64
+	clearedgroup           bool
+	usage_logs             map[int64]struct{}
+	removedusage_logs      map[int64]struct{}
+	clearedusage_logs      bool
+	done                   bool
+	oldValue               func(context.Context) (*APIKey, error)
+	predicates             []predicate.APIKey
 }
 
 var _ ent.Mutation = (*APIKeyMutation)(nil)
@@ -647,6 +652,170 @@ func (m *APIKeyMutation) OldStatus(ctx context.Context) (v string, err error) {
 // ResetStatus resets all changes to the "status" field.
 func (m *APIKeyMutation) ResetStatus() {
 	m.status = nil
+}
+
+// SetModelMapping sets the "model_mapping" field.
+func (m *APIKeyMutation) SetModelMapping(value map[string]string) {
+	m.model_mapping = &value
+}
+
+// ModelMapping returns the value of the "model_mapping" field in the mutation.
+func (m *APIKeyMutation) ModelMapping() (r map[string]string, exists bool) {
+	v := m.model_mapping
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldModelMapping returns the old "model_mapping" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldModelMapping(ctx context.Context) (v map[string]string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldModelMapping is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldModelMapping requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldModelMapping: %w", err)
+	}
+	return oldValue.ModelMapping, nil
+}
+
+// ResetModelMapping resets all changes to the "model_mapping" field.
+func (m *APIKeyMutation) ResetModelMapping() {
+	m.model_mapping = nil
+}
+
+// SetReasoningEffort sets the "reasoning_effort" field.
+func (m *APIKeyMutation) SetReasoningEffort(s string) {
+	m.reasoning_effort = &s
+}
+
+// ReasoningEffort returns the value of the "reasoning_effort" field in the mutation.
+func (m *APIKeyMutation) ReasoningEffort() (r string, exists bool) {
+	v := m.reasoning_effort
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReasoningEffort returns the old "reasoning_effort" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldReasoningEffort(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReasoningEffort is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReasoningEffort requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReasoningEffort: %w", err)
+	}
+	return oldValue.ReasoningEffort, nil
+}
+
+// ResetReasoningEffort resets all changes to the "reasoning_effort" field.
+func (m *APIKeyMutation) ResetReasoningEffort() {
+	m.reasoning_effort = nil
+}
+
+// SetAllowLongContext sets the "allow_long_context" field.
+func (m *APIKeyMutation) SetAllowLongContext(b bool) {
+	m.allow_long_context = &b
+}
+
+// AllowLongContext returns the value of the "allow_long_context" field in the mutation.
+func (m *APIKeyMutation) AllowLongContext() (r bool, exists bool) {
+	v := m.allow_long_context
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAllowLongContext returns the old "allow_long_context" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldAllowLongContext(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAllowLongContext is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAllowLongContext requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAllowLongContext: %w", err)
+	}
+	return oldValue.AllowLongContext, nil
+}
+
+// ResetAllowLongContext resets all changes to the "allow_long_context" field.
+func (m *APIKeyMutation) ResetAllowLongContext() {
+	m.allow_long_context = nil
+}
+
+// SetContextTokenLimit sets the "context_token_limit" field.
+func (m *APIKeyMutation) SetContextTokenLimit(i int) {
+	m.context_token_limit = &i
+	m.addcontext_token_limit = nil
+}
+
+// ContextTokenLimit returns the value of the "context_token_limit" field in the mutation.
+func (m *APIKeyMutation) ContextTokenLimit() (r int, exists bool) {
+	v := m.context_token_limit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldContextTokenLimit returns the old "context_token_limit" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldContextTokenLimit(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldContextTokenLimit is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldContextTokenLimit requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldContextTokenLimit: %w", err)
+	}
+	return oldValue.ContextTokenLimit, nil
+}
+
+// AddContextTokenLimit adds i to the "context_token_limit" field.
+func (m *APIKeyMutation) AddContextTokenLimit(i int) {
+	if m.addcontext_token_limit != nil {
+		*m.addcontext_token_limit += i
+	} else {
+		m.addcontext_token_limit = &i
+	}
+}
+
+// AddedContextTokenLimit returns the value that was added to the "context_token_limit" field in this mutation.
+func (m *APIKeyMutation) AddedContextTokenLimit() (r int, exists bool) {
+	v := m.addcontext_token_limit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetContextTokenLimit resets all changes to the "context_token_limit" field.
+func (m *APIKeyMutation) ResetContextTokenLimit() {
+	m.context_token_limit = nil
+	m.addcontext_token_limit = nil
 }
 
 // SetLastUsedAt sets the "last_used_at" field.
@@ -1614,7 +1783,7 @@ func (m *APIKeyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *APIKeyMutation) Fields() []string {
-	fields := make([]string, 0, 24)
+	fields := make([]string, 0, 28)
 	if m.created_at != nil {
 		fields = append(fields, apikey.FieldCreatedAt)
 	}
@@ -1641,6 +1810,18 @@ func (m *APIKeyMutation) Fields() []string {
 	}
 	if m.status != nil {
 		fields = append(fields, apikey.FieldStatus)
+	}
+	if m.model_mapping != nil {
+		fields = append(fields, apikey.FieldModelMapping)
+	}
+	if m.reasoning_effort != nil {
+		fields = append(fields, apikey.FieldReasoningEffort)
+	}
+	if m.allow_long_context != nil {
+		fields = append(fields, apikey.FieldAllowLongContext)
+	}
+	if m.context_token_limit != nil {
+		fields = append(fields, apikey.FieldContextTokenLimit)
 	}
 	if m.last_used_at != nil {
 		fields = append(fields, apikey.FieldLastUsedAt)
@@ -1713,6 +1894,14 @@ func (m *APIKeyMutation) Field(name string) (ent.Value, bool) {
 		return m.GroupID()
 	case apikey.FieldStatus:
 		return m.Status()
+	case apikey.FieldModelMapping:
+		return m.ModelMapping()
+	case apikey.FieldReasoningEffort:
+		return m.ReasoningEffort()
+	case apikey.FieldAllowLongContext:
+		return m.AllowLongContext()
+	case apikey.FieldContextTokenLimit:
+		return m.ContextTokenLimit()
 	case apikey.FieldLastUsedAt:
 		return m.LastUsedAt()
 	case apikey.FieldIPWhitelist:
@@ -1770,6 +1959,14 @@ func (m *APIKeyMutation) OldField(ctx context.Context, name string) (ent.Value, 
 		return m.OldGroupID(ctx)
 	case apikey.FieldStatus:
 		return m.OldStatus(ctx)
+	case apikey.FieldModelMapping:
+		return m.OldModelMapping(ctx)
+	case apikey.FieldReasoningEffort:
+		return m.OldReasoningEffort(ctx)
+	case apikey.FieldAllowLongContext:
+		return m.OldAllowLongContext(ctx)
+	case apikey.FieldContextTokenLimit:
+		return m.OldContextTokenLimit(ctx)
 	case apikey.FieldLastUsedAt:
 		return m.OldLastUsedAt(ctx)
 	case apikey.FieldIPWhitelist:
@@ -1871,6 +2068,34 @@ func (m *APIKeyMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetStatus(v)
+		return nil
+	case apikey.FieldModelMapping:
+		v, ok := value.(map[string]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetModelMapping(v)
+		return nil
+	case apikey.FieldReasoningEffort:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReasoningEffort(v)
+		return nil
+	case apikey.FieldAllowLongContext:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAllowLongContext(v)
+		return nil
+	case apikey.FieldContextTokenLimit:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetContextTokenLimit(v)
 		return nil
 	case apikey.FieldLastUsedAt:
 		v, ok := value.(time.Time)
@@ -1988,6 +2213,9 @@ func (m *APIKeyMutation) AddedFields() []string {
 	if m.addconcurrency_limit != nil {
 		fields = append(fields, apikey.FieldConcurrencyLimit)
 	}
+	if m.addcontext_token_limit != nil {
+		fields = append(fields, apikey.FieldContextTokenLimit)
+	}
 	if m.addquota != nil {
 		fields = append(fields, apikey.FieldQuota)
 	}
@@ -2022,6 +2250,8 @@ func (m *APIKeyMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
 	case apikey.FieldConcurrencyLimit:
 		return m.AddedConcurrencyLimit()
+	case apikey.FieldContextTokenLimit:
+		return m.AddedContextTokenLimit()
 	case apikey.FieldQuota:
 		return m.AddedQuota()
 	case apikey.FieldQuotaUsed:
@@ -2053,6 +2283,13 @@ func (m *APIKeyMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddConcurrencyLimit(v)
+		return nil
+	case apikey.FieldContextTokenLimit:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddContextTokenLimit(v)
 		return nil
 	case apikey.FieldQuota:
 		v, ok := value.(float64)
@@ -2220,6 +2457,18 @@ func (m *APIKeyMutation) ResetField(name string) error {
 		return nil
 	case apikey.FieldStatus:
 		m.ResetStatus()
+		return nil
+	case apikey.FieldModelMapping:
+		m.ResetModelMapping()
+		return nil
+	case apikey.FieldReasoningEffort:
+		m.ResetReasoningEffort()
+		return nil
+	case apikey.FieldAllowLongContext:
+		m.ResetAllowLongContext()
+		return nil
+	case apikey.FieldContextTokenLimit:
+		m.ResetContextTokenLimit()
 		return nil
 	case apikey.FieldLastUsedAt:
 		m.ResetLastUsedAt()
@@ -45046,6 +45295,9 @@ type PaymentProviderInstanceMutation struct {
 	sort_order        *int
 	addsort_order     *int
 	limits            *string
+	fee_rate          *float64
+	addfee_rate       *float64
+	method_fee_rates  *map[string]float64
 	refund_enabled    *bool
 	allow_user_refund *bool
 	created_at        *time.Time
@@ -45462,6 +45714,112 @@ func (m *PaymentProviderInstanceMutation) ResetLimits() {
 	m.limits = nil
 }
 
+// SetFeeRate sets the "fee_rate" field.
+func (m *PaymentProviderInstanceMutation) SetFeeRate(f float64) {
+	m.fee_rate = &f
+	m.addfee_rate = nil
+}
+
+// FeeRate returns the value of the "fee_rate" field in the mutation.
+func (m *PaymentProviderInstanceMutation) FeeRate() (r float64, exists bool) {
+	v := m.fee_rate
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFeeRate returns the old "fee_rate" field's value of the PaymentProviderInstance entity.
+// If the PaymentProviderInstance object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PaymentProviderInstanceMutation) OldFeeRate(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFeeRate is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFeeRate requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFeeRate: %w", err)
+	}
+	return oldValue.FeeRate, nil
+}
+
+// AddFeeRate adds f to the "fee_rate" field.
+func (m *PaymentProviderInstanceMutation) AddFeeRate(f float64) {
+	if m.addfee_rate != nil {
+		*m.addfee_rate += f
+	} else {
+		m.addfee_rate = &f
+	}
+}
+
+// AddedFeeRate returns the value that was added to the "fee_rate" field in this mutation.
+func (m *PaymentProviderInstanceMutation) AddedFeeRate() (r float64, exists bool) {
+	v := m.addfee_rate
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearFeeRate clears the value of the "fee_rate" field.
+func (m *PaymentProviderInstanceMutation) ClearFeeRate() {
+	m.fee_rate = nil
+	m.addfee_rate = nil
+	m.clearedFields[paymentproviderinstance.FieldFeeRate] = struct{}{}
+}
+
+// FeeRateCleared returns if the "fee_rate" field was cleared in this mutation.
+func (m *PaymentProviderInstanceMutation) FeeRateCleared() bool {
+	_, ok := m.clearedFields[paymentproviderinstance.FieldFeeRate]
+	return ok
+}
+
+// ResetFeeRate resets all changes to the "fee_rate" field.
+func (m *PaymentProviderInstanceMutation) ResetFeeRate() {
+	m.fee_rate = nil
+	m.addfee_rate = nil
+	delete(m.clearedFields, paymentproviderinstance.FieldFeeRate)
+}
+
+// SetMethodFeeRates sets the "method_fee_rates" field.
+func (m *PaymentProviderInstanceMutation) SetMethodFeeRates(value map[string]float64) {
+	m.method_fee_rates = &value
+}
+
+// MethodFeeRates returns the value of the "method_fee_rates" field in the mutation.
+func (m *PaymentProviderInstanceMutation) MethodFeeRates() (r map[string]float64, exists bool) {
+	v := m.method_fee_rates
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMethodFeeRates returns the old "method_fee_rates" field's value of the PaymentProviderInstance entity.
+// If the PaymentProviderInstance object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PaymentProviderInstanceMutation) OldMethodFeeRates(ctx context.Context) (v map[string]float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMethodFeeRates is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMethodFeeRates requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMethodFeeRates: %w", err)
+	}
+	return oldValue.MethodFeeRates, nil
+}
+
+// ResetMethodFeeRates resets all changes to the "method_fee_rates" field.
+func (m *PaymentProviderInstanceMutation) ResetMethodFeeRates() {
+	m.method_fee_rates = nil
+}
+
 // SetRefundEnabled sets the "refund_enabled" field.
 func (m *PaymentProviderInstanceMutation) SetRefundEnabled(b bool) {
 	m.refund_enabled = &b
@@ -45640,7 +45998,7 @@ func (m *PaymentProviderInstanceMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *PaymentProviderInstanceMutation) Fields() []string {
-	fields := make([]string, 0, 12)
+	fields := make([]string, 0, 14)
 	if m.provider_key != nil {
 		fields = append(fields, paymentproviderinstance.FieldProviderKey)
 	}
@@ -45664,6 +46022,12 @@ func (m *PaymentProviderInstanceMutation) Fields() []string {
 	}
 	if m.limits != nil {
 		fields = append(fields, paymentproviderinstance.FieldLimits)
+	}
+	if m.fee_rate != nil {
+		fields = append(fields, paymentproviderinstance.FieldFeeRate)
+	}
+	if m.method_fee_rates != nil {
+		fields = append(fields, paymentproviderinstance.FieldMethodFeeRates)
 	}
 	if m.refund_enabled != nil {
 		fields = append(fields, paymentproviderinstance.FieldRefundEnabled)
@@ -45701,6 +46065,10 @@ func (m *PaymentProviderInstanceMutation) Field(name string) (ent.Value, bool) {
 		return m.SortOrder()
 	case paymentproviderinstance.FieldLimits:
 		return m.Limits()
+	case paymentproviderinstance.FieldFeeRate:
+		return m.FeeRate()
+	case paymentproviderinstance.FieldMethodFeeRates:
+		return m.MethodFeeRates()
 	case paymentproviderinstance.FieldRefundEnabled:
 		return m.RefundEnabled()
 	case paymentproviderinstance.FieldAllowUserRefund:
@@ -45734,6 +46102,10 @@ func (m *PaymentProviderInstanceMutation) OldField(ctx context.Context, name str
 		return m.OldSortOrder(ctx)
 	case paymentproviderinstance.FieldLimits:
 		return m.OldLimits(ctx)
+	case paymentproviderinstance.FieldFeeRate:
+		return m.OldFeeRate(ctx)
+	case paymentproviderinstance.FieldMethodFeeRates:
+		return m.OldMethodFeeRates(ctx)
 	case paymentproviderinstance.FieldRefundEnabled:
 		return m.OldRefundEnabled(ctx)
 	case paymentproviderinstance.FieldAllowUserRefund:
@@ -45807,6 +46179,20 @@ func (m *PaymentProviderInstanceMutation) SetField(name string, value ent.Value)
 		}
 		m.SetLimits(v)
 		return nil
+	case paymentproviderinstance.FieldFeeRate:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFeeRate(v)
+		return nil
+	case paymentproviderinstance.FieldMethodFeeRates:
+		v, ok := value.(map[string]float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMethodFeeRates(v)
+		return nil
 	case paymentproviderinstance.FieldRefundEnabled:
 		v, ok := value.(bool)
 		if !ok {
@@ -45846,6 +46232,9 @@ func (m *PaymentProviderInstanceMutation) AddedFields() []string {
 	if m.addsort_order != nil {
 		fields = append(fields, paymentproviderinstance.FieldSortOrder)
 	}
+	if m.addfee_rate != nil {
+		fields = append(fields, paymentproviderinstance.FieldFeeRate)
+	}
 	return fields
 }
 
@@ -45856,6 +46245,8 @@ func (m *PaymentProviderInstanceMutation) AddedField(name string) (ent.Value, bo
 	switch name {
 	case paymentproviderinstance.FieldSortOrder:
 		return m.AddedSortOrder()
+	case paymentproviderinstance.FieldFeeRate:
+		return m.AddedFeeRate()
 	}
 	return nil, false
 }
@@ -45872,6 +46263,13 @@ func (m *PaymentProviderInstanceMutation) AddField(name string, value ent.Value)
 		}
 		m.AddSortOrder(v)
 		return nil
+	case paymentproviderinstance.FieldFeeRate:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddFeeRate(v)
+		return nil
 	}
 	return fmt.Errorf("unknown PaymentProviderInstance numeric field %s", name)
 }
@@ -45879,7 +46277,11 @@ func (m *PaymentProviderInstanceMutation) AddField(name string, value ent.Value)
 // ClearedFields returns all nullable fields that were cleared during this
 // mutation.
 func (m *PaymentProviderInstanceMutation) ClearedFields() []string {
-	return nil
+	var fields []string
+	if m.FieldCleared(paymentproviderinstance.FieldFeeRate) {
+		fields = append(fields, paymentproviderinstance.FieldFeeRate)
+	}
+	return fields
 }
 
 // FieldCleared returns a boolean indicating if a field with the given name was
@@ -45892,6 +46294,11 @@ func (m *PaymentProviderInstanceMutation) FieldCleared(name string) bool {
 // ClearField clears the value of the field with the given name. It returns an
 // error if the field is not defined in the schema.
 func (m *PaymentProviderInstanceMutation) ClearField(name string) error {
+	switch name {
+	case paymentproviderinstance.FieldFeeRate:
+		m.ClearFeeRate()
+		return nil
+	}
 	return fmt.Errorf("unknown PaymentProviderInstance nullable field %s", name)
 }
 
@@ -45922,6 +46329,12 @@ func (m *PaymentProviderInstanceMutation) ResetField(name string) error {
 		return nil
 	case paymentproviderinstance.FieldLimits:
 		m.ResetLimits()
+		return nil
+	case paymentproviderinstance.FieldFeeRate:
+		m.ResetFeeRate()
+		return nil
+	case paymentproviderinstance.FieldMethodFeeRates:
+		m.ResetMethodFeeRates()
 		return nil
 	case paymentproviderinstance.FieldRefundEnabled:
 		m.ResetRefundEnabled()
@@ -57904,6 +58317,10 @@ type UsageLogMutation struct {
 	addcache_creation_5m_tokens  *int
 	cache_creation_1h_tokens     *int
 	addcache_creation_1h_tokens  *int
+	cache_creation_30m_tokens    *int
+	addcache_creation_30m_tokens *int
+	cache_creation_12h_tokens    *int
+	addcache_creation_12h_tokens *int
 	input_cost                   *float64
 	addinput_cost                *float64
 	output_cost                  *float64
@@ -59086,6 +59503,118 @@ func (m *UsageLogMutation) AddedCacheCreation1hTokens() (r int, exists bool) {
 func (m *UsageLogMutation) ResetCacheCreation1hTokens() {
 	m.cache_creation_1h_tokens = nil
 	m.addcache_creation_1h_tokens = nil
+}
+
+// SetCacheCreation30mTokens sets the "cache_creation_30m_tokens" field.
+func (m *UsageLogMutation) SetCacheCreation30mTokens(i int) {
+	m.cache_creation_30m_tokens = &i
+	m.addcache_creation_30m_tokens = nil
+}
+
+// CacheCreation30mTokens returns the value of the "cache_creation_30m_tokens" field in the mutation.
+func (m *UsageLogMutation) CacheCreation30mTokens() (r int, exists bool) {
+	v := m.cache_creation_30m_tokens
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCacheCreation30mTokens returns the old "cache_creation_30m_tokens" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldCacheCreation30mTokens(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCacheCreation30mTokens is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCacheCreation30mTokens requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCacheCreation30mTokens: %w", err)
+	}
+	return oldValue.CacheCreation30mTokens, nil
+}
+
+// AddCacheCreation30mTokens adds i to the "cache_creation_30m_tokens" field.
+func (m *UsageLogMutation) AddCacheCreation30mTokens(i int) {
+	if m.addcache_creation_30m_tokens != nil {
+		*m.addcache_creation_30m_tokens += i
+	} else {
+		m.addcache_creation_30m_tokens = &i
+	}
+}
+
+// AddedCacheCreation30mTokens returns the value that was added to the "cache_creation_30m_tokens" field in this mutation.
+func (m *UsageLogMutation) AddedCacheCreation30mTokens() (r int, exists bool) {
+	v := m.addcache_creation_30m_tokens
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCacheCreation30mTokens resets all changes to the "cache_creation_30m_tokens" field.
+func (m *UsageLogMutation) ResetCacheCreation30mTokens() {
+	m.cache_creation_30m_tokens = nil
+	m.addcache_creation_30m_tokens = nil
+}
+
+// SetCacheCreation12hTokens sets the "cache_creation_12h_tokens" field.
+func (m *UsageLogMutation) SetCacheCreation12hTokens(i int) {
+	m.cache_creation_12h_tokens = &i
+	m.addcache_creation_12h_tokens = nil
+}
+
+// CacheCreation12hTokens returns the value of the "cache_creation_12h_tokens" field in the mutation.
+func (m *UsageLogMutation) CacheCreation12hTokens() (r int, exists bool) {
+	v := m.cache_creation_12h_tokens
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCacheCreation12hTokens returns the old "cache_creation_12h_tokens" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldCacheCreation12hTokens(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCacheCreation12hTokens is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCacheCreation12hTokens requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCacheCreation12hTokens: %w", err)
+	}
+	return oldValue.CacheCreation12hTokens, nil
+}
+
+// AddCacheCreation12hTokens adds i to the "cache_creation_12h_tokens" field.
+func (m *UsageLogMutation) AddCacheCreation12hTokens(i int) {
+	if m.addcache_creation_12h_tokens != nil {
+		*m.addcache_creation_12h_tokens += i
+	} else {
+		m.addcache_creation_12h_tokens = &i
+	}
+}
+
+// AddedCacheCreation12hTokens returns the value that was added to the "cache_creation_12h_tokens" field in this mutation.
+func (m *UsageLogMutation) AddedCacheCreation12hTokens() (r int, exists bool) {
+	v := m.addcache_creation_12h_tokens
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCacheCreation12hTokens resets all changes to the "cache_creation_12h_tokens" field.
+func (m *UsageLogMutation) ResetCacheCreation12hTokens() {
+	m.cache_creation_12h_tokens = nil
+	m.addcache_creation_12h_tokens = nil
 }
 
 // SetInputCost sets the "input_cost" field.
@@ -60752,7 +61281,7 @@ func (m *UsageLogMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UsageLogMutation) Fields() []string {
-	fields := make([]string, 0, 49)
+	fields := make([]string, 0, 51)
 	if m.user != nil {
 		fields = append(fields, usagelog.FieldUserID)
 	}
@@ -60815,6 +61344,12 @@ func (m *UsageLogMutation) Fields() []string {
 	}
 	if m.cache_creation_1h_tokens != nil {
 		fields = append(fields, usagelog.FieldCacheCreation1hTokens)
+	}
+	if m.cache_creation_30m_tokens != nil {
+		fields = append(fields, usagelog.FieldCacheCreation30mTokens)
+	}
+	if m.cache_creation_12h_tokens != nil {
+		fields = append(fields, usagelog.FieldCacheCreation12hTokens)
 	}
 	if m.input_cost != nil {
 		fields = append(fields, usagelog.FieldInputCost)
@@ -60950,6 +61485,10 @@ func (m *UsageLogMutation) Field(name string) (ent.Value, bool) {
 		return m.CacheCreation5mTokens()
 	case usagelog.FieldCacheCreation1hTokens:
 		return m.CacheCreation1hTokens()
+	case usagelog.FieldCacheCreation30mTokens:
+		return m.CacheCreation30mTokens()
+	case usagelog.FieldCacheCreation12hTokens:
+		return m.CacheCreation12hTokens()
 	case usagelog.FieldInputCost:
 		return m.InputCost()
 	case usagelog.FieldOutputCost:
@@ -61057,6 +61596,10 @@ func (m *UsageLogMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldCacheCreation5mTokens(ctx)
 	case usagelog.FieldCacheCreation1hTokens:
 		return m.OldCacheCreation1hTokens(ctx)
+	case usagelog.FieldCacheCreation30mTokens:
+		return m.OldCacheCreation30mTokens(ctx)
+	case usagelog.FieldCacheCreation12hTokens:
+		return m.OldCacheCreation12hTokens(ctx)
 	case usagelog.FieldInputCost:
 		return m.OldInputCost(ctx)
 	case usagelog.FieldOutputCost:
@@ -61268,6 +61811,20 @@ func (m *UsageLogMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetCacheCreation1hTokens(v)
+		return nil
+	case usagelog.FieldCacheCreation30mTokens:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCacheCreation30mTokens(v)
+		return nil
+	case usagelog.FieldCacheCreation12hTokens:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCacheCreation12hTokens(v)
 		return nil
 	case usagelog.FieldInputCost:
 		v, ok := value.(float64)
@@ -61494,6 +62051,12 @@ func (m *UsageLogMutation) AddedFields() []string {
 	if m.addcache_creation_1h_tokens != nil {
 		fields = append(fields, usagelog.FieldCacheCreation1hTokens)
 	}
+	if m.addcache_creation_30m_tokens != nil {
+		fields = append(fields, usagelog.FieldCacheCreation30mTokens)
+	}
+	if m.addcache_creation_12h_tokens != nil {
+		fields = append(fields, usagelog.FieldCacheCreation12hTokens)
+	}
 	if m.addinput_cost != nil {
 		fields = append(fields, usagelog.FieldInputCost)
 	}
@@ -61561,6 +62124,10 @@ func (m *UsageLogMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedCacheCreation5mTokens()
 	case usagelog.FieldCacheCreation1hTokens:
 		return m.AddedCacheCreation1hTokens()
+	case usagelog.FieldCacheCreation30mTokens:
+		return m.AddedCacheCreation30mTokens()
+	case usagelog.FieldCacheCreation12hTokens:
+		return m.AddedCacheCreation12hTokens()
 	case usagelog.FieldInputCost:
 		return m.AddedInputCost()
 	case usagelog.FieldOutputCost:
@@ -61648,6 +62215,20 @@ func (m *UsageLogMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddCacheCreation1hTokens(v)
+		return nil
+	case usagelog.FieldCacheCreation30mTokens:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCacheCreation30mTokens(v)
+		return nil
+	case usagelog.FieldCacheCreation12hTokens:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCacheCreation12hTokens(v)
 		return nil
 	case usagelog.FieldInputCost:
 		v, ok := value.(float64)
@@ -61990,6 +62571,12 @@ func (m *UsageLogMutation) ResetField(name string) error {
 		return nil
 	case usagelog.FieldCacheCreation1hTokens:
 		m.ResetCacheCreation1hTokens()
+		return nil
+	case usagelog.FieldCacheCreation30mTokens:
+		m.ResetCacheCreation30mTokens()
+		return nil
+	case usagelog.FieldCacheCreation12hTokens:
+		m.ResetCacheCreation12hTokens()
 		return nil
 	case usagelog.FieldInputCost:
 		m.ResetInputCost()

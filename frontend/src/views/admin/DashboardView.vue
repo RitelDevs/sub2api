@@ -251,13 +251,29 @@
                   </p>
                   <span class="text-xs text-gray-500 dark:text-gray-400">RPM</span>
                 </div>
-                <div class="flex items-baseline gap-2">
-                  <p class="text-sm font-semibold text-gray-900 dark:text-white">
-                    {{ formatTokens(stats.tpm) }}
-                  </p>
-                  <span class="text-xs text-gray-500 dark:text-gray-400">TPM</span>
-                </div>
               </div>
+            </div>
+            <div
+              class="mt-1 flex items-baseline gap-1.5 overflow-x-auto whitespace-nowrap"
+              data-testid="account-concurrency"
+              :title="t('admin.dashboard.accountConcurrencyHint')"
+            >
+              <span class="shrink-0 text-sm font-semibold text-violet-600 dark:text-violet-400">
+                {{ accountConcurrency === null ? '—' : formatNumber(accountConcurrency) }}
+              </span>
+              <span class="shrink-0 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.dashboard.accountConcurrency') }}
+              </span>
+              <NewFeatureBadge
+                :notice-id="NEW_FEATURE_NOTICES.dashboardAccountConcurrency"
+                :user-id="authStore.user?.id"
+                compact
+              />
+              <span class="shrink-0 text-xs text-gray-400 dark:text-gray-500">/</span>
+              <span class="shrink-0 text-sm font-semibold text-violet-600 dark:text-violet-400">
+                {{ formatTokens(stats.tpm) }}
+              </span>
+              <span class="shrink-0 text-xs text-gray-500 dark:text-gray-400">TPM</span>
             </div>
           </div>
 
@@ -301,6 +317,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 
 const { t } = useI18n()
 const chartTheme = useChartTheme()
@@ -314,6 +331,8 @@ import type {
 } from '@/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
+import NewFeatureBadge from '@/components/common/NewFeatureBadge.vue'
+import { NEW_FEATURE_NOTICES } from '@/constants/newFeatureNotices'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import Select from '@/components/common/Select.vue'
 import ModelDistributionChart from '@/components/charts/ModelDistributionChart.vue'
@@ -343,8 +362,11 @@ ChartJS.register(
 )
 
 const appStore = useAppStore()
+const authStore = useAuthStore()
 const router = useRouter()
 const stats = ref<DashboardStats | null>(null)
+const accountConcurrency = ref<number | null>(null)
+let accountConcurrencyLoadSeq = 0
 const loading = ref(false)
 const snapshotError = ref(false)
 const chartsLoading = ref(false)
@@ -674,12 +696,25 @@ const loadUserSpendingRanking = async () => {
   }
 }
 
+const loadAccountConcurrency = async () => {
+  const currentSeq = ++accountConcurrencyLoadSeq
+  accountConcurrency.value = null
+  try {
+    const { current_concurrency: count } = await adminAPI.accounts.getConcurrencySummary()
+    if (currentSeq !== accountConcurrencyLoadSeq) return
+    accountConcurrency.value = Number.isSafeInteger(count) && count >= 0 ? count : null
+  } catch {
+    if (currentSeq === accountConcurrencyLoadSeq) accountConcurrency.value = null
+  }
+}
+
 const loadDashboardStats = async () => {
   if (chartsLoading.value) return
   const range = selectedPreset.value === 'last24Hours' ? getLast24HoursRangeDates() : selectedPreset.value ? getDatePresetRange(selectedPreset.value) : null
   if (range) { startDate.value = range.start; endDate.value = range.end }
   await Promise.all([
     loadDashboardSnapshot(true),
+    loadAccountConcurrency(),
     loadUsersTrend(),
     loadUserSpendingRanking()
   ])

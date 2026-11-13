@@ -24,7 +24,8 @@ func TestQualityGroupIsolationUsesNativeAllSupportedModels(t *testing.T) {
 	raw, err := json.Marshal(a.Extra)
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(raw, &a.Extra))
-	scheduler := newDefaultOpenAIAccountScheduler(s, nil).(*defaultOpenAIAccountScheduler)
+	scheduler, ok := newDefaultOpenAIAccountScheduler(s, nil).(*defaultOpenAIAccountScheduler)
+	require.True(t, ok)
 	for _, model := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6.1-sol", "gpt-6-luna"} {
 		require.False(t, a.RequiresGatewayBorrow(model), model)
 		require.Empty(t, gatewayBorrowEligibilityReason(context.Background(), a, model, false), model)
@@ -58,7 +59,8 @@ func TestQualityGroupIsolationDoesNotOpenBusinessGroups(t *testing.T) {
 	for _, change := range []string{"missing marker", "wrong group", "multiple groups", "bad version", "bad group", "other platform"} {
 		t.Run(change, func(t *testing.T) {
 			_, a, _ := isolatedBorrowAccount()
-			marker := a.Extra[QualityGroupIsolationKey].(map[string]any)
+			marker, ok := a.Extra[QualityGroupIsolationKey].(map[string]any)
+			require.True(t, ok)
 			switch change {
 			case "missing marker":
 				delete(a.Extra, QualityGroupIsolationKey)

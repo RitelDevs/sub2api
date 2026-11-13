@@ -1,6 +1,8 @@
 import ipRisk from './ipRisk'
+
 export default {
     settings: {
+      ipRisk,
       title: '系統設定',
       description: '管理註冊、電郵驗證、預設值和 SMTP 設定',
       tabs: {
@@ -15,6 +17,14 @@ export default {
         payment: '支付設定',
       },
       features: {
+        smartOpsSidebar: {
+          title: '智能運維側邊欄',
+          description: '選擇側邊欄中展示的智能運維入口。保存後對所有管理員生效；僅隱藏菜單，不會停止後台任務、修改功能配置或禁止直接訪問頁面。',
+          showAll: '全部顯示',
+          hideAll: '全部隱藏',
+          count: '已選擇 {visible} / {total} 個入口',
+          hint: '全部隱藏後，側邊欄將收起智能運維分組。請求採集等入口仍受原有功能啓用條件控制。'
+        },
         excelBpsImages: {
           mode: '圖片傳輸方式',
           modeRelay: '臨時 HTTPS 中轉（預設）',
@@ -233,6 +243,8 @@ export default {
           "僅允許使用指定域名的電郵註冊帳戶；留空則不限制（例如 {'@'}qq.com, {'@'}gmail.com, *.edu.cn）",
         emailSuffixWhitelistPlaceholder: "{'@'}example.com, *.edu.cn",
         emailSuffixWhitelistInputHint: '留空則不限制。使用 *.edu.cn 可匹配 edu.cn 及其子域名。',
+        emailAliasBlock: '屏蔽郵箱別名注冊',
+        emailAliasBlockHint: '默認開啟：拒絕 Gmail/Googlemail 用戶名中帶點號、郵箱中帶 +標簽、域名末尾帶點號的地址注冊（含第三方新用戶注冊）。其他域名用戶名中的正常點號不受影響；已有帳號仍可登錄。關閉后仍會對同一郵箱的別名進行注冊去重。',
         emailDomainQuota: '非白名單域名限量註冊',
         emailDomainQuotaHint:
           '開啟後，白名單非空時，其他可註冊主域名各限註冊一個帳戶；關閉時非白名單域名直接拒絕註冊。白名單為空時本開關無效果',
@@ -249,12 +261,11 @@ export default {
         totpHint: '允許用戶使用 Google Authenticator 等應用進行二次驗證',
         totpKeyNotConfigured:
           '請先在環境變量中配置 TOTP_ENCRYPTION_KEY。使用命令 openssl rand -hex 32 生成密鑰。'
-      ,
-  emailAliasBlock: '屏蔽郵箱別名注冊',
-  emailAliasBlockHint: '默認開啟：拒絕 Gmail/Googlemail 用戶名中帶點號、郵箱中帶 +標簽、域名末尾帶點號的地址注冊（含第三方新用戶注冊）。其他域名用戶名中的正常點號不受影響；已有帳號仍可登錄。關閉后仍會對同一郵箱的別名進行注冊去重。',
-},
+      },
       security: {
         loginRateLimit: '登入限流',
+        registrationIPLimit: '同 IP 注冊數量限制',
+        registrationIPLimitHint: '默認開啟，同一 IP 最多注冊 2 個帳號（含郵箱和第三方登錄注冊）。共享網絡可能導致正常用戶受限。關閉僅取消此數量限制，不影響驗證碼、郵箱驗證、請求限流和登錄防護；保存后立即生效。已有計數不會清空，關閉期間不累計，重新開啟后繼續使用保留的計數。',
         loginRateLimitHint: '預設開啟。限制登入請求頻率，15 分鐘內驗證失敗 10 次後封禁 IP 1 小時。關閉後，密碼、二次驗證、Passkey 及第三方綁定登入將跳過頻率限制和 IP 封禁；儲存後立即生效，對管理員和普通用戶均有效。已有封禁在重新開啟後仍按原有效期生效。',
         passkey: 'Passkey 登入',
         passkeyHint: '當依賴方配置有效時，允許無密碼登入及用戶自行管理 Passkey。',
@@ -271,10 +282,7 @@ export default {
         sessionBindingHint: '將登入會話與用戶端 IP 和 User-Agent 綁定，任一變化即強制該會話失效並需重新登入（提升被盜憑證的利用門檻）。',
         auditRetention: '操作日誌保留天數',
         auditRetentionHint: '超過該天數的操作日誌將被自動清理；填 0 表示永久保留（僅支持手動清空）。'
-      ,
-  registrationIPLimit: '同 IP 注冊數量限制',
-  registrationIPLimitHint: '默認開啟，同一 IP 最多注冊 2 個帳號（含郵箱和第三方登錄注冊）。共享網絡可能導致正常用戶受限。關閉僅取消此數量限制，不影響驗證碼、郵箱驗證、請求限流和登錄防護；保存后立即生效。已有計數不會清空，關閉期間不累計，重新開啟后繼續使用保留的計數。',
-},
+      },
       panelRateLimit: {
         title: '面板接口限流',
         description: '限制面板 API 的請求頻率，防止高頻刷接口（如用量統計、儀表盤查詢）打爆數據庫',
@@ -566,6 +574,8 @@ export default {
         saveFailed: '儲存 OpenCode Go 用量刷新設定失敗'
       },
       gatewayForwarding: {
+        omitEncryptedHistory409: '409 省略加密內容',
+        omitEncryptedHistory409Hint: '默認關閉。HTTP Responses 在發送前因原加密歷史賬號不可用或路線變化返回 409 時，省略舊密文並重新選擇合格賬號，最多處理一次。保留可讀文本和工具調用關係，但被省略的上下文將丟失，不能保證會話完整或上游接受。當前加密任務、服務端會話指針、WebSocket、交付未確認和存儲故障不適用；不會重放已發送的請求。',
         title: '請求轉發行為',
         description: '控制請求轉發到上游 OAuth 帳戶時的行為',
         grokDefaultTextModel: '預設 Grok 文本模型',
@@ -707,6 +717,7 @@ export default {
         enabledHint: '全局開關。關閉後所有渠道和帳戶的 web search 模擬均不生效。',
         providers: '搜索服務商',
         addProvider: '添加服務商',
+        deepSeekHint: '使用 DeepSeek 獨立 Search API 和 DeepSeek API Key。查詢須為 1–128 個 Unicode 字符；返回搜索結果，不抓取完整網頁。',
         providerType: '服務商類型',
         apiKey: 'API Key',
         apiKeyPlaceholder: '輸入 API Key',
@@ -812,6 +823,12 @@ export default {
         title: '自定義菜單頁面',
         description: '添加自定義 iframe 頁面到側邊欄導航。每個頁面可以設定為普通用戶或管理員可見。',
         itemLabel: '菜單項 #{n}',
+        nameZh: '中文名稱',
+        nameZhPlaceholder: '如：幫助中心',
+        nameEn: '英文名稱',
+        nameEnPlaceholder: 'e.g. Help Center',
+        fallbackName: '舊版本名稱回退',
+        fallbackNamePlaceholder: '留空時自動使用中文名稱，其次使用英文名稱',
         url: '頁面 URL',
         urlPlaceholder: 'https://example.com/page',
         hideOpenButton: '隱藏“新窗口打開”按鈕',
@@ -827,13 +844,6 @@ export default {
         remove: '刪除',
         moveUp: '上移',
         moveDown: '下移',
-
-        "nameZh": "中文名稱",
-        "nameZhPlaceholder": "如：幫助中心",
-        "nameEn": "英文名稱",
-        "nameEnPlaceholder": "e.g. Help Center",
-        "fallbackName": "舊版本名稱回退",
-        "fallbackNamePlaceholder": "留空時自動使用中文名稱，其次使用英文名稱",
       },
       payment: {
         title: '支付設定',
@@ -848,14 +858,27 @@ export default {
         maxAmount: '最高金額',
         dailyLimit: '每日限額',
         balanceRechargeMultiplier: '餘額充值倍率',
-        balanceRechargeMultiplierHint: '用戶每支付 1 CNY 可獲得多少 USD 餘額',
+        balanceRechargeMultiplierHint: '用户每支付 1 CNY 可獲得多少 USD 餘額（最多 6 位小數，可按實時匯率配置）',
         balanceRechargePreview: '預覽：1 CNY = {usd} USD',
         subscriptionUsdToCnyRate: '訂閱 CNY 換算匯率',
         subscriptionUsdToCnyRateHint:
           'CNY 支付通道下，套餐每 1 USD 價格收取多少 CNY（如 7.15）。0 或留空 = 不換算，訂閱按 price 數值直接收款。啟用後所有套餐 price 必須按 USD 定價',
         subscriptionUsdToCnyRateDisabled: '未啟用（按 price 直付）',
         rechargeFeeRate: '充值手續費率',
-        rechargeFeeRateHint: '用戶充值時額外收取的手續費百分比，0 表示不收取手續費',
+        rechargeFeeRateHint: '充值和訂閲支付的全站默認手續費百分比，0 表示不收取；服務商及其支付方式的自定義費率優先',
+        providerFeeTitle: '服務商手續費',
+        providerFeeHint: '支付方式自定義費率優先於服務商默認費率，服務商默認費率優先於全站設置。0 表示免手續費；選擇繼承可清除覆蓋。禁用方式保留費率，刪除自定義方式則清除其費率。適用於充值和訂閲支付。',
+        providerDefaultFee: '服務商默認手續費率（%）',
+        feeInheritGlobal: '繼承全站設置',
+        feeInheritProvider: '繼承服務商默認費率',
+        feeCustom: '自定義費率',
+        feeEffectiveDefault: '當前默認有效費率：{rate}%。繼承全站時使用已保存的設置。',
+        feeEffectiveUnknown: '有效費率待確認；請檢查全站設置或輸入有效的自定義費率。',
+        methodFeeLabel: '{method} 手續費率（%）',
+        feeValidation: '手續費率須為 0–100 的數字，最多兩位小數；免手續費請填 0。',
+        feeGlobalSummary: '手續費：繼承全站 {rate}%',
+        feeCustomSummary: '手續費：自定義 {rate}%',
+        feeMethodOverrides: '{count} 種支付方式使用自定義費率',
         rechargeFeePreview: '預覽：充值 100 元，手續費 {fee} 元',
         rechargeBonus: {
           label: '充值優惠階梯',
@@ -921,6 +944,47 @@ export default {
         providerWxpay: '微信官方',
         providerStripe: 'Stripe',
         providerAirwallex: 'Airwallex',
+        providerBEpusdt: 'BEpusdt 加密貨幣',
+        field_mode: '收款模式',
+        bepusdtEmbedded: 'Sub2API 內置收款',
+        bepusdtExternal: '外接 BEpusdt 網關',
+        bepusdtEmbeddedHint: '在下方內置收款面板配置錢包地址、網絡節點和匯率，無需填寫網關地址或 API Token。用户在本站付款；請僅勾選已經配置收款錢包的網絡。',
+        collectionTitle: '內置加密貨幣收款：錢包、節點與匯率',
+        collectionHint: 'BEpusdt 引擎在 Sub2API 內運行。添加收款地址、設置節點與匯率後，創建“內置收款”服務商即可使用。這裏只需要公開收款地址。',
+        collectionError: '無法加載或保存收款設置。',
+        wallets: '收款錢包',
+        addWallet: '新增錢包',
+        walletName: '錢包名稱',
+        walletNetwork: '幣種與網絡',
+        walletAddress: '收款地址',
+        walletRemark: '備註',
+        noWallets: '添加收款錢包後即可開啓鏈上收款。',
+        deleteWalletConfirm: '確認刪除此收款錢包？存在待支付訂單的錢包不能刪除。',
+        nodes: '網絡節點與自動匯率同步',
+        nodesHint: '默認使用公共節點。Tron 填寫 gRPC 主機:端口，其餘網絡填寫 HTTP(S) RPC 地址。請為啓用的網絡配置可靠節點；API Key 留空保留原值。',
+        scanStatus: '鏈上掃描狀態',
+        scanHint: '有待收款訂單時掃描對應網絡。EVM 轉賬達到網絡確認深度後才完成支付；點擊刷新查看最近狀態。',
+        scanIdle: '暫無區塊掃描記錄。創建待支付訂單後，對應網絡開始掃描。',
+        scanBlock: '最近區塊',
+        scanSuccess: '掃描成功率',
+        scanHead: '節點最新區塊',
+        scanNeverSucceeded: '尚未成功掃描',
+        scanRetrying: '掃描異常，正在重試並補查',
+        usingFallback: '使用備用節點',
+        checkNodes: '檢測已保存節點',
+        nodeHealthy: '區塊與交易接口正常',
+        nodeUnavailable: '節點不可用，請檢查配置',
+        rateSource: 'CoinGecko 服務地址',
+        rateInterval: '匯率同步間隔（秒）',
+        rates: '兑換匯率',
+        syncRates: '立即同步匯率',
+        ratesHint: '匯率表示每個加密貨幣對應多少法幣。手動匯率用於新訂單，並會在下次自動同步時更新；已有訂單保持原匯率。',
+        coin: '加密貨幣',
+        fiat: '計價法幣',
+        manualRate: '手動匯率',
+        bepusdtHint: '先在 BEpusdt 後台配置對應網絡的收款錢包，再勾選本站開放的幣種和網絡。新建實例默認選擇 USDT (BEP20)。付款時打開 BEpusdt 收銀台查看轉賬地址和精確金額；訂單超時至少 2 分鐘，暫不支持在線退款。',
+        bepusdtApiBaseHint: '填寫 BEpusdt 服務根地址，例如 https://pay.example.com，不要包含 /api/v1/order/create-transaction。API Token 在 BEpusdt 後台「系統管理 → 基本設置 → API 設置 → 對接令牌」獲取。',
+        bepusdtCurrencyHint: '訂單計價法幣，BEpusdt 按其匯率換算為所選網絡的加密貨幣金額。CNY 通道的訂閲沿用本站訂閲匯率配置；實際轉賬金額以 BEpusdt 收銀台為準。',
         typeDisabled: '類型已禁用',
         enableTypesFirst: '請先在上方啟用至少一種服務商',
         easypayRedirect: '跳轉',
@@ -966,6 +1030,8 @@ export default {
         field_cid: '支付渠道 ID',
         field_cidAlipay: '支付寶渠道 ID',
         field_cidWxpay: '微信渠道 ID',
+        field_refundSuccessCode: '退款成功碼',
+        field_refundSuccessCodeHint: '按當前網關的退款接口文檔選擇成功碼。默認 1（如 ZPAY），僅在網關文檔規定時選擇 0。此設置隻影響退款，下單和查單仍要求成功碼為 1。',
         easypayCustomMethods: '易支付自定義支付方式',
         easypayCustomMethodsHint: '添加當前易支付服務商額外支持的支付方式。支付方式會記錄到 Sub2API 訂單中，上游 type 會作為易支付 type 參數提交。',
         addCustomMethod: '添加方式',
@@ -1038,6 +1104,15 @@ export default {
         refundEnabled: '允許退款',
         allowUserRefund: '允許用戶退款',
         enableConflict: '{method} 已有啟用中的服務商實例：{provider}。請先停用現有實例後再啟用或切換。',
+      },
+      balanceForecast: {
+        title: "餘額耗盡預測提醒",
+        description: "按最近 24 小時已結算的餘額消費估算剩餘時間；默認關閉，與金額提醒獨立。",
+        enabled: "啓用預測提醒",
+        threshold: "提前提醒（小時，最多 168）",
+        cap: "每個連續預警期通知上限（1–10）",
+        hint: "默認提前 12 小時、最多 3 次；每小時至多一輪。複用充值鏈接、已驗證通知郵箱和退訂偏好。低樣本或結算覆蓋不足時不發送；發送結果不確定也佔用額度。剩餘時長持續一小時高於閾值的 120% 後，才開始新的預警期。",
+        invalid: "預測提前時間須為 0–168 小時之間的正數，通知上限須為 1–10 的整數。",
       },
       balanceNotify: {
         title: '餘額不足提醒',
@@ -1205,6 +1280,25 @@ export default {
         thresholdWindowMinutesHint: '超時計數的時間窗口（1-60分鐘）',
         saved: '流超時設定儲存成功',
         saveFailed: '儲存流超時設定失敗'
+      },
+      openaiResponseHeaderTimeout: {
+        title: 'OpenAI 響應頭超時',
+        description:
+          '限制 OpenAI/Codex HTTP 上傳完成後的響應頭等待。超時後切到下一個帳號；第一次嘗試可能已在上游計費，成功請求會按 1:1 追加一次費用。已收到響應頭的正文流、原生上游 WebSocket 使用各自時限。',
+        enabled: '啟用響應頭超時',
+        enabledHint: '關閉後不設 OpenAI 專用響應頭超時（等價於 0）',
+        seconds: '超時時間（秒）',
+        secondsHint:
+          '範圍 1–600 秒，默認 20 秒。慢非流式響應及 SSE 響應頭可能在首 token 前超時；已收到響應頭的正文流、原生上游 WebSocket 使用各自時限。',
+        imageTitle: '生圖放寬分組',
+        imageHint:
+          '選中的分組裏，生圖和改圖請求按下面的時間等待，其他請求和其他分組仍按上面的超時。適合要等圖出完才返回的上游。',
+        imageGroups: '放寬的分組',
+        imageSeconds: '生圖超時時間（秒）',
+        imageSecondsHint: '範圍 1–600 秒，默認 180 秒。不大於上面的超時時間時不生效。',
+        saved: 'OpenAI 響應頭超時設置保存成功',
+        saveFailed: '保存 OpenAI 響應頭超時設置失敗',
+        loadFailed: '無法加載已保存的超時設置，請重新加載後編輯。'
       },
       rectifier: {
         title: '請求整流器',
@@ -1419,6 +1513,10 @@ export default {
         label: '向用戶展示快取率',
         description: '開啟後，用戶在自己的用量頁也能看到單條請求的快取率。預設關閉，僅管理端可見。',
       },
+      upstream_response_model_to_users: {
+        label: '向用戶展示上游實際響應模型',
+        description: '開啟后，用戶在用量記錄中可以看到上游響應里聲明的實際模型。默認關閉，僅管理端可見。不影響計費，也不會展示映射后的請求模型或帳號信息。',
+      },
       saveSettings: '儲存設定',
       saving: '儲存中...',
       settingsSaved: '設定儲存成功',
@@ -1428,25 +1526,7 @@ export default {
       failedToSave: '儲存設定失敗',
       failedToTestSmtp: 'SMTP 連接測試失敗',
       failedToSendTestEmail: '發送測試電郵失敗'
-    ,
-  ipRisk,
-  upstream_response_model_to_users: {
-        label: '向用戶展示上游實際響應模型',
-        description: '開啟后，用戶在用量記錄中可以看到上游響應里聲明的實際模型。默認關閉，僅管理端可見。不影響計費，也不會展示映射后的請求模型或帳號信息。',
-      },
-
-  "openaiResponseHeaderTimeout": {
-  "title": "OpenAI 響應頭超時",
-  "description": "限制 OpenAI/Codex HTTP 上傳完成後的響應頭等待。超時後切到下一個帳號；第一次嘗試可能已在上游計費，成功請求會按 1:1 追加一次費用。已收到響應頭的正文流、原生上游 WebSocket 使用各自時限。",
-  "enabled": "啟用響應頭超時",
-  "enabledHint": "關閉後不設 OpenAI 專用響應頭超時（等價於 0）",
-  "seconds": "超時時間（秒）",
-  "secondsHint": "範圍 1–600 秒，默認 20 秒。慢非流式響應及 SSE 響應頭可能在首 token 前超時；已收到響應頭的正文流、原生上游 WebSocket 使用各自時限。",
-  "saved": "OpenAI 響應頭超時設置保存成功",
-  "saveFailed": "保存 OpenAI 響應頭超時設置失敗",
-  "loadFailed": "無法加載已保存的超時設置，請重新加載後編輯。"
-}
-},
+    },
 
     // Error Passthrough Rules
     errorPassthrough: {
@@ -1525,7 +1605,7 @@ export default {
       failedToToggle: '切換狀態失敗'
     },
 
-    // TLS 指紋模板
+    // TLS 指纹模板
     tlsFingerprintProfiles: {
       title: 'TLS 指紋模板',
       description: '管理 TLS 指紋模板，用於模擬特定用戶端的 TLS 握手特徵',

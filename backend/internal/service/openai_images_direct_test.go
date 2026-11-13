@@ -18,7 +18,7 @@ func directImagesTestAccount() *Account {
 }
 
 func TestCodexDirectImagesRouting(t *testing.T) {
-	for _, model := range []string{"gpt-image-1.5", "gpt-image-2", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare-2026-09-08", "gpt-image-2.5-sunburst-2026-09-08"} {
+	for _, model := range []string{"gpt-image-1.5", "gpt-image-2", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst", "gpt-image-2.5-flare-2026-09-08", "gpt-image-2.5-sunburst-2026-09-08"} {
 		t.Run(model, func(t *testing.T) {
 			quality := "max"
 			if model == "gpt-image-2.5" {
@@ -93,9 +93,10 @@ func TestCodexDirectImagesHTTPErrorFallbacksOnlyWhenEndpointUnavailable(t *testi
 				if calls == 1 {
 					require.Equal(t, "/backend-api/codex/images/generations", req.URL.Path)
 					message := `{"error":{"type":"server_error","message":"image request rejected"}}`
-					if status == http.StatusNotFound {
+					switch status {
+					case http.StatusNotFound:
 						message = `{"detail":"Not Found"}`
-					} else if status == http.StatusMethodNotAllowed {
+					case http.StatusMethodNotAllowed:
 						message = `{"detail":"Method Not Allowed"}`
 					}
 					return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(message))}, nil

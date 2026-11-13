@@ -366,10 +366,11 @@ func TestExcelBPSIsolationNativeOnlyRequestsCannotFallback(t *testing.T) {
 		svc := openAIClientToolsTestService(upstream)
 		a := isolatedExcelAccount()
 		c, r := isolationForwardContext(16, "/v1/responses")
+		getAPIKeyFromContext(c).AllowLongContext = true
 		body := []byte(`{"model":"gpt-6-astra","input":"test",` + tools + `}`)
 		_, err := svc.Forward(context.Background(), c, a, body)
 		require.Error(t, err)
-		require.Equal(t, http.StatusBadRequest, r.Code)
+		require.Equal(t, http.StatusBadRequest, r.Code, "tools=%s error=%v body=%s", tools, err, r.Body.String())
 		require.Contains(t, r.Body.String(), "basispoints_native_fallback_disabled")
 		require.Empty(t, upstream.requests)
 		a.Extra[excelBPSCooldownTestKey] = time.Now().Add(time.Hour).UTC().Format(time.RFC3339)

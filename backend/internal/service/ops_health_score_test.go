@@ -9,17 +9,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestComputeDashboardHealthScore_IdleWithoutEvidenceIsUnknown(t *testing.T) {
+func TestDashboardHealthScore_IdleWithoutEvidenceIsUnknown(t *testing.T) {
 	t.Parallel()
 
 	ov := &OpsDashboardOverview{}
-	score := computeDashboardHealthScore(time.Now().UTC(), ov)
+	applyDashboardHealth(time.Now().UTC(), ov)
+	score := ov.HealthScore
 	require.Equal(t, 0, score)
 	require.Equal(t, "unknown", ov.HealthStatus)
 	require.False(t, ov.HealthScoreAvailable)
 }
 
-func TestComputeDashboardHealthScore_DegradesOnBadSignals(t *testing.T) {
+func TestDashboardHealthScore_DegradesOnBadSignals(t *testing.T) {
 	t.Parallel()
 
 	ov := &OpsDashboardOverview{
@@ -55,12 +56,13 @@ func TestComputeDashboardHealthScore_DegradesOnBadSignals(t *testing.T) {
 
 	ov.SystemMetrics.CreatedAt = time.Now().UTC()
 	ov.JobHealth = []OpsJobHealth{{JobName: "job-a", State: "failed"}}
-	score := computeDashboardHealthScore(time.Now().UTC(), ov)
+	applyDashboardHealth(time.Now().UTC(), ov)
+	score := ov.HealthScore
 	require.Less(t, score, 80)
 	require.GreaterOrEqual(t, score, 0)
 }
 
-func TestComputeDashboardHealthScore_Comprehensive(t *testing.T) {
+func TestDashboardHealthScore_Comprehensive(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -69,12 +71,6 @@ func TestComputeDashboardHealthScore_Comprehensive(t *testing.T) {
 		wantMin  int
 		wantMax  int
 	}{
-		{
-			name:     "nil overview returns 0",
-			overview: nil,
-			wantMin:  0,
-			wantMax:  0,
-		},
 		{
 			name: "perfect health",
 			overview: &OpsDashboardOverview{
@@ -235,16 +231,16 @@ func TestComputeDashboardHealthScore_Comprehensive(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			now := time.Now().UTC()
-			if ov := tt.overview; ov != nil {
-				ov.SystemMetrics.CreatedAt = now
-				ov.JobHealth = []OpsJobHealth{{JobName: "job-a", State: "healthy", EvaluatedAt: now}}
-				if ov.TTFT.P99 == nil {
-					ov.TTFT.P99 = intPtr(500)
-				}
-				ov.TTFT.SampleCount = int64Ptr(1000)
-				ov.TTFT.PercentileMethod = "raw_exact"
+			ov := tt.overview
+			ov.SystemMetrics.CreatedAt = now
+			ov.JobHealth = []OpsJobHealth{{JobName: "job-a", State: "healthy", EvaluatedAt: now}}
+			if ov.TTFT.P99 == nil {
+				ov.TTFT.P99 = intPtr(500)
 			}
-			score := computeDashboardHealthScore(now, tt.overview)
+			ov.TTFT.SampleCount = int64Ptr(1000)
+			ov.TTFT.PercentileMethod = "raw_exact"
+			applyDashboardHealth(now, ov)
+			score := ov.HealthScore
 			require.GreaterOrEqual(t, score, tt.wantMin, "score should be >= %d", tt.wantMin)
 			require.LessOrEqual(t, score, tt.wantMax, "score should be <= %d", tt.wantMax)
 			require.GreaterOrEqual(t, score, 0, "score must be >= 0")
@@ -352,16 +348,17 @@ func TestComputeBusinessHealth(t *testing.T) {
 	}
 }
 
-func TestComputeInfraHealth(t *testing.T) {
+func TestDashboardInfrastructureHealthDetails(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now().UTC()
 
 	tests := []struct {
-		name     string
-		overview *OpsDashboardOverview
-		wantMin  float64
-		wantMax  float64
+		name        string
+		overview    *OpsDashboardOverview
+		wantStorage float64
+		wantCompute float64
+		wantJobs    float64
 	}{
 		{
 			name: "all infrastructure healthy",
@@ -374,8 +371,9 @@ func TestComputeInfraHealth(t *testing.T) {
 					MemoryUsagePercent: float64Ptr(40),
 				},
 			},
-			wantMin: 100,
-			wantMax: 100,
+			wantStorage: 100,
+			wantCompute: 100,
+			wantJobs:    100,
 		},
 		{
 			name: "DB down",
@@ -388,8 +386,9 @@ func TestComputeInfraHealth(t *testing.T) {
 					MemoryUsagePercent: float64Ptr(40),
 				},
 			},
-			wantMin: 50,
-			wantMax: 70,
+			wantStorage: 0,
+			wantCompute: 100,
+			wantJobs:    100,
 		},
 		{
 			name: "Redis down",
@@ -402,8 +401,9 @@ func TestComputeInfraHealth(t *testing.T) {
 					MemoryUsagePercent: float64Ptr(40),
 				},
 			},
-			wantMin: 80,
-			wantMax: 95,
+			wantStorage: 50,
+			wantCompute: 100,
+			wantJobs:    100,
 		},
 		{
 			name: "CPU at 90%",
@@ -416,8 +416,9 @@ func TestComputeInfraHealth(t *testing.T) {
 					MemoryUsagePercent: float64Ptr(40),
 				},
 			},
-			wantMin: 85,
-			wantMax: 95,
+			wantStorage: 100,
+			wantCompute: 75,
+			wantJobs:    100,
 		},
 		{
 			name: "failed background job",
@@ -431,18 +432,29 @@ func TestComputeInfraHealth(t *testing.T) {
 				},
 				JobHealth: []OpsJobHealth{{JobName: "test-job", State: "failed"}},
 			},
-			wantMin: 70,
-			wantMax: 90,
+			wantStorage: 100,
+			wantCompute: 100,
+			wantJobs:    0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			score := computeInfraHealth(now, tt.overview)
-			require.GreaterOrEqual(t, score, tt.wantMin, "score should be >= %.1f", tt.wantMin)
-			require.LessOrEqual(t, score, tt.wantMax, "score should be <= %.1f", tt.wantMax)
-			require.GreaterOrEqual(t, score, 0.0, "score must be >= 0")
-			require.LessOrEqual(t, score, 100.0, "score must be <= 100")
+			tt.overview.SystemMetrics.CreatedAt = now
+			if len(tt.overview.JobHealth) == 0 {
+				tt.overview.JobHealth = []OpsJobHealth{{JobName: "test-job", State: "healthy", EvaluatedAt: now}}
+			}
+			applyDashboardHealth(now, tt.overview)
+			scores := make(map[string]float64)
+			for _, detail := range tt.overview.HealthScoreDetails {
+				scores[detail.Component] = detail.Score
+			}
+			require.Contains(t, scores, "storage")
+			require.Contains(t, scores, "compute")
+			require.Contains(t, scores, "jobs")
+			require.InDelta(t, tt.wantStorage, scores["storage"], 0.000001)
+			require.InDelta(t, tt.wantCompute, scores["compute"], 0.000001)
+			require.InDelta(t, tt.wantJobs, scores["jobs"], 0.000001)
 		})
 	}
 }

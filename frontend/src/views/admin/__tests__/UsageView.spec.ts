@@ -8,6 +8,9 @@ import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import UsageStatsCards from '@/components/admin/usage/UsageStatsCards.vue'
 import UsageCleanupDialog from '@/components/admin/usage/UsageCleanupDialog.vue'
 import ColumnSettings from '@/components/common/ColumnSettings.vue'
+import { usagePerMinute } from '@/utils/usageRate'
+
+vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ user: { id: 41 } }) }))
 
 vi.mock('@/components/admin/ConsoleObjectLinks.vue', () => ({ default: { template: '<nav />' } }))
 
@@ -484,6 +487,51 @@ describe('admin UsageView route filters', () => {
       flat: true,
       hideTitle: true,
     })
+    wrapper.unmount()
+  })
+
+  it('pairs RPM/TPM with the accepted stats range and hides stale scope while loading', async () => {
+    routeQuery.view = 'analysis'
+    const wrapper = mountRouteFilteredUsageView()
+    await flushPromises()
+    const cards = () => wrapper.findComponent(UsageStatsCards)
+    const vm = wrapper.vm as any
+    expect(cards().props('showRate')).toBe(true)
+    expect(cards().props('rateWindow')).toMatchObject({ start: vm.filters.start_date, end: vm.filters.end_date, now: expect.any(Number) })
+
+    let resolveStats!: (value: unknown) => void
+    getStats.mockReturnValueOnce(new Promise((resolve) => { resolveStats = resolve }))
+    vm.onDateRangeChange({ startDate: '2026-11-01', endDate: '2026-11-07', preset: null })
+    await flushPromises()
+    expect(getStats).toHaveBeenLastCalledWith(expect.objectContaining({ start_date: '2026-11-01', end_date: '2026-11-07' }))
+    expect(cards().exists()).toBe(false)
+
+    resolveStats({ total_requests: 10_080, total_tokens: 0, total_cost: 0, total_actual_cost: 0, average_duration_ms: 0 })
+    await flushPromises()
+    expect(cards().props('rateWindow')).toMatchObject({ start: '2026-11-01', end: '2026-11-07' })
+    wrapper.unmount()
+  })
+
+  it.each([
+    { startDate: '', endDate: '2026-11-07' },
+    { startDate: '2026-11-01', endDate: '' },
+    { startDate: '', endDate: '' },
+  ])('rejects incomplete admin date ranges without requesting mismatched rate statistics: %j', async (dates) => {
+    routeQuery.view = 'analysis'
+    const wrapper = mountRouteFilteredUsageView(true)
+    await flushPromises()
+    const previousWindow = wrapper.findComponent(UsageStatsCards).props('rateWindow')
+    getStats.mockClear()
+    const picker = wrapper.findComponent(DateRangePicker)
+    await picker.get('.date-picker-trigger').trigger('click')
+    const inputs = picker.findAll('.date-picker-input')
+    await inputs[0].setValue(dates.startDate)
+    await inputs[1].setValue(dates.endDate)
+    expect(picker.get('.date-picker-apply').attributes('disabled')).toBeDefined()
+    await picker.get('.date-picker-apply').trigger('click')
+    await flushPromises()
+    expect(getStats).not.toHaveBeenCalled()
+    expect(wrapper.findComponent(UsageStatsCards).props('rateWindow')).toEqual(previousWindow)
     wrapper.unmount()
   })
 
@@ -1136,17 +1184,91 @@ describe('observer own usage view', () => {
     own.listErrors.mockResolvedValue({ items: [], total: 0 })
   })
   afterEach(() => { vi.useRealTimers() })
-  const mountObserver = () => mount(UsageView, {
+  const mountObserver = (realDatePickerAndCards = false) => mount(UsageView, {
     props: { observerMode: true },
     global: { stubs: {
-      AppLayout: AppLayoutStub, UsageStatsCards: true, UsageFilters: UsageFiltersStub,
+      AppLayout: AppLayoutStub, UsageStatsCards: !realDatePickerAndCards, UsageFilters: UsageFiltersStub,
       UsageTable: UsageTableStub, UsageExportProgress: true, UsageCleanupDialog: true,
-      UserBalanceHistoryModal: true, Pagination: true, Select: true, DateRangePicker: true,
+      UserBalanceHistoryModal: true, Pagination: true, Select: true, DateRangePicker: !realDatePickerAndCards,
       Icon: true, TokenUsageTrend: true, ModelDistributionChart: true, GroupDistributionChart: true,
       EndpointDistributionChart: true, UserTokenRanking: true, OpsErrorLogTable: true, OpsErrorDetailModal: true,
       LatencyObservabilityPanel: LatencyObservabilityPanelStub,
     } },
   })
+  it.each([
+    { startDate: '', endDate: '2026-11-05', start: '2026-11-03', end: '2026-11-05', minutes: 4320 },
+    { startDate: '2026-11-04', endDate: '', start: '2026-11-04', end: '2026-11-10', minutes: 9030 },
+    { startDate: '', endDate: '', start: '2026-11-03', end: '2026-11-10', minutes: 10470 },
+  ])('rejects incomplete observer date ranges while retaining the applied range: %j', async ({ startDate, endDate }) => {
+    routeQuery.view = 'analysis'
+    const wrapper = mountObserver(true)
+    await flushPromises()
+    const previousWindow = wrapper.findComponent(UsageStatsCards).props('rateWindow')
+    own.getStats.mockClear()
+    const picker = wrapper.findComponent(DateRangePicker)
+    await picker.get('.date-picker-trigger').trigger('click')
+    const inputs = picker.findAll('.date-picker-input')
+    await inputs[0].setValue(startDate)
+    await inputs[1].setValue(endDate)
+    expect(picker.get('.date-picker-apply').attributes('disabled')).toBeDefined()
+    await picker.get('.date-picker-apply').trigger('click')
+    await flushPromises()
+    expect(own.getStats).not.toHaveBeenCalled()
+    expect(wrapper.findComponent(UsageStatsCards).props('rateWindow')).toEqual(previousWindow)
+    wrapper.unmount()
+  })
+
+  it('hides old-scope stats while pending or failed and discards out-of-order responses', async () => {
+    const now = new Date(2026, 10, 10, 6, 30)
+    vi.setSystemTime(now)
+    routeQuery.view = 'analysis'
+    const wrapper = mountObserver()
+    await flushPromises()
+    const cards = () => wrapper.findComponent(UsageStatsCards)
+    let resolveA!: (stats: unknown) => void
+    let resolveB!: (stats: unknown) => void
+    own.getStats.mockReturnValueOnce(new Promise(resolve => { resolveA = resolve }))
+    own.getStats.mockReturnValueOnce(new Promise(resolve => { resolveB = resolve }))
+
+    ;(wrapper.vm as any).onDateRangeChange({ startDate: '2026-11-03', endDate: '2026-11-05', preset: null })
+    await flushPromises()
+    expect(own.getStats).toHaveBeenLastCalledWith(expect.objectContaining({ start_date: '2026-11-03', end_date: '2026-11-05' }))
+    expect(cards().exists()).toBe(false)
+
+    const newerNow = new Date(2026, 10, 11, 7)
+    vi.setSystemTime(newerNow)
+    ;(wrapper.vm as any).onDateRangeChange({ startDate: '2026-11-04', endDate: '2026-11-11', preset: null })
+    await flushPromises()
+    expect(own.getStats).toHaveBeenLastCalledWith(expect.objectContaining({ start_date: '2026-11-04', end_date: '2026-11-11' }))
+    expect(cards().exists()).toBe(false)
+
+    const newerStats = { total_requests: 21000, total_tokens: 42000 }
+    const newerWindow = { start: '2026-11-04', end: '2026-11-11', now: newerNow.getTime() }
+    vi.setSystemTime(new Date(2026, 10, 12, 8))
+    resolveB(newerStats)
+    await flushPromises()
+    expect(cards().props('stats')).toEqual(newerStats)
+    expect(cards().props('rateWindow')).toEqual(newerWindow)
+    expect(usagePerMinute(cards().props('stats')!.total_requests, cards().props('rateWindow'))).toBe(2)
+
+    resolveA({ total_requests: 4320, total_tokens: 432000 })
+    await flushPromises()
+    expect(cards().props('stats')).toEqual(newerStats)
+    expect(cards().props('rateWindow')).toEqual(newerWindow)
+
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      own.getStats.mockRejectedValueOnce(new Error('fixture stats unavailable'))
+      ;(wrapper.vm as any).onDateRangeChange({ startDate: '2026-11-05', endDate: '2026-11-12', preset: null })
+      await flushPromises()
+      expect(consoleError).toHaveBeenCalled()
+      expect(cards().exists()).toBe(false)
+    } finally {
+      consoleError.mockRestore()
+      wrapper.unmount()
+    }
+  })
+
   it('uses own APIs for filters, charts and export, without admin actions', async () => {
     routeQuery.user_id = '999'
     const wrapper = mountObserver()

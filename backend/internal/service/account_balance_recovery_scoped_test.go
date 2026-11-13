@@ -54,7 +54,7 @@ func TestBalanceRecoveryScopedReadAndRecoveryStayWithinScope(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			db, m, err := sqlmock.New()
 			require.NoError(t, err)
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 			client := dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))
 			r := &balanceRecoveryScopedRepo{account: &Account{ID: 194, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, GroupIDs: []int64{18}, Schedulable: false}}
 			s := &adminServiceImpl{accountRepo: r, entClient: client}

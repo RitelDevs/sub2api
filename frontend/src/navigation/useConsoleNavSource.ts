@@ -1,3 +1,4 @@
+import { filterSmartOpsSidebar } from '@/utils/smartOpsSidebar'
 import { getCustomMenuLabel } from '@/utils/customMenu'
 import { centralAccountEnabled } from '@/utils/accountConfig'
 import { computed, inject, onMounted, provide, watch, type ComputedRef, type InjectionKey } from 'vue'
@@ -180,6 +181,7 @@ export function provideConsoleNav() {
         { path: '/admin/account-quality', label: t('qualityOps.title'), icon: QualityOpsIcon },
         { path: '/admin/account-ops', label: t('accountOps.title'), icon: AccountOpsIcon },
         { path: '/admin/token-guard-v2', label: t('tokenGuardV2.title'), icon: CredentialOpsIcon },
+        { path: '/admin/ai-ops', label: t('aiOps.title'), icon: SmartOpsIcon, featureFlag: () => authStore.isAdmin },
         { path: '/admin/harvest-flow', label: t('nav.harvestFlow'), icon: FlowIcon },
       ] },
       { path: '/admin/plugins', label: t('nav.plugins'), icon: PluginIcon, featureFlag: flagPluginManagement },
@@ -231,7 +233,7 @@ export function provideConsoleNav() {
     ]
 
     return [
-      ...finalizeNav(baseItems),
+      ...filterSmartOpsSidebar(finalizeNav(baseItems), adminSettingsStore.smartOpsHiddenMenuItems),
       { path: '/admin/settings', label: t('nav.settings'), icon: CogIcon },
       ...customMenuItemsForAdmin.value.map((item): NavItem => ({
         path: `/custom/${item.id}`,

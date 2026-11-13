@@ -163,6 +163,7 @@ import AdminRetailOrderAmounts from '@/components/admin/payment/AdminRetailOrder
 import OrderStatusBadge from '@/components/payment/OrderStatusBadge.vue'
 import OrderTable from '@/components/payment/OrderTable.vue'
 import { currencySymbol } from '@/components/payment/currency'
+import { BEPUSDT_TRADE_TYPES } from '@/components/payment/providerConfig'
 
 import { hasOrderPayment, summarizeOrderAuditLog, formatAuditDetail, type OrderAuditLog } from '@/components/admin/payment/adminOrderDetail'
 
@@ -238,6 +239,7 @@ const statusFilterOptions = computed(() => [
 
 const paymentTypeFilterOptions = computed(() => [
   { value: 'gelv_alipay', label: t('gelv.alipayName') },
+  ...BEPUSDT_TRADE_TYPES,
   { value: '', label: t('payment.admin.allPaymentTypes') },
   { value: 'alipay', label: t('payment.methods.alipay') },
   { value: 'wxpay', label: t('payment.methods.wxpay') },

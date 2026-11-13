@@ -162,6 +162,7 @@ func TestDashboardHealthEvidenceAndLegacyWeights(t *testing.T) {
 		})
 	}
 	empty := &OpsDashboardOverview{}
-	require.Equal(t, 0, computeDashboardHealthScore(now, empty))
+	applyDashboardHealth(now, empty)
+	require.Equal(t, 0, empty.HealthScore)
 	require.Equal(t, "unknown", empty.HealthStatus)
 }

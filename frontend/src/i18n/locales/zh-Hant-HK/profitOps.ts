@@ -36,7 +36,7 @@ export default {
   "asc": "升序",
   "apply": "應用篩選",
   "last24h": "近24小時",
-  "loading": "讀取中…",
+  "loading": "正在彙總，請稍候；數據較多時可能需要幾分鐘。",
   "queried": "讀取時間",
   "summary": "篩選範圍合計",
   "requests": "請求記錄數",
@@ -80,7 +80,14 @@ export default {
   "errorNote": "留存錯誤日誌僅表示當前帳號集合中的診斷記錄，排除 count_tokens；不是完整請求失敗率。5xx 不能證明降智。僅列前 20 個錯誤分類。",
   "errorRecords": "日誌條數",
   "queryFailed": "查詢失敗，請重試；未將失敗顯示為零。",
-  "invalidRange": "請選擇不超過31天、結束晚於開始的有效時間範圍。",
-
-  "entityScope": "當前顯式渠道 ID"
+  "invalidRange": "請選擇不超過32天、結束晚於開始的有效時間範圍。",
+  "entityScope": "當前顯式渠道 ID",
+  "today": "今天",
+  "yesterday": "昨天",
+  "thisWeek": "本週",
+  "lastWeek": "上週",
+  "last48h": "近48小時",
+  "thisMonth": "本月",
+  "lastMonth": "上月",
+  "queryTimeout": "本次統計耗時過長，未能完成，請稍後重試；未將失敗顯示為零。"
 }

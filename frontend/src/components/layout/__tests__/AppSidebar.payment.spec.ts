@@ -28,7 +28,7 @@ let appState: {
   siteVersion: string
   setMobileOpen: (value: boolean) => void
 }
-let adminState: { paymentEnabled: boolean; customMenuItems: CustomMenuItem[]; fetch: typeof mocks.fetchAdminSettings }
+let adminState: { smartOpsHiddenMenuItems: string[]; paymentEnabled: boolean; customMenuItems: CustomMenuItem[]; fetch: typeof mocks.fetchAdminSettings }
 const route = reactive({ path: '/admin/dashboard', query: {} as Record<string, string> })
 vi.mock('@/navigation/useConsoleNavSource', async importOriginal => {
   const actual = await importOriginal<typeof import('@/navigation/useConsoleNavSource')>()
@@ -106,7 +106,7 @@ beforeEach(() => {
     setMobileOpen(value: boolean) { this.mobileOpen = value },
     backendModeEnabled: false, docUrl: '', siteVersion: 'test',
   })
-  adminState = reactive({ paymentEnabled: false, customMenuItems: [], fetch: mocks.fetchAdminSettings })
+  adminState = reactive({ smartOpsHiddenMenuItems: [], paymentEnabled: false, customMenuItems: [], fetch: mocks.fetchAdminSettings })
   route.path = '/admin/dashboard'
   route.query = {}
 })

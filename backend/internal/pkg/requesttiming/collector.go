@@ -40,7 +40,9 @@ type Attempt struct {
 	Events           map[string]float64  `json:"events"`
 }
 type Snapshot struct {
-	Operation         *OperationSummary  `json:"operation,omitempty"`
+	Operation            *OperationSummary `json:"operation,omitempty"`
+	FinalResponseAttempt int               `json:"final_response_attempt,omitempty"`
+
 	WSTurns           []WSTurnTiming     `json:"ws_turns,omitempty"`
 	ProtocolDecision  *ProtocolDecision  `json:"protocol_decision,omitempty"`
 	Latency           *LatencySummary    `json:"latency,omitempty"`
@@ -149,6 +151,9 @@ func Output(ctx context.Context, semantic, visible bool, terminal string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.finished {
+		return
+	}
+	if tr, ok := ctx.Value(attemptKey{}).(*Trace); ok && tr.c == c && tr.logicalResponse && c.data.Attempts[tr.index].EndMS != nil {
 		return
 	}
 	now := c.now()

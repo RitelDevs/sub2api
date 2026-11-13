@@ -67,7 +67,9 @@ func TestMultiGroupModelsUnionAndRetrieve(t *testing.T) {
 			require.NoError(t, json.Unmarshal(body[field], &entries))
 			ids := make([]string, 0, len(entries))
 			for _, entry := range entries {
-				ids = append(ids, entry[idField].(string))
+				id, ok := entry[idField].(string)
+				require.True(t, ok)
+				ids = append(ids, id)
 			}
 			require.Equal(t, []string{"a", "b", "shared"}, ids)
 			// Shared is retained from the second group, including its provider metadata.

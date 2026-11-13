@@ -12,6 +12,17 @@ export default {
     moveColumn: '移動{column}欄',
     columnKeyboard: '使用上下方向鍵移動此欄，Home 及 End 移至首尾。',
 
+    qwenPlatformHint: 'Qwen 使用 OpenAI 兼容接口，按獨立平台統計。已有 OpenAI 賬號和分組不會自動遷移。',
+    qwenCache: {
+      title: 'Qwen 緩存與會話',
+      enable: '開啓官方 Responses 會話緩存',
+      cacheHint: '啓用後使用 Responses 轉發並開啓上游會話緩存；客户端需通過 previous_response_id 續接。緩存寫入可能計費，命中以實際用量為準。關閉後沿用原協議設置。',
+      strict: '嚴格保持會話粘性',
+      strictHint: '需要穩定的 session_id 或 prompt_cache_key。同一會話固定賬號；滿載等待，重試失敗返回錯誤，不切到其他渠道。綁定到期後可重新分配。',
+      tokenPlan: '使用 Token Plan 地址',
+      payg: '使用官方按量付費地址',
+      endpointHint: '按鈕替換當前接入地址；API Key 必須與套餐地址配套。已有 OpenAI 賬號不會自動遷移。'
+    },
     loading: '載入中...',
     submitting: '提交中...',
     justNow: '剛剛',
@@ -41,6 +52,8 @@ export default {
       noResults: '未找到匹配功能，請嘗試其他名稱或關鍵詞',
       hint: '↑ ↓ 選擇 · Enter 打開 · Esc 關閉'
     },
+    newFeature: '新功能',
+    dismissNewFeature: '隱藏此新功能提示',
     filter: '篩選',
     export: '導出',
     import: '導入',
@@ -74,6 +87,8 @@ export default {
     close: '關閉',
     toggleMenu: '切換菜單',
     userMenu: '用戶菜單',
+    userId: '用户 ID',
+    copyUserId: '複製用户 ID：{id}',
     pageNotFound: '頁面不存在',
     enabled: '已啟用',
     disabled: '已禁用',
@@ -144,10 +159,7 @@ export default {
         withSuffix: '{time} 後解除'
       }
     }
-  ,
-  "newFeature": "新功能",
-  "dismissNewFeature": "隱藏此新功能提示"
-},
+  },
 
   adminCompliance: {
     title: '部署與運營合規確認',
@@ -290,6 +302,7 @@ export default {
     registrationFailed: '註冊失敗，請重試。',
     emailDomainRegistrationLimit:
       '該電郵域名無法註冊新帳戶。請使用主流電郵註冊；如需使用企業電郵，請聯繫客服添加域名白名單。',
+    emailAliasNotAllowed: '不支持使用郵箱別名注冊，請去掉 Gmail 用戶名中的點號、+標簽或域名末尾的點號后重試。',
     emailSuffixNotAllowed: '該電郵域名不在允許註冊範圍內。',
     emailSuffixNotAllowedWithAllowed: '該電郵域名不被允許。可用域名：{suffixes}',
     emailSuffixAllowedMore: '等 {count} 項',
@@ -338,7 +351,7 @@ export default {
     promoCodeValidating: '優惠碼正在驗證中，請稍候',
     promoCodeInvalidCannotRegister: '優惠碼無效，請檢查後重試或清空優惠碼',
     invitationCodeLabel: '邀請碼',
-    affiliateSignupBonusHint: '通過有效邀請碼註冊，即贈 \u0024{amount} 初始餘額。',
+    affiliateSignupBonusHint: '通過有效邀請碼註冊，即贈 ${amount} 初始餘額。',
     invitationCodePlaceholder: '請輸入邀請碼',
     invitationCodeRequired: '請輸入邀請碼',
     invitationCodeValid: '邀請碼有效',
@@ -457,7 +470,7 @@ export default {
       state: '狀態',
       fullUrl: '完整URL'
     },
-    // 忘記密碼
+    // 忘记密码
     forgotPassword: '忘記密碼？',
     forgotPasswordTitle: '重置密碼',
     forgotPasswordHint: '輸入您的電郵地址，我們將向您發送密碼重置連結。',
@@ -469,7 +482,7 @@ export default {
       '如果該電郵已註冊，您將很快收到密碼重置連結。請檢查您的收件箱和垃圾電郵文件夾。',
     backToLogin: '返回登入',
     rememberedPassword: '想起密碼了？',
-    // 重置密碼
+    // 重置密码
     resetPasswordTitle: '設定新密碼',
     resetPasswordHint: '請在下方輸入您的新密碼。',
     newPassword: '新密碼',
@@ -487,11 +500,9 @@ export default {
     invalidResetLinkHint: '此密碼重置連結無效或已過期。請重新請求一個新連結。',
     requestNewResetLink: '請求新的重置連結',
     invalidOrExpiredToken: '密碼重置連結無效或已過期。請重新請求一個新連結。'
-  ,
-  emailAliasNotAllowed: '不支持使用郵箱別名注冊，請去掉 Gmail 用戶名中的點號、+標簽或域名末尾的點號后重試。',
-},
+  },
 
-  // Step-up（敏感操作二次驗證）
+  // Step-up（敏感操作二次验证）
   stepUp: {
     title: '需要二次驗證',
     hint: '請輸入身份驗證器應用中的 6 位驗證碼以繼續此敏感操作。',

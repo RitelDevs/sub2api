@@ -26,6 +26,8 @@ export default {
       output: '輸出',
       cacheToday: '今日快取',
       performance: '性能指標',
+      accountConcurrency: '賬號併發',
+      accountConcurrencyHint: '全站賬號當前佔用的併發槽位總數，加載頁面或點擊刷新時更新；讀取不可用時顯示 —。',
       avgResponse: '平均響應',
       averageTime: '平均時間',
       active: '活躍',
@@ -696,7 +698,7 @@ export default {
       allowedGroupsUpdated: '允許分組更新成功',
       failedToLoadGroups: '載入分組列表失敗',
       failedToUpdateAllowedGroups: '更新允許分組失敗',
-      // 用戶分組配置
+      // 用户分组配置
       groupConfig: '用戶分組配置',
       groupConfigHint: '為用戶 {email} 配置專屬分組倍率（覆蓋分組預設倍率）',
       exclusiveGroups: '專屬分組',
@@ -736,11 +738,11 @@ export default {
       failedToDeposit: '充值失敗',
       failedToWithdraw: '退款失敗',
       useDepositWithdrawButtons: '請使用充值/退款按鈕調整餘額',
-      // 餘額變動記錄
+      // 余额变动记录
       balanceHistory: '充值記錄',
       balanceHistoryTip: '點擊查看充值記錄',
       columnAlwaysVisible: '該列固定顯示，不可隱藏',
-      // 平台用量明細（懸浮顯示）
+      // 平台用量明细（悬浮显示）
       platformBreakdown: '按平台拆分',
       platformBreakdownEmpty: '暫無平台明細',
       platformBreakdownHint: '懸浮查看各平台用量',
@@ -862,6 +864,23 @@ export default {
 
     // Groups Management
     groups: {
+      antiDistillation: {
+        title: 'OpenAI 防蒸餾保護（零緩存規則）',
+        enable: '啓用本 OpenAI 分組的保護',
+        rule: '同一客户跨 API Key、跨已開啓的 OpenAI 分組，最近 20 條完整成功且緩存統計明確的有效文本請求中，至少 18 條緩存讀取為 0 時，暫停該客户在已開啓分組的新請求，並異步通知其賬號郵箱。未知緩存統計不計入。',
+        signalHint: '零緩存僅是保護信號，不代表已認定蒸餾。正常的新會話和無緩存場景也可能觸發。',
+        pauseMinutes: '暫停請求時長（分鐘）',
+        minutesHint: '可設置 1–1440 分鐘，默認 5 分鐘；由觸發保護的分組決定，已開始的暫停不會續期。',
+        invalidMinutes: '請輸入 1–1440 之間的整數。',
+        scopeHint: '僅影響已開啓保護分組的新請求；現有流式響應繼續完成。未開啓的分組不受此保護限制，也不會自動轉入更高價格的分組。',
+        saveHint: '本項單獨保存，最多 10 秒生效；無需點擊底部的分組保存按鈕。關閉保護後，本分組按配置生效時間恢復放行。',
+        createHint: '默認關閉。請先創建分組，再進入“編輯分組”單獨配置並保存防蒸餾保護。',
+        save: '保存防蒸餾設置',
+        saved: '防蒸餾設置已保存，最多 10 秒生效',
+        loadFailed: '防蒸餾設置加載失敗；重新加載成功前不能保存，避免覆蓋原配置。',
+        saveFailed: '防蒸餾設置保存失敗，請重試。',
+        retry: '重新加載',
+      },
       title: '分組管理',
       description: '管理 API 密鑰分組和費率配置',
       searchGroups: '搜索分組...',
@@ -1113,6 +1132,7 @@ export default {
         description: '配置圖片生成能力和圖片基礎單價，留空則使用預設價格',
         allowImageGeneration: '允許當前分組生圖',
         allowBatchImageGeneration: '允許當前分組批量生圖',
+        perImageBilling: '圖片端點按張計費（顯式 Token 定價優先）',
         independentMultiplier: '生圖倍率獨立',
         imageMultiplier: '生圖獨立倍率',
         batchDiscountMultiplier: '批量生圖折扣倍率',
@@ -1122,8 +1142,7 @@ export default {
         batchGeminiOnlyHint: '批量生圖當前僅支持 Gemini 分組。',
         modeHint: '預設關閉獨立倍率時，圖片費用 = 圖片價格 × 當前分組有效倍率；開啟獨立倍率後，圖片費用 = 圖片價格 × 生圖獨立倍率。',
         finalPricePreview: '最終單張價格預覽',
-        notConfigured: '未配置',
-        "perImageBilling": "圖片端點按張計費（顯式 Token 定價優先）",
+        notConfigured: '未配置'
       },
       videoPricing: {
         h3Enable: '開啟 MiniMax-H3 視頻模型',

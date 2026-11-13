@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -25,7 +26,7 @@ func TestMinuteRangeAllInnerCacheKeys(t *testing.T) {
 		end, err := time.Parse(time.RFC3339Nano, endText)
 		require.NoError(t, err)
 		// Seed the nanosecond key; a truncated key would miss and invoke the nil service.
-		trendKey := mustMarshalDashboardCacheKey(dashboardTrendCacheKey{StartTime: startText, EndTime: endText, Granularity: "hour"})
+		trendKey := mustMarshalDashboardCacheKey(dashboardTrendCacheKey{Timezone: timezone.UserTimezone(ctx), StartTime: startText, EndTime: endText, Granularity: "hour"})
 		dashboardTrendCache.Set(trendKey, []usagestats.TrendDataPoint{})
 		_, hit, err := h.getUsageTrendCached(ctx, start, end, "hour", 0, 0, 0, 0, "", nil, nil, nil, nil, nil)
 		require.NoError(t, err)
@@ -43,12 +44,12 @@ func TestMinuteRangeAllInnerCacheKeys(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, hit)
 
-		entityKey := mustMarshalDashboardCacheKey(dashboardEntityTrendCacheKey{StartTime: startText, EndTime: endText, Granularity: "hour", Limit: 12})
+		entityKey := mustMarshalDashboardCacheKey(dashboardEntityTrendCacheKey{Timezone: timezone.UserTimezone(ctx), StartTime: startText, EndTime: endText, Granularity: "hour", Limit: 12})
 		dashboardAPIKeysTrendCache.Set(entityKey, []usagestats.APIKeyUsageTrendPoint{})
 		_, hit, err = h.getAPIKeyUsageTrendCached(ctx, start, end, "hour", 12)
 		require.NoError(t, err)
 		require.True(t, hit)
-		userEntityKey := mustMarshalDashboardCacheKey(dashboardEntityTrendCacheKey{StartTime: startText, EndTime: endText, Granularity: "hour", Limit: 12, Metric: "tokens"})
+		userEntityKey := mustMarshalDashboardCacheKey(dashboardEntityTrendCacheKey{Timezone: timezone.UserTimezone(ctx), StartTime: startText, EndTime: endText, Granularity: "hour", Limit: 12, Metric: "tokens"})
 		dashboardUsersTrendCache.Set(userEntityKey, []usagestats.UserUsageTrendPoint{})
 		_, hit, err = h.getUserUsageTrendCached(ctx, start, end, "hour", 12, "tokens")
 		require.NoError(t, err)

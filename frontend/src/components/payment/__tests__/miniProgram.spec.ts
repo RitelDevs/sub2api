@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia } from 'pinia'
 import { isMiniProgramImage } from '../miniProgramImage'
 import { isRetailQuote } from '../retailQuote'
 import { decidePaymentLaunch, normalizeVisibleMethod } from '../paymentFlow'
@@ -8,7 +9,10 @@ import AmountInput from '../AmountInput.vue'
 import OrderTable from '../OrderTable.vue'
 import type { PaymentOrder, RetailQuote } from '@/types/payment'
 
-vi.mock('vue-i18n', () => ({ useI18n: () => ({ locale: { value: 'en' }, t: (key: string) => key }) }))
+vi.mock('vue-i18n', async (importOriginal) => ({
+  ...await importOriginal<typeof import('vue-i18n')>(),
+  useI18n: () => ({ locale: { value: 'en' }, t: (key: string) => key }),
+}))
 const image = 'data:image/png;base64,iVBORw0KGgo='
 const quote: RetailQuote = {
   pricing_mode: 'gelv_channel_cny', pricing_basis_currency: 'CNY', base_amount_cny: 8.8,
@@ -28,7 +32,7 @@ function renderOrder(amount: number, paid = true, retailQuote: RetailQuote = quo
     paid_at: paid ? '2026-10-15T20:42:25Z' : undefined,
     refund_amount: 0, retail_quote: retailQuote,
   }
-  return mount(OrderTable, { props: { orders: [order], loading: false }, global: { stubs: {
+  return mount(OrderTable, { props: { orders: [order], loading: false }, global: { plugins: [createPinia()], stubs: {
     DataTable: { props: ['data'], template: '<div v-for="row in data" :key="row.id"><slot name="cell-pay_amount" :row="row" :value="row.pay_amount" /></div>' },
   } } })
 }
@@ -75,7 +79,7 @@ describe('shared mini-program products', () => {
   })
   it.each([9.9, 8.8])('shows paid cash and actual credit without an invented CNY principal for %s credits', amount => {
     const wrapper = renderOrder(amount)
-    expect(wrapper.text()).toContain('¥10.00 CNY')
+    expect(wrapper.text()).toContain('¥10.00')
     expect(wrapper.text()).toContain('payment.orders.actualCredited: $' + amount.toFixed(2))
     expect(wrapper.text()).not.toContain('paymentRetail.principalCNY')
     expect(wrapper.text()).not.toContain('¥8.80')
@@ -93,7 +97,7 @@ describe('shared mini-program products', () => {
     const wrapper = renderOrder(50, true, { ...quote, pricing_mode: undefined, credit_by_channel: undefined, credited_amount_usd: 50, base_amount_cny: 50,
       base_amount_gbp: 5.64, included_cost_gbp: 0.5, total_amount_gbp: 6.14, pay_amount: 6.14, currency: 'GBP' })
     expect(wrapper.text()).toContain('payment.orders.actualCredited: $50.00')
-    expect(wrapper.text()).toContain('£6.14 GBP')
+    expect(wrapper.text()).toContain('£6.14')
     expect(wrapper.text()).not.toMatch(/principalCNY|includedCost|totalGBP/)
     wrapper.unmount()
   })

@@ -147,6 +147,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	// 读取请求体
 	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
 	if err != nil {
+		if middleware2.RejectRequestBodyReadError(c, err) {
+			return
+		}
 		if maxErr, ok := extractMaxBytesError(err); ok {
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
@@ -1191,6 +1194,14 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	}
 
 	if groups, ok := middleware2.GetAPIKeyModelDiscoveryGroups(c); ok {
+		if apiKey != nil && apiKey.ConcurrencyLimit > 0 {
+			var err error
+			groups, err = middleware2.RefreshModelListingGroups(c)
+			if err != nil {
+				writeOpenAIModelsError(c, http.StatusServiceUnavailable, "api_error", "Model listing authorization changed; please retry")
+				return
+			}
+		}
 		h.multiGroupModels(c, groups, false)
 		return
 	}
@@ -1216,13 +1227,13 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		availableModels := h.compositeAvailableModels(c.Request.Context(), groupID, "")
 		if apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
 			source := availableModels
-			if len(source) == 0 {
+			if source == nil {
 				source = service.DefaultModelIDsForPlatform(service.PlatformComposite)
 			}
 			writeAllowlistedModelsList(c, service.PlatformComposite, apiKey.Group.ModelAllowlist.FilterForListing(source))
 			return
 		}
-		if len(availableModels) > 0 {
+		if availableModels != nil {
 			writeModelsList(c, service.PlatformComposite, availableModels)
 			return
 		}
@@ -1242,7 +1253,7 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		return
 	}
 
-	if len(availableModels) > 0 || (platform == service.PlatformOpenAI && availableModels != nil) {
+	if availableModels != nil {
 		writeModelsList(c, platform, availableModels)
 		return
 	}
@@ -1325,12 +1336,12 @@ func (h *GatewayHandler) codexModelIDsForGroup(ctx context.Context, group *servi
 		fallbackModels := defaultCodexModelIDsForPlatform(service.PlatformComposite)
 		if group.ModelAllowlistEnabled() {
 			source := availableModels
-			if len(source) == 0 {
+			if source == nil {
 				source = fallbackModels
 			}
 			return group.ModelAllowlist.FilterForListing(source)
 		}
-		if len(availableModels) > 0 {
+		if availableModels != nil {
 			return availableModels
 		}
 		return fallbackModels
@@ -1341,7 +1352,7 @@ func (h *GatewayHandler) codexModelIDsForGroup(ctx context.Context, group *servi
 	if group.ModelAllowlistEnabled() {
 		return group.ModelAllowlist.FilterForListing(service.ModelListingSource(platform, availableModels, fallbackModels))
 	}
-	if len(availableModels) > 0 {
+	if availableModels != nil {
 		return availableModels
 	}
 	return fallbackModels
@@ -1357,7 +1368,7 @@ func (h *GatewayHandler) compositeAvailableModelsForDiscovery(ctx context.Contex
 		return nil, nil
 	}
 	seen := make(map[string]struct{})
-	models := make([]string, 0)
+	var models []string
 	schedulablePlatforms, err := h.gatewayService.GetSchedulablePlatformsForDiscovery(ctx, groupID)
 	if strict && err != nil {
 		return nil, err
@@ -1370,7 +1381,10 @@ func (h *GatewayHandler) compositeAvailableModelsForDiscovery(ctx context.Contex
 		if strict && err != nil {
 			return nil, err
 		}
-		if len(platformModels) == 0 && (platform != service.PlatformOpenAI || platformModels == nil) {
+		if platformModels != nil && models == nil {
+			models = []string{}
+		}
+		if platformModels == nil {
 			// CN 供应商没有静态默认模型列表（service.DefaultModelIDsForPlatform 的
 			// default 分支是 Claude 列表），composite 下只暴露账号映射键。
 			if _, ok := schedulablePlatforms[platform]; ok && !service.IsMultiProtocolAPIKeyProvider(platform) {
@@ -1512,7 +1526,7 @@ func writeGrokModelsList(c *gin.Context, modelIDs []string) {
 	writeModelsListResponse(c, grokModelsListEntries(modelIDs))
 }
 
-func grokModelsListEntries(modelIDs []string) any {
+func grokModelsListEntries(modelIDs []string) []grokModelListItem {
 	defaults := xai.DefaultModels()
 	defaultsByID := make(map[string]xai.Model, len(defaults))
 	for _, model := range defaults {
@@ -1563,7 +1577,7 @@ func writeOpenAIModelsList(c *gin.Context, modelIDs []string) {
 	writeModelsListResponse(c, openAIModelsListEntries(modelIDs))
 }
 
-func openAIModelsListEntries(modelIDs []string) any {
+func openAIModelsListEntries(modelIDs []string) []openai.Model {
 	defaultsByID := make(map[string]openai.Model, len(openai.DefaultModels))
 	for _, model := range openai.DefaultModels {
 		defaultsByID[model.ID] = model
@@ -2213,6 +2227,9 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	// 读取请求体
 	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
 	if err != nil {
+		if middleware2.RejectRequestBodyReadError(c, err) {
+			return
+		}
 		if maxErr, ok := extractMaxBytesError(err); ok {
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return

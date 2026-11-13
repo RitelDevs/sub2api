@@ -56,7 +56,7 @@
           <span class="sidebar-label">{{ tab.label }}</span>
           <span v-if="tabBadge(tab)" class="sidebar-nav-badge" data-testid="sidebar-nav-badge">{{ formatNavBadge(tabBadge(tab)) }}</span>
         </router-link>
-        <NewFeatureBadge v-if="tab.path === '/admin/settings'" :notice-id="NEW_FEATURE_NOTICES.protocolFeatureSwitches" :user-id="authStore.user?.id" />
+        <NewFeatureBadge v-for="noticeId in tabNoticeIds(tab)" :key="noticeId" :notice-id="noticeId" :user-id="authStore.user?.id" />
         </div>
       </section>
       <div v-if="workspace === 'personal'" class="console-drawer-section">
@@ -84,7 +84,7 @@ import ThemeSwitcher from '@/components/common/ThemeSwitcher.vue'
 import { sanitizeUrl } from '@/utils/url'
 import { sanitizeSvg } from '@/utils/sanitize'
 import { BRAND_LOGO, BRAND_NAME, splitBrandName } from '@/utils/branding'
-import { consoleProductLinks, tabBadge } from '@/navigation/consoleNavigation'
+import { consoleProductLinks, tabBadge, type ConsoleTab } from '@/navigation/consoleNavigation'
 import { formatNavBadge } from '@/utils/consoleShellUi'
 import { useConsoleNav } from '@/navigation/useConsoleNavSource'
 
@@ -95,6 +95,20 @@ const {
   navText, workspace, workspaceOptions, sections, activeLocation,
   switchWorkspace, handleNavigate,
 } = useConsoleNav()
+
+const tabNotices: Record<string, string> = {
+  '/admin/settings': NEW_FEATURE_NOTICES.protocolFeatureSwitches,
+  '/admin/ai-ops': NEW_FEATURE_NOTICES.aiOpsCodex,
+  '/admin/auto-config': NEW_FEATURE_NOTICES.oauthInitialModelSelection,
+  '/admin/account-quality': NEW_FEATURE_NOTICES.qualityRetestRest,
+}
+
+function tabNoticeIds(tab: ConsoleTab): string[] {
+  return (tab.children ?? [tab]).flatMap(item => {
+    const noticeId = tabNotices[item.path]
+    return noticeId ? [noticeId] : []
+  })
+}
 
 const sidebarRef = ref<HTMLElement | null>(null)
 const mobileOpen = computed(() => appStore.mobileOpen)

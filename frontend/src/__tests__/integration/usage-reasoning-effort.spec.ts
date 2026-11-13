@@ -2,10 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, ref } from 'vue'
 const actualLocale = ref('en')
+import { createPinia } from 'pinia'
 
 import UserUsageView from '@/views/user/UsageView.vue'
 import AdminUsageView from '@/views/admin/UsageView.vue'
 import ColumnSettings from '@/components/common/ColumnSettings.vue'
+
+vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ user: { id: 41 } }) }))
 
 const {
   userQuery,
@@ -242,6 +245,7 @@ function reasoningCellText(wrapper: ReturnType<typeof mount>): string {
 function mountAdminUsage() {
   return mount(AdminUsageView, {
     global: {
+      plugins: [createPinia()],
       stubs: {
         ...sharedPageStubs,
         UsageFilters: adminFiltersStub,

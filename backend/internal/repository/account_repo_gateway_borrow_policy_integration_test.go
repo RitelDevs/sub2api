@@ -121,7 +121,9 @@ func TestGatewayBorrowPolicyRepositoryAtomicMergeAndGates(t *testing.T) {
 			}
 			before["extra"], after["extra"] = nil, nil
 			before["updated_at"], after["updated_at"] = nil, nil
-			require.Equal(t, before, after, "only owned JSON and updated_at may change")
+			require.Equal(t, before["ai_ops_revision"].(float64)+1, after["ai_ops_revision"], "configuration write advances the AI operations revision")
+			before["ai_ops_revision"], after["ai_ops_revision"] = nil, nil
+			require.Equal(t, before, after, "only owned JSON, updated_at and the configuration revision may change")
 			require.Equal(t, outboxBefore+1, nativeRateLimitOutboxCount(t, ctx, repo))
 			require.Len(t, cache.snapshots, 1)
 			require.Equal(t, []any{"gpt-6-astra"}, cache.snapshots[0].Extra[service.GatewayBorrowModelsKey])

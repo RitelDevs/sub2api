@@ -124,6 +124,7 @@ export const SETTINGS_SECTION_FIELDS: Record<SettingsTab, readonly string[]> = {
     "wechat_connect_scopes"
   ],
   "gateway": [
+    "openai_409_omit_encrypted_history_enabled",
     "prism_browser_base_url",
     "prism_browser_api_key",
     "prism_browser_enabled",
@@ -225,6 +226,7 @@ export const SETTINGS_SECTION_FIELDS: Record<SettingsTab, readonly string[]> = {
     "login_agreement_documents"
   ],
   "features": [
+    "smart_ops_hidden_menu_items",
     "excel_bps_enabled",
     "prism_browser_enabled",
     "payment_enabled",
@@ -318,6 +320,9 @@ export const SETTINGS_SECTION_FIELDS: Record<SettingsTab, readonly string[]> = {
     "balance_retail_fx_max_age_hours"
   ],
   "email": [
+    "balance_forecast_enabled",
+    "balance_forecast_threshold_hours",
+    "balance_forecast_max_notifications",
     "email_verify_enabled",
     "smtp_host",
     "smtp_port",

@@ -58,7 +58,7 @@ func (r *usageLogRepository) ObservedOperationSummary(ctx context.Context, f ser
 		out.Status = "unavailable"
 		return out
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var outcome string
 		var count, recovered int64

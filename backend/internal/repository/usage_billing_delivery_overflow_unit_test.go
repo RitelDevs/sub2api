@@ -8,6 +8,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -80,6 +81,11 @@ func expectDurableOverflowCharge(mock sqlmock.Sqlmock, cmd service.UsageBillingC
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectQuery(conditionalBalanceDeductSQL).WithArgs(cmd.BalanceCost, cmd.UserID).
 		WillReturnRows(sqlmock.NewRows([]string{"balance"}).AddRow(balance))
+	mock.ExpectQuery("SELECT balance::text,status FROM users").WithArgs(cmd.UserID).
+		WillReturnRows(sqlmock.NewRows([]string{"balance", "status"}).AddRow(fmt.Sprintf("%.8f", balance), "active"))
+	mock.ExpectQuery("UPDATE auto_credit_config SET debit_epoch").
+		WithArgs(cmd.UserID, fmt.Sprintf("usage:%d:%s", cmd.APIKeyID, cmd.RequestID)).
+		WillReturnRows(sqlmock.NewRows([]string{"debit_epoch"}))
 }
 
 func expectDurableOverflowEnqueue(mock sqlmock.Sqlmock, cmd service.UsageBillingCommand, balance float64) *sqlmock.ExpectedExec {

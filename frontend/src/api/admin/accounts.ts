@@ -43,6 +43,14 @@ import type {
   OpenCodeGoUsageState
 } from '@/types'
 
+/** Current account slots in use, independent of dashboard history and ops settings. */
+export async function getConcurrencySummary(): Promise<{ current_concurrency: number }> {
+  const { data } = await apiClient.get<{ current_concurrency: number }>(
+    '/admin/accounts/concurrency-summary'
+  )
+  return data
+}
+
 /**
  * List all accounts with pagination
  * @param page - Page number (default: 1)
@@ -661,6 +669,15 @@ export interface SyncUpstreamModelsResult {
   warnings?: UpstreamModelSyncWarning[]
   discovery_source?: 'upstream' | 'configured_fallback'
   grok_model_diagnostics?: GrokModelDiagnostics
+  applied?: boolean
+  changed?: boolean
+  skipped?: string
+  next_sync_at?: string
+}
+
+export interface SyncUpstreamModelsOptions {
+  apply?: boolean
+  automatic?: boolean
 }
 
 export interface UpstreamModelSyncWarning {
@@ -686,8 +703,12 @@ export interface UpstreamModelMetadata {
  * @param id - Account ID
  * @returns List of model IDs returned by the upstream
  */
-export async function syncUpstreamModels(id: number): Promise<SyncUpstreamModelsResult> {
-  const { data } = await apiClient.post<SyncUpstreamModelsResult>(`/admin/accounts/${id}/models/sync-upstream`)
+export async function syncUpstreamModels(
+  id: number,
+  options?: SyncUpstreamModelsOptions,
+  request?: { signal?: AbortSignal }
+): Promise<SyncUpstreamModelsResult> {
+  const { data } = await apiClient.post<SyncUpstreamModelsResult>(`/admin/accounts/${id}/models/sync-upstream`, options, request)
   return data
 }
 
@@ -817,9 +838,10 @@ export async function importData(payload: {
   return data
 }
 
-export async function importCodexSession(payload: CodexSessionImportRequest): Promise<CodexSessionImportResult> {
+export async function importCodexSession(payload: CodexSessionImportRequest, options?: { signal?: AbortSignal }): Promise<CodexSessionImportResult> {
   const { data } = await apiClient.post<CodexSessionImportResult>('/admin/accounts/import/codex-session', payload, {
-    timeout: 120000 // 120s timeout for large session imports
+    timeout: 120000, // 120s timeout for large session imports
+    signal: options?.signal
   })
   return data
 }
@@ -1486,6 +1508,7 @@ export async function getOpenAIRequestTimezones(): Promise<{ default: string; ti
 }
 
 export const accountsAPI = {
+  getConcurrencySummary,
  getPerformance, savePerformance, releasePerformance, getPerformanceEvents,
   getOpenAIRequestTimezones,
   list,

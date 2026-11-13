@@ -52,6 +52,7 @@
           <p>{{ sourceLabel(selected.record.source) }} · {{ selected.record.modelId || '—' }} / {{ selected.record.reasoningEffort || '—' }} · {{ duration(selected.record.durationMs) }}</p>
           <p class="text-xs">{{ formatDate(selected.record.startedAt) }}</p>
         </div>
+        <PelicanQuestionSnapshot :question="selected.record.pelicanQuestion" :actual-prompt="selected.record.actualPrompt" />
         <div data-testid="record-detail" class="flex min-h-0 flex-1 flex-col">
           <iframe v-if="selected.record.html" :srcdoc="selected.record.html" class="h-[70vh] w-full border-0" sandbox="allow-scripts" referrerpolicy="no-referrer" :title="selected.account.name" />
           <p v-else-if="!selected.loaded && !selected.loadError" class="py-4">{{ t('common.loading') }}...</p>
@@ -68,6 +69,7 @@ import { formatTimestamp as displayTimestamp } from '@/utils/consoleDisplay'
 import { centralAccountEnabled } from '@/utils/accountConfig'
 import { centralSessionUID } from '@/utils/centralAccount'
 import AppHeading from '@/components/common/AppHeading.vue'
+import PelicanQuestionSnapshot from './PelicanQuestionSnapshot.vue'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import { useI18n } from 'vue-i18n'
@@ -75,7 +77,7 @@ import { scheduledTestsAPI } from '@/api/admin/scheduledTests'
 import type { PelicanHistoryResult } from '@/api/admin/scheduledTests'
 import { extractPelicanHtml } from '@/utils/pelicanHtml'
 import { isTextAnswerKind, stateProbeVerdict, type StateProbeVerdict } from '@/utils/intelligenceTest'
-import type { Account, AccountListItem, PelicanTestConfig, ScheduledTestResult } from '@/types'
+import type { Account, AccountListItem, PelicanQuestion, PelicanTestConfig, ScheduledTestResult } from '@/types'
 
 interface ManualRun {
   id?: string
@@ -90,6 +92,9 @@ interface ManualRun {
   questionKind?: PelicanTestConfig['question_kind']
 }
 interface ManualRecord {
+  pelicanQuestion?: PelicanQuestion
+  actualPrompt?: string
+  prompt?: string
   id?: string
   createdAt: string
   modelId: string
@@ -98,6 +103,8 @@ interface ManualRecord {
   runs: ManualRun[]
 }
 interface DisplayRecord {
+  pelicanQuestion?: PelicanQuestion
+  actualPrompt?: string
   source: 'manual' | 'scheduled'
   startedAt?: string
   durationMs?: number
@@ -190,6 +197,7 @@ function manualCards(server: PelicanHistoryResult[]): Card[] {
         const output = run.output || run.html || ''
         const html = isTextAnswerKind(run.questionKind || record.questionKind) ? '' : extractPelicanHtml(output)
         results.set(key, { key, account, loaded: true, record: {
+          pelicanQuestion: record.pelicanQuestion, actualPrompt: record.actualPrompt || record.prompt,
           source: 'manual', startedAt: run.startedAt || record.createdAt, durationMs: run.durationMs,
           modelId: run.modelId || record.modelId, reasoningEffort: run.reasoningEffort || record.reasoningEffort,
           status: run.status || (html ? 'success' : 'error'), html, output, error: run.error || ''
@@ -200,7 +208,7 @@ function manualCards(server: PelicanHistoryResult[]): Card[] {
   return [...results.values()]
 }
 function serverRecord(result: ScheduledTestResult): DisplayRecord {
-  return { source: 'scheduled', startedAt: result.started_at, durationMs: result.latency_ms,
+  return { pelicanQuestion: result.pelican_config?.pelican_question, actualPrompt: result.pelican_config?.actual_prompt || result.pelican_config?.prompt, source: 'scheduled', startedAt: result.started_at, durationMs: result.latency_ms,
     modelId: result.pelican_config?.model_id, reasoningEffort: result.pelican_config?.reasoning_effort,
     status: result.status, verdict: stateProbeVerdict(result) ?? undefined, output: result.response_text || '',
     html: isTextAnswerKind(result.pelican_config?.question_kind) ? '' : extractPelicanHtml(result.response_text || ''), error: result.error_message }

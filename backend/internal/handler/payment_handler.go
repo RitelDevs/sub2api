@@ -225,6 +225,7 @@ func (h *PaymentHandler) GetLimits(c *gin.Context) {
 // CreateOrderRequest is the request body for creating a payment order.
 type CreateOrderRequest struct {
 	QuoteToken        string  `json:"quote_token"`
+	PaymentSubtype    string  `json:"payment_subtype,omitempty"`
 	Amount            float64 `json:"amount"`
 	PaymentType       string  `json:"payment_type" binding:"required"`
 	OpenID            string  `json:"openid"`
@@ -297,6 +298,7 @@ func (h *PaymentHandler) CreateOrder(c *gin.Context) {
 		UserID:          subject.UserID,
 		Amount:          req.Amount,
 		PaymentType:     req.PaymentType,
+		PaymentSubtype:  req.PaymentSubtype,
 		OpenID:          req.OpenID,
 		ClientIP:        c.ClientIP(),
 		IsMobile:        mobile,
@@ -541,6 +543,7 @@ type PublicOrderResult struct {
 	RefundRequestReason         *string              `json:"refund_request_reason,omitempty"`
 	PlanID                      *int64               `json:"plan_id,omitempty"`
 	RenewalMode                 string               `json:"renewal_mode,omitempty"`
+	PaymentSubtype              string               `json:"payment_subtype,omitempty"`
 }
 
 // PublicOrderVerifyResult is returned by the legacy anonymous out_trade_no
@@ -584,6 +587,7 @@ func buildPublicOrderResult(order *dbent.PaymentOrder) PublicOrderResult {
 		RefundRequestReason:         order.RefundRequestReason,
 		PlanID:                      order.PlanID,
 		RenewalMode:                 order.SubscriptionRenewalMode,
+		PaymentSubtype:              service.PaymentOrderSubtype(order),
 	}
 }
 
@@ -702,6 +706,7 @@ type PaymentOrderResult struct {
 	PlanID                      *int64               `json:"plan_id,omitempty"`
 	ProviderInstanceID          *string              `json:"provider_instance_id,omitempty"`
 	RenewalMode                 string               `json:"renewal_mode,omitempty"`
+	PaymentSubtype              string               `json:"payment_subtype,omitempty"`
 }
 
 func sanitizePaymentOrdersForResponse(orders []*dbent.PaymentOrder) []PaymentOrderResult {
@@ -746,6 +751,7 @@ func sanitizePaymentOrderForResponse(order *dbent.PaymentOrder) *PaymentOrderRes
 		PlanID:                      order.PlanID,
 		RenewalMode:                 order.SubscriptionRenewalMode,
 		ProviderInstanceID:          order.ProviderInstanceID,
+		PaymentSubtype:              service.PaymentOrderSubtype(order),
 	}
 }
 

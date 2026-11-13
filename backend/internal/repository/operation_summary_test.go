@@ -22,7 +22,7 @@ func TestOperationSummaryUsesOnlyPhysicalVersionedSamples(t *testing.T) {
 	require.True(t, strings.Index(connectionStateSQL, "operation") < strings.Index(connectionStateSQL, "downstream_error"))
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := newUsageLogRepositoryWithSQL(nil, db)
 	mock.ExpectQuery("SELECT COALESCE").WithArgs(f.Start, f.End, int64(7)).WillReturnRows(sqlmock.NewRows([]string{"outcome", "count", "recovered"}).AddRow("completed", 2, 1).AddRow("unknown", 1, 0))
 	got := repo.ObservedOperationSummary(context.Background(), f)

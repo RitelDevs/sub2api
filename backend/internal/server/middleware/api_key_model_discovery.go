@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -54,7 +56,7 @@ func isAPIKeyModelDiscoveryRequest(c *gin.Context) bool {
 // finishAPIKeyModelDiscoveryAuth bypasses group billing only after all candidate
 // permissions resolved successfully. Catalogue reads still enforce key limits,
 // even in simple mode, and never perform subscription maintenance or admission.
-func finishAPIKeyModelDiscoveryAuth(c *gin.Context, key *service.APIKey, google bool) bool {
+func finishAPIKeyModelDiscoveryAuth(c *gin.Context, key *service.APIKey, google bool, keys *service.APIKeyService, cfg *config.Config) bool {
 	if _, ok := GetAPIKeyModelDiscoveryGroups(c); !ok {
 		return false
 	}
@@ -77,7 +79,7 @@ func finishAPIKeyModelDiscoveryAuth(c *gin.Context, key *service.APIKey, google 
 		c.Set(string(ContextKeyUser), AuthSubject{UserID: key.User.ID, Concurrency: key.User.Concurrency})
 		c.Set(string(ContextKeyUserRole), key.User.Role)
 		setGroupContext(c, key.Group)
-		c.Next()
+		nextWithAPIKeyAdmissionOwner(c, keys, key.Key, ip.GetSecurityClientIP(c, cfg.TrustForwardedIPForAPIKeyACL()), key, google)
 	}
 	return true
 }

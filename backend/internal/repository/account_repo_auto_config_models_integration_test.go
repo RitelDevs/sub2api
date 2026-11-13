@@ -72,7 +72,9 @@ func TestAutoConfigModelRepositoryPreservesRefreshAndCAS(t *testing.T) {
 			delete(before["credentials"].(map[string]any), "model_mapping")
 			delete(after["credentials"].(map[string]any), "model_mapping")
 			before["updated_at"], after["updated_at"] = nil, nil
-			require.Equal(t, before, after, "only model_mapping and updated_at may change")
+			require.Equal(t, before["ai_ops_revision"].(float64)+1, after["ai_ops_revision"], "configuration write advances the AI operations revision")
+			before["ai_ops_revision"], after["ai_ops_revision"] = nil, nil
+			require.Equal(t, before, after, "only model_mapping, updated_at and the configuration revision may change")
 			require.Equal(t, outbox+1, nativeRateLimitOutboxCount(t, ctx, repo))
 			again, err := repo.ReconcileOAuthAccountModels(ctx, observed, desired)
 			require.NoError(t, err)

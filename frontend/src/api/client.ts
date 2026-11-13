@@ -34,6 +34,7 @@ export const apiClient: AxiosInstance = axios.create({
 
 apiClient.interceptors.request.use(
   async (config: InternalAxiosRequestConfig) => {
+    const requestURL = String(config.url || '')
     // Central builds use BFF cookies; legacy builds retain browser bearer auth.
     if (centralAccountEnabled) {
       await waitForCentralRequest(apiClient.getUri(config), config.method)
@@ -52,16 +53,16 @@ apiClient.interceptors.request.use(
       config.headers['Accept-Language'] = getLocale()
     }
 
-    // Read-only batch statistics use POST too. Carry the viewer zone on every
-    // request without changing payloads or explicit policy timezone fields.
-    if (config.params instanceof URLSearchParams) {
-      if (!config.params.has('timezone')) config.params.set('timezone', browserTimezone())
-    } else {
-      config.params = { ...config.params, timezone: config.params?.timezone || browserTimezone() }
+    // AI operations rejects query parameters. Keep viewer-zone support for other APIs.
+    if (!/^\/admin\/ops\/ai(?:\/|$)/.test(String(config.url || ''))) {
+      if (config.params instanceof URLSearchParams) {
+        if (!config.params.has('timezone')) config.params.set('timezone', browserTimezone())
+      } else {
+        config.params = { ...config.params, timezone: config.params?.timezone || browserTimezone() }
+      }
     }
 
     if (config.headers) {
-      const requestURL = String(config.url || '')
       if (shouldMarkAdminUIRequest(requestURL)) {
         config.headers[ADMIN_UI_REQUEST_HEADER] = '1'
       }

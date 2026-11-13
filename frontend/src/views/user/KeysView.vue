@@ -3,6 +3,7 @@
     <TablePageLayout open>
       <template #filters>
         <div class="keys-filters flex flex-col gap-3">
+          <UserKeyRiskNotices />
           <div class="flex flex-wrap items-center gap-3">
             <SearchInput :label="t('keys.searchPlaceholder')"
               v-model="filterSearch"
@@ -48,6 +49,21 @@
                 @toggle="toggleColumn"
                 @reorder="setColumnOrder"
                 @reset="resetColumns"
+              />
+            </div>
+            <div class="relative flex flex-wrap items-center gap-2" data-test="key-usage-date-range">
+              <span class="text-sm text-gray-600 dark:text-gray-300">{{ t('keys.usageDateRange') }}</span>
+              <DateRangePicker
+                class="key-usage-range-picker"
+                :start-date="usageStartDate"
+                :end-date="usageEndDate"
+                :show-last24-hours="false"
+                @change="onUsageDateRangeChange"
+              />
+              <NewFeatureBadge
+                v-if="authStore.isAdmin"
+                :notice-id="NEW_FEATURE_NOTICES.apiKeyUsageDateRange"
+                :user-id="authStore.user?.id"
               />
             </div>
           </div>
@@ -147,7 +163,8 @@
           </template>
 
           <template #cell-usage="{ row }">
-            <span class="keys-quota-used" :title="t('keys.today')" data-testid="key-today-usage">{{ usageStats[row.id] ? '$' + formatDisplayAmount(usageStats[row.id].today_actual_cost, 2) : '—' }}</span>
+            <span v-if="pendingUsageIds.has(row.id) && !usageStats[row.id]" data-test="usage-pending" class="inline-block h-3 w-14 animate-pulse rounded bg-gray-200 dark:bg-dark-600" />
+            <span v-else class="keys-quota-used" :title="t('keys.today')" data-testid="key-today-usage">{{ usageStats[row.id] ? '$' + formatDisplayAmount(usageStats[row.id].today_actual_cost, 2) : '—' }}</span>
           </template>
 
           <template #cell-rate_limit="{ row }">
@@ -300,8 +317,8 @@
                 /><div v-if="(row.group_ids?.length ?? 0) > 1" class="keys-extra-groups">{{ (row.group_ids ?? []).map((id: number) => groups.find(group => group.id === id)?.name || '#' + id).join(' · ') }}</div></section>
               <section><AppHeading variant="subsection" as="h3">{{ t('keys.usage') }}</AppHeading>
                 <dl class="keys-usage-details">
-                  <div><dt>{{ kw.recordedTotal }}</dt><dd data-testid="key-total-usage">{{ usageStats[row.id] ? '$' + formatDisplayAmount(usageStats[row.id].total_actual_cost, 2) : '—' }}</dd></div>
-                  <div><dt>{{ t('keys.quota') }}</dt><dd>${{ (row.quota_used ?? 0).toFixed(4) }} / {{ row.quota > 0 ? '$' + row.quota.toFixed(2) : kw.unlimited }}</dd></div>
+                  <div><dt>{{ usagePreset === '30days' ? kw.recordedTotal : t('keys.selectedPeriod') }}</dt><dd data-testid="key-total-usage">{{ formatUsageCost(row.id, 'total_actual_cost') }}</dd></div>
+                  <div><dt>{{ t('keys.quota') }}</dt><dd class="key-quota-values flex flex-wrap gap-x-1"><span class="key-usage-amount break-all">${{ (row.quota_used ?? 0).toFixed(4) }}</span><span>/</span><span class="key-usage-amount break-all">{{ row.quota > 0 ? '$' + row.quota.toFixed(2) : kw.unlimited }}</span></dd></div>
                 </dl>
               </section>
             </div>
@@ -490,6 +507,18 @@
             :options="statusOptions"
             :placeholder="t('keys.selectStatus')"
           />
+        </div>
+
+        <div v-if="showEditModal && authStore.isAdmin" class="rounded-xl border border-gray-200 p-4 dark:border-dark-600">
+          <div class="flex items-center gap-2">
+            <button type="button" class="btn btn-secondary" data-test="edit-key-model-policy" @click="showModelPolicy = true">
+              {{ t('apiKeyModelPolicy.title') }}
+            </button>
+            <NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.apiKeyModelPolicy" :user-id="authStore.user?.id" />
+            <NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.apiKeyLongContext" :user-id="authStore.user?.id" compact />
+            <NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.apiKeyContextTokenLimit" :user-id="authStore.user?.id" compact />
+          </div>
+          <p class="mt-2 text-sm text-gray-500 dark:text-dark-300">{{ t('apiKeyModelPolicy.scopeHint') }}</p>
         </div>
 
         <!-- IP Restriction Section -->
@@ -891,6 +920,14 @@
       @updated="handleBulkUpdated"
     />
 
+    <ApiKeyModelPolicyDialog
+      v-if="authStore.isAdmin"
+      :show="showModelPolicy && showEditModal"
+      :api-key="selectedKey"
+      @close="showModelPolicy = false"
+      @updated="handleModelPolicyUpdated"
+    />
+
     <!-- Delete Confirmation Dialog -->
     <ConfirmDialog :busy="handleDeleteAction.busy.value"
       :show="showDeleteDialog"
@@ -1059,6 +1096,7 @@ const fieldLabelScope = useFieldLabelId()
 import Toggle from '@/components/common/Toggle.vue'
 import AppHeading from '@/components/common/AppHeading.vue'
 	import { ref, computed, watch, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
+import UserKeyRiskNotices from '@/features/ip-audit/UserKeyRiskNotices.vue'
 	import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { useKeyConnectionCopy } from '@/components/keys/keyConnectionCopy'
@@ -1082,6 +1120,11 @@ import BulkEditKeysModal from '@/components/keys/BulkEditKeysModal.vue'
 	import KeyWorkspaceTable from '@/components/keys/KeyWorkspaceTable.vue'
 	import InfiniteListSentinel from '@/components/common/InfiniteListSentinel.vue'
 import DocumentRows from '@/components/common/DocumentRows.vue'
+import ApiKeyModelPolicyDialog from '@/components/admin/user/ApiKeyModelPolicyDialog.vue'
+import { useAuthStore } from '@/stores/auth'
+import NewFeatureBadge from '@/components/common/NewFeatureBadge.vue'
+import DateRangePicker from '@/components/common/DateRangePicker.vue'
+import { NEW_FEATURE_NOTICES } from '@/constants/newFeatureNotices'
 	import BaseDialog from '@/components/common/BaseDialog.vue'
 	import { useConfirmedAction } from '@/composables/useConfirmation'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -1097,7 +1140,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 	import type { ApiKey, ApiKeyConcurrencySnapshot, Group, PublicSettings, SubscriptionType, GroupPlatform, UpdateApiKeyRequest } from '@/types'
 import type { Column } from '@/components/common/types'
 import type { BatchApiKeyUsageStats } from '@/api/usage'
-import { formatDateTime } from '@/utils/format'
+import { formatDateTime, formatDateLocalInput, getBrowserTimeZone } from '@/utils/format'
 import { maskApiKey } from '@/utils/maskApiKey'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import { platformBadgeLightClass } from '@/utils/platformColors'
@@ -1126,6 +1169,7 @@ interface GroupOption {
 }
 
 const appStore = useAppStore()
+const authStore = useAuthStore()
 const { copyToClipboard: clipboardCopy } = useClipboard()
 
 const allColumns = computed<Column[]>(() => [
@@ -1195,6 +1239,27 @@ const submitting = ref(false)
 const now = ref(new Date())
 let resetTimer: ReturnType<typeof setInterval> | null = null
 const usageStats = ref<Record<string, BatchApiKeyUsageStats>>({})
+const pendingUsageIds = ref(new Set<number>())
+const defaultUsageEnd = new Date()
+const defaultUsageStart = new Date(defaultUsageEnd)
+defaultUsageStart.setDate(defaultUsageStart.getDate() - 29)
+const usageEndDate = ref(formatDateLocalInput(defaultUsageEnd))
+const usageStartDate = ref(formatDateLocalInput(defaultUsageStart))
+const usagePreset = ref<string | null>('30days')
+const formatUsageCost = (keyID: number, field: 'today_actual_cost' | 'total_actual_cost') => {
+  if (!usageStats.value[keyID]) return '—'
+  return '$' + formatDisplayAmount(usageStats.value[keyID][field], 4)
+}
+const onUsageDateRangeChange = (range: { startDate: string; endDate: string; preset: string | null }) => {
+  if (!range.startDate || !range.endDate || range.startDate > range.endDate) {
+    appStore.showError(t('keys.invalidUsageDateRange'))
+    return
+  }
+  usageStartDate.value = range.startDate
+  usageEndDate.value = range.endDate
+  usagePreset.value = range.preset
+  void resetApiKeys()
+}
 const userGroupRates = ref<Record<number, number>>({})
 
 // Policy and counts always belong to one completed refresh, never to editable key data.
@@ -1297,6 +1362,7 @@ const filterGroupId = ref<string | number>('')
 
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
+const showModelPolicy = ref(false)
 const showDeleteDialog = ref(false)
 const showResetQuotaDialog = ref(false)
 const showResetRateLimitDialog = ref(false)
@@ -1529,12 +1595,20 @@ const {
       sort_order: sortState.value.sort_order,
     }, { signal })
     if (response.items.length && !signal.aborted) {
-      try {
-        const stats = await usageAPI.getDashboardApiKeysUsage(response.items.map(key => key.id), { signal })
+      const keyIds = response.items.map(key => key.id)
+      for (const id of keyIds) pendingUsageIds.value.add(id)
+      void usageAPI.getDashboardApiKeysUsage(keyIds, {
+        signal, start_date: usageStartDate.value, end_date: usageEndDate.value, timezone: getBrowserTimeZone()
+      }).then(stats => {
         if (!signal.aborted) usageStats.value = { ...usageStats.value, ...stats.stats }
-      } catch (error) {
-        if (!isAbortError(error)) console.error('Failed to load usage stats:', error)
-      }
+      }).catch(error => {
+        if (!signal.aborted && !isAbortError(error)) {
+          console.error('Failed to load usage stats:', error)
+          appStore.showError(t('keys.failedToLoadUsage'))
+        }
+      }).finally(() => {
+        if (!signal.aborted) for (const id of keyIds) pendingUsageIds.value.delete(id)
+      })
     }
     return response
   },
@@ -1551,6 +1625,7 @@ async function updateKeyList(load: () => Promise<void>) {
 }
 const loadApiKeys = () => updateKeyList(refreshKeys)
 const resetApiKeys = () => {
+  pendingUsageIds.value.clear()
   usageStats.value = {}
   return updateKeyList(resetKeys)
 }
@@ -1740,6 +1815,13 @@ const editKey = (key: ApiKey) => {
     expiration_date: key.expires_at ? formatDateTimeLocal(key.expires_at) : ''
   }
   showEditModal.value = true
+}
+
+const handleModelPolicyUpdated = (key: ApiKey) => {
+  // Preserve unsaved name/group edits in the main key form.
+  if (selectedKey.value?.id === key.id) selectedKey.value = key
+  const index = apiKeys.value.findIndex(item => item.id === key.id)
+  if (index !== -1) apiKeys.value[index] = key
 }
 
 const toggleKeyStatus = async (key: ApiKey) => {
@@ -1950,6 +2032,7 @@ function handleDelete() {
 }
 
 const closeModals = () => {
+  showModelPolicy.value = false
   showCreateModal.value = false
   showEditModal.value = false
   selectedKey.value = null

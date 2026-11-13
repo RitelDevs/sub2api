@@ -315,6 +315,8 @@ func TestDeepSeekRecoveryHandlersPreserveInputAndCancellation(t *testing.T) {
 				return 200, deepSeekSuccess()
 			}}
 			h, c, rec, _ := deepSeekHandlerFixture(t, "chat", u)
+			key, _ := middleware2.GetAPIKeyFromContext(c)
+			key.AllowLongContext = true
 			ctx, stop := context.WithCancel(c.Request.Context())
 			cancel = stop
 			defer stop()

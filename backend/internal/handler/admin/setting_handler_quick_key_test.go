@@ -23,7 +23,9 @@ func TestSettingsQuickKeyDefaultsRoundTrip(t *testing.T) {
 	require.Equal(t, cfg, public.QuickKeyDefaultGroups)
 	injected, err := h.settingService.GetPublicSettingsForInjection(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, cfg, injected.(*service.PublicSettingsInjectionPayload).QuickKeyDefaultGroups)
+	injection, ok := injected.(*service.PublicSettingsInjectionPayload)
+	require.True(t, ok)
+	require.Equal(t, cfg, injection.QuickKeyDefaultGroups)
 	saved := repo.values[service.SettingKeyQuickKeyDefaultGroups]
 	rec = doUpdateSettings(t, h, map[string]any{"site_name": "unrelated"}, nil)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())

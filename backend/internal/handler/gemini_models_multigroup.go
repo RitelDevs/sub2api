@@ -37,6 +37,23 @@ func geminiDiscoveryModelAllowed(key *service.APIKey, model string) bool {
 // response. Single-group calls retain upstream metadata, envelopes and headers.
 // Complete discovery also propagates account-catalog query failures.
 func (h *GatewayHandler) loadGeminiModels(ctx context.Context, key *service.APIKey, forcePlatform string, complete bool) (*service.UpstreamHTTPResult, *geminiModelsFailure) {
+	if forcePlatform == "" && key.Group != nil && service.PlatformAcceptsGeminiInboundBridge(key.Group.Platform) {
+		ids, err := h.gatewayService.GetGroupModelCatalog(ctx, key.Group.ID, key.Group.Platform)
+		if err != nil {
+			return nil, &geminiModelsFailure{status: http.StatusServiceUnavailable, message: "Unable to list Gemini bridge models"}
+		}
+		if ids == nil {
+			ids = service.DefaultModelIDsForPlatform(key.Group.Platform)
+		}
+		models := make([]gemini.Model, 0, len(ids))
+		for _, id := range ids {
+			if complete || geminiDiscoveryModelAllowed(key, id) {
+				models = append(models, gemini.FallbackModel(id))
+			}
+		}
+		body, _ := json.Marshal(gemini.ModelsListResponse{Models: models})
+		return &service.UpstreamHTTPResult{StatusCode: http.StatusOK, Body: body}, nil
+	}
 	agIDs, err := h.geminiCompatService.AntigravityGeminiModelIDs(ctx, key.GroupID, forcePlatform != service.PlatformAntigravity)
 	if err != nil {
 		return nil, &geminiModelsFailure{status: http.StatusServiceUnavailable, message: "Unable to list Antigravity models"}
@@ -63,7 +80,7 @@ func (h *GatewayHandler) loadGeminiModels(ctx context.Context, key *service.APIK
 	if err != nil && complete {
 		return nil, &geminiModelsFailure{status: http.StatusServiceUnavailable, message: "Unable to list Gemini models"}
 	}
-	if err == nil && len(declared) > 0 {
+	if err == nil && declared != nil {
 		ids := append([]string{}, declared...)
 		for _, id := range agIDs {
 			if !slices.Contains(declared, id) {
@@ -166,7 +183,7 @@ func (h *GatewayHandler) loadCompleteGeminiModelPages(ctx context.Context, accou
 	return nil, &geminiModelsFailure{status: http.StatusBadGateway, message: "Gemini model catalog pagination did not terminate"}
 }
 
-func nativeGeminiDiscoveryGroup(key *service.APIKey, forcePlatform string) bool {
+func supportsGeminiDiscoveryGroup(key *service.APIKey, forcePlatform string) bool {
 	if key == nil || key.Group == nil {
 		return false
 	}
@@ -175,7 +192,8 @@ func nativeGeminiDiscoveryGroup(key *service.APIKey, forcePlatform string) bool 
 	}
 	// Direct Antigravity groups use the forced route. Composite's native
 	// default is Gemini; mixed Antigravity contributions still require opt-in.
-	return key.Group.Platform == service.PlatformGemini || key.Group.Platform == service.PlatformComposite
+	return key.Group.Platform == service.PlatformGemini || key.Group.Platform == service.PlatformComposite ||
+		service.PlatformAcceptsGeminiInboundBridge(key.Group.Platform)
 }
 
 func normalizedGeminiDiscoveryName(name string) string {
@@ -217,7 +235,7 @@ func (h *GatewayHandler) multiGroupGeminiModels(c *gin.Context, groups []*servic
 	var found json.RawMessage
 	compatible := false
 	for _, key := range groups {
-		if !nativeGeminiDiscoveryGroup(key, forcePlatform) {
+		if !supportsGeminiDiscoveryGroup(key, forcePlatform) {
 			continue
 		}
 		compatible = true

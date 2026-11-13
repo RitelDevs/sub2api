@@ -22,7 +22,7 @@ func quotaPriorityFixture(now time.Time) (PrioritySchedulingConfig, openAIAccoun
 		item.account.Extra["codex_"+w+"_reset_at"] = now.Add(time.Hour).Format(time.RFC3339)
 	}
 	healthy := true
-	signal := PrioritySchedulingSignal{QualitySamples: 10, QualityPassed: 10, LatestQualityPassed: &healthy, Samples: 10, P90TTFTMs: 500, ProfitSamples: 10, Revenue: 10, BaseCost: 10}
+	signal := withAccountPerformanceFixture(PrioritySchedulingSignal{QualitySamples: 10, QualityPassed: 10, LatestQualityPassed: &healthy, Samples: 10, P90TTFTMs: 500, ProfitSamples: 10, Revenue: 10, BaseCost: 10})
 	return cfg, item, signal
 }
 
@@ -68,11 +68,13 @@ func TestPriorityOAuthQuotaEvidenceAndCapacity(t *testing.T) {
 			a.account.Extra["codex_7d_used_percent"] = math.NaN()
 		}, 0},
 		{"unknown_quality", func(_ *PrioritySchedulingConfig, _ *openAIAccountCandidateScore, s *PrioritySchedulingSignal) {
+			s.QualitySamples = 0
 			s.LatestQualityPassed = nil
 		}, 0},
 		{"latest_degraded_despite_good_average", func(_ *PrioritySchedulingConfig, _ *openAIAccountCandidateScore, s *PrioritySchedulingSignal) {
 			bad := false
 			s.LatestQualityPassed = &bad
+			s.QualityPassed = 0
 		}, 0},
 		{"confirmed_recovery_overrides_bad_average", func(_ *PrioritySchedulingConfig, _ *openAIAccountCandidateScore, s *PrioritySchedulingSignal) {
 			s.QualityPassed = 1
@@ -129,6 +131,7 @@ func TestPriorityOAuthQuotaEvidenceAndCapacity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, item, signal := quotaPriorityFixture(now)
 			tc.mutate(&cfg, &item, &signal)
+			signal = withAccountPerformanceFixture(signal)
 			applyPriorityCandidate(cfg, &item, signal, now)
 			require.Equal(t, tc.want, item.priorityOAuthSpare)
 		})
@@ -310,7 +313,7 @@ func TestPriorityExplorationRequiresQualityForAPIKeysWithoutOAuthEconomics(t *te
 	api := priorityCandidate(1, .1, 0)
 	applyPriorityCandidate(cfg, &api, PrioritySchedulingSignal{}, time.Now())
 	require.False(t, api.priorityExploration, "unknown quality must not enter the exploration lane")
-	signal := PrioritySchedulingSignal{QualitySamples: 10, QualityPassed: 10}
+	signal := withAccountPerformanceFixture(PrioritySchedulingSignal{QualitySamples: 10, QualityPassed: 10})
 	applyPriorityCandidate(cfg, &api, signal, time.Now())
 	require.True(t, api.priorityExploration, "quality-ready API keys can receive bounded exploration")
 	api.account.Type = AccountTypeOAuth

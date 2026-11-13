@@ -25,7 +25,7 @@ const concretePlatforms = [
   'opencode_go',
   'typesafe',
   'command_code',
-  'cline'
+  'cline', 'mistral', 'qwen'
 ]
 
 describe('platform option catalogs', () => {

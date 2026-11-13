@@ -5,15 +5,6 @@ import (
 	"time"
 )
 
-// computeDashboardHealthScore retains the integer compatibility field.
-func computeDashboardHealthScore(now time.Time, overview *OpsDashboardOverview) int {
-	if overview == nil {
-		return 0
-	}
-	applyDashboardHealth(now, overview)
-	return overview.HealthScore
-}
-
 // computeBusinessHealth calculates business health score (0-100)
 // Components: Error Rate (50%) + TTFT (50%)
 func computeBusinessHealth(overview *OpsDashboardOverview) float64 {
@@ -47,71 +38,6 @@ func computeBusinessHealth(overview *OpsDashboardOverview) float64 {
 
 	// Weighted combination: 50% error rate + 50% TTFT
 	return errorScore*0.5 + ttftScore*0.5
-}
-
-// computeInfraHealth calculates infrastructure health score (0-100)
-// Components: Storage (40%) + Compute Resources (30%) + Background Jobs (30%)
-func computeInfraHealth(now time.Time, overview *OpsDashboardOverview) float64 {
-	// Storage score: DB critical, Redis less critical
-	storageScore := 100.0
-	if overview.SystemMetrics != nil {
-		if overview.SystemMetrics.DBOK != nil && !*overview.SystemMetrics.DBOK {
-			storageScore = 0 // DB failure is critical
-		} else if overview.SystemMetrics.RedisOK != nil && !*overview.SystemMetrics.RedisOK {
-			storageScore = 50 // Redis failure is degraded but not critical
-		}
-	}
-
-	// Compute resources score: CPU + Memory
-	computeScore := 100.0
-	if overview.SystemMetrics != nil {
-		cpuScore := 100.0
-		if overview.SystemMetrics.CPUUsagePercent != nil {
-			cpuPct := clampFloat64(*overview.SystemMetrics.CPUUsagePercent, 0, 100)
-			if cpuPct > 80 {
-				if cpuPct <= 100 {
-					cpuScore = (100 - cpuPct) / 20 * 100
-				} else {
-					cpuScore = 0
-				}
-			}
-		}
-
-		memScore := 100.0
-		if overview.SystemMetrics.MemoryUsagePercent != nil {
-			memPct := clampFloat64(*overview.SystemMetrics.MemoryUsagePercent, 0, 100)
-			if memPct > 85 {
-				if memPct <= 100 {
-					memScore = (100 - memPct) / 15 * 100
-				} else {
-					memScore = 0
-				}
-			}
-		}
-
-		computeScore = (cpuScore + memScore) / 2
-	}
-
-	// Background jobs score
-	jobScore := 100.0
-	failedJobs := 0
-	totalJobs := 0
-	for _, job := range overview.JobHealth {
-		if job.State == "disabled" || job.State == "unknown" || job.State == "pending" {
-			continue
-		}
-		totalJobs++
-		if job.State == "failed" || job.State == "late" {
-			failedJobs++
-		}
-	}
-
-	if totalJobs > 0 && failedJobs > 0 {
-		jobScore = (1 - float64(failedJobs)/float64(totalJobs)) * 100
-	}
-
-	// Weighted combination
-	return storageScore*0.4 + computeScore*0.3 + jobScore*0.3
 }
 
 func clampFloat64(v float64, min float64, max float64) float64 {

@@ -20,11 +20,16 @@ type groupCodexFrameCheck func(body []byte, headersOnly bool) service.CodexClien
 func GroupCodexCLIOnly(settings *service.SettingService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if groups, ok := GetAPIKeyModelDiscoveryGroups(c); ok {
-			policy := service.CodexRestrictionPolicy{}
-			if settings != nil {
-				policy = settings.GetCodexRestrictionPolicy(c.Request.Context())
+			loadPolicy := func() service.CodexRestrictionPolicy {
+				policy := service.CodexRestrictionPolicy{}
+				if settings != nil {
+					policy = settings.GetCodexRestrictionPolicy(c.Request.Context())
+				}
+				policy.EngineFingerprintSignals = nil
+				return policy
 			}
-			policy.EngineFingerprintSignals = nil
+			c.Set(modelListingClientPolicyKey, loadPolicy)
+			policy := loadPolicy()
 			allowed := make([]*service.APIKey, 0, len(groups))
 			var rejected service.CodexClientRestrictionDetectionResult
 			for _, candidate := range groups {

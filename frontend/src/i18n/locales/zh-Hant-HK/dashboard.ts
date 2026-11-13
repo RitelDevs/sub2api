@@ -172,6 +172,10 @@ export default {
     usage: '用量',
     today: '今日',
     total: '近30天',
+    usageDateRange: '用量日期',
+    selectedPeriod: '所選時段',
+    invalidUsageDateRange: '請選擇有效的開始和結束日期',
+    failedToLoadUsage: '用量加載失敗，請點擊刷新重試',
     quota: '額度',
     lastUsedAt: '上次使用時間',
     lastUsedIP: '最近使用 IP',
@@ -333,7 +337,7 @@ export default {
       geminiCli: 'Gemini CLI',
       geminiCliDesc: '導入為 Gemini CLI 配置'
     },
-    // 配額和有效期
+    // 配额和有效期
     quotaLimit: '額度限制',
     quotaAmount: '額度金額 (USD)',
     quotaAmountPlaceholder: '輸入 USD 額度限制',
@@ -408,6 +412,7 @@ export default {
     resetPending: '待刷新',
     accountMultiplier: '帳戶倍率',
     avgDuration: '平均耗時',
+    rateCardHint: '所選時間範圍內每分鐘的平均值：RPM = 總請求數 ÷ 分鐘數，TPM = 總 Token ÷ 分鐘數；範圍包含當前時刻時只算到現在',
     inSelectedRange: '所選範圍內',
     perRequest: '每次請求',
     apiKeyFilter: 'API 密鑰',
@@ -446,8 +451,12 @@ export default {
     firstToken: '首 Token',
     duration: '耗時',
     latency: '延遲',
-    latencyFirstToken: '首字',
-    latencyDuration: '總耗時',
+    latencyFirstTokenShort: '首字',
+    latencyFirstToken: '服務端首字',
+    latencyFirstTokenHint: '服務端首字使用實測服務端邊界，包含記錄口徑內的准入和先前嘗試，不是客户端端到端耗時。沒有測量來源的記錄保留舊口徑。',
+    latencyDurationShort: '總耗時',
+    latencyDurationHint: '服務端總耗時使用記錄口徑內的實測服務端邊界，包含內部重試，不是客户端端到端耗時。平均 TPS 仍使用原總耗時。',
+    latencyDuration: '服務端總耗時',
     latencyTps: '平均 TPS',
     latencyTpsHint: '平均 TPS = 輸出 Token ÷ 總耗時(秒). 包含等待時間及上游計入輸出用量的推理 Token, 不代表模型實際生成速度.',
     latencyCacheRate: '快取率',
@@ -548,13 +557,7 @@ export default {
         loadFailed: '載入詳情失敗，請稍後重試',
       },
     },
-
-  "latencyFirstTokenShort": "首字",
-  "queuePortion": "含轉發前等待",
-  "latencyFirstTokenHint": "服務端首字含轉發前耗時 {queue}；轉發首字 {first}。轉發前等待包含准入排隊和該口徑內先前失敗的嘗試。使用實測邊界，不是客戶端 E2E。沒有測量來源的記錄顯示舊口徑。",
-  "latencyDurationShort": "總耗時",
-  "latencyDurationHint": "服務端總耗時含轉發前耗時 {queue}；轉發耗時 {forward}。內部重試保留各協議規定的口徑。平均 TPS 仍使用原總耗時。"
-},
+  },
 
   // Shared keys for channel monitor (admin + user views)
   monitorCommon: {
@@ -577,13 +580,13 @@ export default {
       minimax: 'MiniMax',
       opencode_go: 'OpenCode'
     },
-    // 檢查模式（監控條目的工作方式）
+    // 检查模式（监控条目的工作方式）
     checkMode: {
       probe: '探活',
       quota: '配額',
       quota_probe: '探活 + 配額'
     },
-    // 配額快照展示（MonitorQuotaView，管理端與用戶端共用）
+    // 配额快照展示（MonitorQuotaView，管理端与用户端共用）
     quota: {
       unavailable: '配額資訊不可用',
       windows: {
@@ -767,6 +770,7 @@ export default {
       cacheWritePrice: '快取寫入',
       cacheWrite5mPrice: '快取寫入（5m）',
       cacheWrite1hPrice: '快取寫入（1h）',
+      cacheWrite12hPrice: '緩存寫入（12h）',
       cacheReadPrice: '快取讀取',
       imageInputPrice: '圖片輸入',
       imageOutputPrice: '圖片輸出',

@@ -34,7 +34,7 @@
         <!-- Quick presets -->
         <div class="date-picker-presets">
           <button type="button"
-            v-for="preset in presets"
+            v-for="preset in visiblePresets"
             :key="preset.value"
             @click="selectPreset(preset)"
             :class="['date-picker-preset', isPresetActive(preset) && 'date-picker-preset-active']"
@@ -104,6 +104,7 @@ import { formatLocalDate, formatLocalMinute, getDatePresetRange, parseDateBounda
 defineOptions({ inheritAttrs: false })
 
 interface Props {
+  showLast24Hours?: boolean
   id?: string
   disabled?: boolean
   error?: boolean
@@ -122,7 +123,7 @@ interface Emits {
   (e: 'change', range: { startDate: string; endDate: string; preset: string | null }): void
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), { showLast24Hours: true })
 const attrs = useAttrs()
 const ariaInvalid = () => props.error ? true : attrs['aria-invalid'] as HTMLAttributes['aria-invalid']
 const wrapperAttrs = () => ({ class: attrs.class, style: attrs.style, 'data-field-role': attrs['data-field-role'], 'data-field-density': attrs['data-field-density'] })
@@ -171,12 +172,14 @@ const presetRange = (preset: string) => {
   return range
 }
 
+const visiblePresets = computed(() => props.showLast24Hours ? presets : presets.filter(preset => preset.value !== 'last24Hours'))
+
 const detectPreset = () => {
-  if (props.preset !== undefined) return props.preset
-  if (props.rolling24Hours && props.startDate.includes('T') && props.endDate.includes('T') && Date.parse(props.endDate) - Date.parse(props.startDate) === 86_400_000) return 'last24Hours'
+  if (props.preset !== undefined) return !props.showLast24Hours && props.preset === 'last24Hours' ? null : props.preset
+  if (props.showLast24Hours && props.rolling24Hours && props.startDate.includes('T') && props.endDate.includes('T') && Date.parse(props.endDate) - Date.parse(props.startDate) === 86_400_000) return 'last24Hours'
   // Explicit timestamps are fixed ranges unless the parent identifies a preset.
   if (props.startDate.includes('T') || props.endDate.includes('T')) return null
-  return presets.find((p) => {
+  return visiblePresets.value.find((p) => {
     if (props.rolling24Hours && p.value === 'last24Hours') return false
     const range = presetRange(p.value)
     return range.start === props.startDate && range.end === props.endDate
@@ -227,7 +230,7 @@ const formatDate = (value: string) => {
   })
 }
 const displayValue = computed(() => {
-  const preset = presets.find((p) => p.value === detectPreset())
+  const preset = visiblePresets.value.find((p) => p.value === detectPreset())
   if (preset) return t(preset.labelKey)
   if (!props.startDate || !props.endDate) return t('dates.selectDateRange')
   return props.startDate === props.endDate ? formatDate(props.startDate) : `${formatDate(props.startDate)} - ${formatDate(props.endDate)}`
@@ -252,17 +255,18 @@ const toggle = () => {
 }
 const apply = () => {
   if (!validRange.value) return
-  if (activePreset.value) selectPreset({ value: activePreset.value })
+  const preset = !props.showLast24Hours && activePreset.value === 'last24Hours' ? null : activePreset.value
+  if (preset) selectPreset({ value: preset })
   emit('update:startDate', localStartDate.value)
   emit('update:endDate', localEndDate.value)
-  emit('change', { startDate: localStartDate.value, endDate: localEndDate.value, preset: activePreset.value })
+  emit('change', { startDate: localStartDate.value, endDate: localEndDate.value, preset })
   isOpen.value = false
 }
 const handleClickOutside = (event: MouseEvent) => {
   if (containerRef.value && !containerRef.value.contains(event.target as Node)) isOpen.value = false
 }
 watch(() => props.disabled, disabled => { if (disabled) isOpen.value = false })
-watch(() => [props.startDate, props.endDate, props.preset], () => { if (!isOpen.value) syncDraft() })
+watch(() => [props.startDate, props.endDate, props.preset, props.showLast24Hours], () => { if (!isOpen.value) syncDraft() })
 onMounted(() => {
   syncDraft()
   document.addEventListener('click', handleClickOutside)

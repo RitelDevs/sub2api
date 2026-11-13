@@ -54,7 +54,7 @@ func OAuthAccountModelReconcileEligible(a *Account) bool {
 	}
 	// A free account without Astra has no initial classification to coordinate.
 	// Initial Astra classification owns the model scope until it finishes.
-	return !(a.gatewayBorrowAccountQualityPending() && a.gatewayBorrowAccountHasAstraPermission())
+	return !a.gatewayBorrowAccountQualityPending() || !a.gatewayBorrowAccountHasAstraPermission()
 }
 
 // OAuthAccountModelMapping preserves the previous completed-account model-only

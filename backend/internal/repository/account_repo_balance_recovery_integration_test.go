@@ -45,7 +45,7 @@ func balanceRecoveryIntegrationRow(t *testing.T, id int64, omitRecovery bool) st
 	t.Helper()
 	query := "SELECT to_jsonb(a)::text FROM accounts a WHERE id=$1"
 	if omitRecovery {
-		query = "SELECT (to_jsonb(a)-ARRAY['status','error_message','schedulable','updated_at'])::text FROM accounts a WHERE id=$1"
+		query = "SELECT (to_jsonb(a)-ARRAY['status','error_message','schedulable','updated_at','ai_ops_revision'])::text FROM accounts a WHERE id=$1"
 	}
 	var row string
 	require.NoError(t, integrationDB.QueryRowContext(context.Background(), query, id).Scan(&row))
@@ -65,6 +65,8 @@ func TestBalanceRecoveryPostgresPreservesIndependentColumnsAndTimer(t *testing.T
 			until := time.Now().Add(time.Hour)
 			_, err := integrationDB.ExecContext(ctx, `INSERT INTO account_schedulable_timers(account_id,action,version,execute_at,timezone,requested_by,status,next_attempt_at) VALUES($1,'close',1,$2,'UTC',1,'cancelled',$2)`, id, until)
 			require.NoError(t, err)
+			var revisionBefore, revisionAfter int64
+			require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT ai_ops_revision FROM accounts WHERE id=$1", id).Scan(&revisionBefore))
 			before := balanceRecoveryIntegrationRow(t, id, true)
 			var timerBefore string
 			require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT to_jsonb(t)::text FROM account_schedulable_timers t WHERE account_id=$1", id).Scan(&timerBefore))
@@ -73,6 +75,8 @@ func TestBalanceRecoveryPostgresPreservesIndependentColumnsAndTimer(t *testing.T
 			require.NoError(t, err)
 			require.Equal(t, target, got.Schedulable)
 			require.True(t, got.IndependentLimitsPreserved)
+			require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT ai_ops_revision FROM accounts WHERE id=$1", id).Scan(&revisionAfter))
+			require.Equal(t, revisionBefore+1, revisionAfter)
 			require.Equal(t, before, balanceRecoveryIntegrationRow(t, id, true))
 			a, err := r.GetByID(ctx, id)
 			require.NoError(t, err)

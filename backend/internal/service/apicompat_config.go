@@ -25,6 +25,7 @@ func anthropicToResponses(cfg *config.Config, account *Account, req *apicompat.A
 			(account.IsOpenAIApiKey() && isOfficialOpenAIModelsBaseURL(account.GetOpenAIBaseURL())))
 	return apicompat.AnthropicToResponsesWithOptions(req, apicompat.AnthropicToResponsesOptions{
 		MinOutputTokens: configuredMinOutputTokens(cfg), OpenAIEncryptedReasoning: openAIReasoning,
+		DeferReasoningEffortValidation: true,
 	})
 }
 

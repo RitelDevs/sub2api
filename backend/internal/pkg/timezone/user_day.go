@@ -17,6 +17,12 @@ func WithUserDay(ctx context.Context, userTZ string) context.Context {
 	return context.WithValue(ctx, userDayKey{}, userDayRange{start: start, end: end})
 }
 
+// HasUserDay reports whether a request explicitly selected its display calendar.
+func HasUserDay(ctx context.Context) bool {
+	_, ok := ctx.Value(userDayKey{}).(userDayRange)
+	return ok
+}
+
 // DayRange returns a half-open natural-day interval. Calendar addition retains
 // 23/25-hour days at daylight-saving transitions.
 func DayRange(ctx context.Context) (time.Time, time.Time) {

@@ -7,7 +7,7 @@
 # =============================================================================
 
 ARG NODE_IMAGE=node:24-alpine
-ARG GOLANG_IMAGE=golang:1.27.3-alpine
+ARG GOLANG_IMAGE=golang:1.27.4-alpine
 ARG ALPINE_IMAGE=alpine:3.24
 ARG POSTGRES_IMAGE=postgres:18-alpine
 ARG GOPROXY=https://goproxy.cn,direct
@@ -64,6 +64,7 @@ WORKDIR /app/backend
 
 # Copy go mod files first (better caching)
 COPY backend/go.mod backend/go.sum ./
+COPY backend/third_party ./third_party
 RUN go mod download
 
 # Copy backend source first
@@ -127,6 +128,9 @@ WORKDIR /app
 # Copy binary and runtime fallback resources from builder
 COPY --from=backend-builder --chown=sub2api:sub2api /app/sub2api /app/sub2api
 COPY --from=backend-builder --chown=sub2api:sub2api /app/backend/resources /app/resources
+
+COPY THIRD_PARTY_NOTICES.md /app/THIRD_PARTY_NOTICES.md
+COPY LICENSES/BEpusdt-GPL-3.0.txt /app/LICENSES/BEpusdt-GPL-3.0.txt
 
 # Create data directory
 RUN mkdir -p /app/data && chown sub2api:sub2api /app /app/data

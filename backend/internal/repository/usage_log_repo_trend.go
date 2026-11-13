@@ -57,7 +57,7 @@ func (r *usageLogRepository) GetAPIKeyUsageTrendWithUsageFilters(ctx context.Con
 		ORDER BY date ASC, tokens DESC
 	`, dateFormat)
 
-	args := []any{startTime, endTime, limit, startTime, endTime, timezone.UserTimezone(ctx)}
+	args := []any{startTime, endTime, limit, startTime, endTime, r.userTimezone(ctx)}
 	if filters.HasRowFilters() {
 		topWhere := "WHERE created_at >= $1 AND created_at < $2"
 		scopedTop, values := appendUsageLogReadFilters(topWhere, args, filters, "")
@@ -133,7 +133,7 @@ func (r *usageLogRepository) GetUserUsageTrendWithUsageFilters(ctx context.Conte
 		ORDER BY date ASC, tokens DESC
 	`, rankExpr, dateFormat)
 
-	args := []any{startTime, endTime, limit, startTime, endTime, timezone.UserTimezone(ctx)}
+	args := []any{startTime, endTime, limit, startTime, endTime, r.userTimezone(ctx)}
 	if filters.HasRowFilters() {
 		topWhere := "WHERE created_at >= $1 AND created_at < $2"
 		scopedTop, values := appendUsageLogReadFilters(topWhere, args, filters, "")
@@ -283,7 +283,7 @@ func (r *usageLogRepository) GetUserUsageTrendByUserID(ctx context.Context, user
 		ORDER BY date ASC
 	`, dateFormat)
 
-	rows, err := r.sql.QueryContext(ctx, query, userID, startTime, endTime, timezone.UserTimezone(ctx))
+	rows, err := r.sql.QueryContext(ctx, query, userID, startTime, endTime, r.userTimezone(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +323,7 @@ func (r *usageLogRepository) getUsageTrendWithFilters(ctx context.Context, start
 		requestID = strings.TrimSpace(fullFilters[0].RequestID)
 	}
 
-	if requestID == "" && timezone.UserTimezone(ctx) == "UTC" && trendRangeMatchesAggregateBuckets(startTime, endTime, granularity) && shouldUsePreaggregatedTrend(granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType, billingMode, upstreamModelMismatch, nativeCompactionV2) {
+	if requestID == "" && r.userTimezone(ctx) == "UTC" && r.trendRangeMatchesAggregateBuckets(startTime, endTime, granularity) && shouldUsePreaggregatedTrend(granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType, billingMode, upstreamModelMismatch, nativeCompactionV2) {
 		aggregated, aggregatedErr := r.getUsageTrendFromAggregates(ctx, startTime, endTime, granularity)
 		if aggregatedErr == nil && len(aggregated) > 0 {
 			return aggregated, nil
@@ -347,7 +347,7 @@ func (r *usageLogRepository) getUsageTrendWithFilters(ctx context.Context, start
 		WHERE created_at >= $1 AND created_at < $2
 	`, dateFormat)
 
-	args := []any{startTime, endTime, timezone.UserTimezone(ctx)}
+	args := []any{startTime, endTime, r.userTimezone(ctx)}
 	if userID > 0 {
 		query += fmt.Sprintf(" AND user_id = $%d", len(args)+1)
 		args = append(args, userID)
@@ -404,8 +404,8 @@ func (r *usageLogRepository) getUsageTrendWithFilters(ctx context.Context, start
 // Aggregates are generated in the configured server timezone. The current
 // read-side bucket mapping is only proven equivalent for UTC-aligned UTC data;
 // all other zones and boundaries must use raw logs.
-func trendRangeMatchesAggregateBuckets(start, end time.Time, granularity string) bool {
-	if timezone.Name() != "UTC" {
+func (r *usageLogRepository) trendRangeMatchesAggregateBuckets(start, end time.Time, granularity string) bool {
+	if r.timezoneName() != "UTC" {
 		return false
 	}
 	var bucket time.Duration
@@ -827,9 +827,12 @@ func (r *usageLogRepository) GetAllGroupUsageSummary(ctx context.Context, todayS
 	if err != nil {
 		return nil, err
 	}
+	if !timezone.HasUserDay(ctx) {
+		return rows, nil
+	}
 	userStart, userEnd := timezone.DayRange(ctx)
 	userYesterday := userStart.AddDate(0, 0, -1)
-	serverStart := timezone.StartOfDay(todayStart)
+	serverStart := r.startOfDay(todayStart)
 	if userStart.Equal(serverStart) && userYesterday.Equal(serverStart.AddDate(0, 0, -1)) {
 		return rows, nil
 	}
@@ -842,7 +845,7 @@ func (r *usageLogRepository) GetAllGroupUsageSummary(ctx context.Context, todayS
 	if err != nil {
 		return nil, err
 	}
-	defer daily.Close()
+	defer func() { _ = daily.Close() }()
 	byID := make(map[int64]*usagestats.GroupUsageSummary, len(rows))
 	for i := range rows {
 		rows[i].TodayCost = 0

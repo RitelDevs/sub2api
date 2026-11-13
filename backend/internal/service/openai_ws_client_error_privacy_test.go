@@ -24,7 +24,7 @@ func TestWriteCapturedWSClientErrorPrivacy(t *testing.T) {
 			serverErr <- err
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		for _, payload := range [][]byte{failed, success} {
@@ -41,7 +41,7 @@ func TestWriteCapturedWSClientErrorPrivacy(t *testing.T) {
 	defer cancel()
 	conn, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
 	require.NoError(t, err)
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 	_, payload, err := conn.Read(ctx)
 	require.NoError(t, err)
 	require.NotContains(t, string(payload), "private")

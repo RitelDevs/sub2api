@@ -73,7 +73,9 @@ func TestGatewayBorrowInitialReadyRepositoryAtomicCAS(t *testing.T) {
 			require.Equal(t, bExtra, aExtra, "no unrelated extra field is replaced")
 			before["extra"], after["extra"] = nil, nil
 			before["updated_at"], after["updated_at"] = nil, nil
-			require.Equal(t, before, after, "only readiness JSON and updated_at may change")
+			require.Equal(t, before["ai_ops_revision"].(float64)+1, after["ai_ops_revision"], "configuration write advances the AI operations revision")
+			before["ai_ops_revision"], after["ai_ops_revision"] = nil, nil
+			require.Equal(t, before, after, "only readiness JSON, updated_at and the configuration revision may change")
 			require.Equal(t, outbox+1, nativeRateLimitOutboxCount(t, ctx, repo))
 			again, err := repo.MarkGatewayBorrowInitialReadyIfObserved(ctx, a.ID, o)
 			require.NoError(t, err)

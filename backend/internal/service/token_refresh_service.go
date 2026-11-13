@@ -320,7 +320,7 @@ func (e *rateLimitedOAuthRefreshExecutor) Refresh(ctx context.Context, account *
 		}
 	}
 	defer release()
-	if err := oauthRefreshContextError(ctx); err != nil {
+	if err := refreshContextErr(ctx); err != nil {
 		return nil, err
 	}
 	return e.OAuthRefreshExecutor.Refresh(ctx, account)
@@ -831,18 +831,6 @@ func (s *TokenRefreshService) maxRetries() int {
 	return defaultTokenRefreshMaxRetries
 }
 
-// oauthRefreshContextError enforces the absolute deadline even when the
-// context timer callback has not run yet under scheduler pressure.
-func oauthRefreshContextError(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
-		return context.DeadlineExceeded
-	}
-	return nil
-}
-
 // refreshWithRetry 带重试的刷新
 func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Account, refresher TokenRefresher, executor OAuthRefreshExecutor, refreshWindow time.Duration) error {
 	return s.refreshWithRetryWithRateGate(ctx, account, refresher, executor, refreshWindow, nil)
@@ -860,7 +848,7 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 	maxRetries := s.maxRetries()
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		if err := oauthRefreshContextError(ctx); err != nil {
+		if err := refreshContextErr(ctx); err != nil {
 			return err
 		}
 		releaseAttempt := func() {}
@@ -914,12 +902,13 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 			}
 		} else {
 			// 降级：直接调用 refresher（兼容旧路径）
+			attemptedAccount := snapshotOAuthRefreshAccount(account)
 			releaseRate := func() {}
 			if acquireRate != nil {
 				releaseRate, err = acquireRate(attemptCtx)
 			}
 			if err == nil {
-				err = oauthRefreshContextError(attemptCtx)
+				err = refreshContextErr(attemptCtx)
 			}
 			if err == nil {
 				newCredentials, err = refresher.Refresh(attemptCtx, account)
@@ -927,17 +916,23 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 			if releaseRate != nil {
 				releaseRate()
 			}
-			attemptErr := oauthRefreshContextError(attemptCtx)
+			attemptErr := refreshContextErr(attemptCtx)
 			if err == nil && newCredentials != nil && attemptErr == nil {
 				newCredentials["_token_version"] = time.Now().UnixMilli()
-				if saveErr := persistAccountCredentials(attemptCtx, s.accountRepo, account, newCredentials); saveErr != nil {
+				current, applied, saveErr := persistOAuthRefreshedCredentials(attemptCtx, s.accountRepo, account, attemptedAccount, newCredentials)
+				if saveErr != nil {
 					err = fmt.Errorf("failed to save credentials: %w", saveErr)
 				} else {
-					credentialsPersisted = true
+					account = current
+					credentialsPersisted = applied
+					if !applied {
+						err = s.refreshPolicy.handleAlreadyRefreshed()
+						shortCircuit = true
+					}
 				}
 			}
 		}
-		attemptTimedOut := errors.Is(oauthRefreshContextError(attemptCtx), context.DeadlineExceeded) && oauthRefreshContextError(ctx) == nil
+		attemptTimedOut := errors.Is(refreshContextErr(attemptCtx), context.DeadlineExceeded) && refreshContextErr(ctx) == nil
 		cancelAttempt()
 		releaseAttempt()
 		persistedAfterAttemptDeadline := attemptTimedOut && credentialsPersisted && err == nil
@@ -957,7 +952,7 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 		}
 
 		if err == nil {
-			if ctxErr := oauthRefreshContextError(ctx); ctxErr != nil {
+			if ctxErr := refreshContextErr(ctx); ctxErr != nil {
 				if credentialsPersisted {
 					s.postRefreshStateSyncWithCleanup(ctx, account)
 				}
@@ -974,7 +969,7 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 			s.postRefreshActions(ctx, account)
 			return nil
 		}
-		if ctxErr := oauthRefreshContextError(ctx); ctxErr != nil {
+		if ctxErr := refreshContextErr(ctx); ctxErr != nil {
 			if credentialsPersisted {
 				s.postRefreshStateSyncWithCleanup(ctx, account)
 			}
@@ -1086,13 +1081,13 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 				select {
 				case <-ctx.Done():
 					timer.Stop()
-					return oauthRefreshContextError(ctx)
+					return refreshContextErr(ctx)
 				case <-timer.C:
 				}
 			}
 		}
 	}
-	if err := oauthRefreshContextError(ctx); err != nil {
+	if err := refreshContextErr(ctx); err != nil {
 		return err
 	}
 

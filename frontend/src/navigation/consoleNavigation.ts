@@ -125,6 +125,7 @@ const managementTable: Record<string, SectionKey> = {
   '/admin/usage': 'operations',
   '/admin/ops': 'operations',
   '/admin/auto-config': 'operations',
+  '/admin/ai-ops': 'operations',
   '/admin/priority-scheduling': 'operations',
   '/admin/account-quality': 'operations',
   '/admin/controlled-experiments': 'operations',

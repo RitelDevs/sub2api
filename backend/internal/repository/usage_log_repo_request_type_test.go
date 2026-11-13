@@ -103,6 +103,8 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			sqlmock.AnyArg(), // upstream_request_id
 			sqlmock.AnyArg(), // session_id
 			log.NativeCompactionV2,
+			log.CacheCreation30mTokens,
+			log.CacheCreation12hTokens,
 			createdAt,
 			sqlmock.AnyArg(), // free_fast_applied
 			sqlmock.AnyArg(), // queue_timing
@@ -201,6 +203,8 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 			sqlmock.AnyArg(), // upstream_request_id
 			sqlmock.AnyArg(), // session_id
 			log.NativeCompactionV2,
+			log.CacheCreation30mTokens,
+			log.CacheCreation12hTokens,
 			createdAt,
 			sqlmock.AnyArg(), // free_fast_applied
 			sqlmock.AnyArg(), // queue_timing
@@ -927,6 +931,8 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{}, // upstream_request_id
 			sql.NullString{},
 			false, // native_compaction_v2
+			0,     // cache_creation_30m_tokens
+			0,     // cache_creation_12h_tokens
 			now,
 			sql.NullBool{},   // free_fast_applied: historical unknown
 			sql.NullString{}, // queue_timing
@@ -1010,6 +1016,8 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // upstream_request_id
 			sql.NullString{},  // session_id
 			false,             // native_compaction_v2
+			0,                 // cache_creation_30m_tokens
+			0,                 // cache_creation_12h_tokens
 			now,
 			sql.NullBool{},   // free_fast_applied: historical unknown
 			sql.NullString{}, // queue_timing
@@ -1076,6 +1084,8 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // upstream_request_id
 			sql.NullString{},  // session_id
 			true,              // native_compaction_v2
+			0,                 // cache_creation_30m_tokens
+			0,                 // cache_creation_12h_tokens
 			now,
 			sql.NullBool{},   // free_fast_applied: historical unknown
 			sql.NullString{}, // queue_timing
@@ -1143,6 +1153,8 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // upstream_request_id
 			sql.NullString{},  // session_id
 			false,             // native_compaction_v2
+			0,                 // cache_creation_30m_tokens
+			0,                 // cache_creation_12h_tokens
 			now,
 			sql.NullBool{Valid: true, Bool: true}, // free_fast_applied
 			sql.NullString{},                      // queue_timing

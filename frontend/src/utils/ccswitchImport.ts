@@ -318,6 +318,22 @@ export function buildCcSwitchImportDeeplink(input: CcSwitchImportDeeplinkInput):
   if (!result.get('name')) result.set('name', input.providerName)
   if (!result.get('endpoint')) result.set('endpoint', defaultEndpoint)
   if (!result.get('homepage')) result.set('homepage', input.baseUrl)
+  if (profile.app === 'codex' && !result.has('config')) {
+    const toml = `model_provider = "ritel"
+model = ${JSON.stringify(String(parameters.model))}
+model_reasoning_effort = "high"
+disable_response_storage = true
+service_tier = "fast"
+
+[model_providers.ritel]
+name = ${JSON.stringify(input.providerName)}
+base_url = ${JSON.stringify(result.get('endpoint'))}
+wire_api = "responses"
+requires_openai_auth = true
+`
+    result.set('configFormat', 'json')
+    result.set('config', encodeUtf8Base64(JSON.stringify({ auth: { OPENAI_API_KEY: input.apiKey }, config: toml })))
+  }
   // No administrator setting can replace the key chosen by this user.
   result.set('apiKey', input.apiKey)
   return `ccswitch://v1/import?${result.toString()}`

@@ -71,7 +71,7 @@ func TestGeminiMultigroupNativeCatalogAndRetrieve(t *testing.T) {
 		1: `{"models":[{"name":"models/gemini-z","custom":{"first":true},"inputTokenLimit":123},{"name":"models/gemini-a"},{"name":"models/gemini-hidden"}]}`,
 		2: `{"models":[{"name":"gemini-z","custom":{"second":true}},{"name":"models/gemini-a","version":"second-group"},{"name":"models/gemini-hidden"}]}`,
 	}}
-	h := &GatewayHandler{geminiCompatService: service.NewGeminiMessagesCompatService(repo, nil, nil, nil, nil, nil, u, nil, &config.Config{})}
+	h := &GatewayHandler{gatewayService: newGatewayModelsHandlerForTest(repo).gatewayService, geminiCompatService: service.NewGeminiMessagesCompatService(repo, nil, nil, nil, nil, nil, u, nil, &config.Config{})}
 	request := func(model, query string, aggregate bool) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
@@ -148,6 +148,10 @@ func TestGeminiMultigroupNativeCatalogAndRetrieve(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	require.NotContains(t, rec.Body.String(), "gemini-declared-denied")
 	groups = []*service.APIKey{geminiMultigroupKey(9, service.PlatformOpenAI, nil, nil)}
+	rec = request("", "", true)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.JSONEq(t, `{"models":[]}`, rec.Body.String())
+	groups = []*service.APIKey{geminiMultigroupKey(9, service.PlatformTypeSafe, nil, nil)}
 	require.Equal(t, http.StatusBadRequest, request("", "", true).Code)
 }
 
@@ -162,7 +166,7 @@ func TestGeminiMultigroupForcedAntigravityBoundaries(t *testing.T) {
 		2: {{ID: 2, Platform: service.PlatformAntigravity, Credentials: map[string]any{"model_mapping": map[string]any{"gemini-z": "gemini-3.8-flash", "gemini-a": "gemini-3.8-flash"}}}},
 		3: {{ID: 3, Platform: service.PlatformAntigravity, Credentials: map[string]any{"model_mapping": map[string]any{"gemini-z": "gemini-3.8-flash"}}}},
 	}}}
-	h := &GatewayHandler{geminiCompatService: service.NewGeminiMessagesCompatService(repo, nil, nil, nil, nil, nil, nil, nil, nil)}
+	h := &GatewayHandler{gatewayService: newGatewayModelsHandlerForTest(repo).gatewayService, geminiCompatService: service.NewGeminiMessagesCompatService(repo, nil, nil, nil, nil, nil, nil, nil, nil)}
 	request := func(model string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
@@ -202,4 +206,29 @@ func TestGeminiMultigroupForcedAntigravityBoundaries(t *testing.T) {
 	require.Less(t, strings.Index(rec.Body.String(), a), strings.Index(rec.Body.String(), z))
 	require.Contains(t, rec.Body.String(), a)
 	require.Contains(t, rec.Body.String(), z)
+}
+
+// Multiple bridge groups keep their individual model permissions.
+func TestMultiGroupGeminiBridgeCatalogue(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	groups := []*service.APIKey{
+		{Group: &service.Group{ID: 1, Platform: service.PlatformOpenAI}, User: &service.User{UserGroupDeniedModels: []string{"shared"}}},
+		{Group: &service.Group{ID: 2, Platform: service.PlatformAnthropic}},
+	}
+	h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{byGroup: map[int64][]service.Account{
+		1: {{Platform: service.PlatformOpenAI, Credentials: map[string]any{"model_mapping": map[string]any{"shared": "shared", "first": "first"}}}},
+		2: {{Platform: service.PlatformAnthropic, Credentials: map[string]any{"model_mapping": map[string]any{"shared": "shared", "second": "second"}}}},
+	}})
+	for _, requested := range []string{"", "shared"} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1beta/models", nil)
+		h.multiGroupGeminiModels(c, groups, requested)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		require.Contains(t, w.Body.String(), `"name":"models/shared"`)
+		if requested == "" {
+			require.Contains(t, w.Body.String(), `"name":"models/first"`)
+			require.Contains(t, w.Body.String(), `"name":"models/second"`)
+		}
+	}
 }

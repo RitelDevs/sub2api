@@ -58,7 +58,10 @@ func TestShareAccountPoolPreservesBindingsAndBusinessFields(t *testing.T) {
 	require.Equal(t, targetBefore, poolGroupRow(t, ctx, repo, target.ID))
 	require.Equal(t, sourceBindings, poolBindingsRow(t, ctx, repo, source.ID))
 	require.Equal(t, aBefore, nativeRateLimitAccountRow(t, ctx, accounts, a.ID))
-	require.Equal(t, bBefore, nativeRateLimitAccountRow(t, ctx, accounts, b.ID))
+	bAfter := nativeRateLimitAccountRow(t, ctx, accounts, b.ID)
+	require.Equal(t, bBefore["ai_ops_revision"].(float64)+1, bAfter["ai_ops_revision"], "new membership advances the configuration revision once")
+	bBefore["ai_ops_revision"], bAfter["ai_ops_revision"] = nil, nil
+	require.Equal(t, bBefore, bAfter)
 	stale, err := repo.ShareAccountPoolIfObserved(dbent.NewTxContext(ctx, tx), target.ID, o)
 	require.NoError(t, err)
 	require.False(t, stale.Applied)

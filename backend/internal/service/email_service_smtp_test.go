@@ -12,6 +12,7 @@ import (
 	"crypto/x509/pkix"
 	"math/big"
 	"net"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -58,11 +59,14 @@ type fakeSMTPServer struct {
 	tlsConfig         *tls.Config
 	advertiseStartTLS bool
 
-	mu       sync.Mutex
-	commands []string
-	messages []string
-	conns    atomic.Int64
-	wg       sync.WaitGroup
+	mu             sync.Mutex
+	commands       []string
+	messages       []string
+	conns          atomic.Int64
+	rejectAuth     atomic.Bool
+	dropDataReply  atomic.Bool
+	rejectGreeting atomic.Bool
+	wg             sync.WaitGroup
 }
 
 func startFakeSMTPServer(t *testing.T, implicitTLS, advertiseStartTLS bool) (*fakeSMTPServer, int) {
@@ -138,6 +142,10 @@ func (srv *fakeSMTPServer) serve(conn net.Conn, allowStartTLS bool) {
 		}
 		return writer.Flush() == nil
 	}
+	if srv.rejectGreeting.Load() {
+		_ = writeLine("554 5.7.1 service unavailable by policy")
+		return
+	}
 	if !writeLine("220 fake.test ESMTP ready") {
 		return
 	}
@@ -169,6 +177,10 @@ func (srv *fakeSMTPServer) serve(conn net.Conn, allowStartTLS bool) {
 			srv.serveUpgraded(tlsConn)
 			return
 		case strings.HasPrefix(upper, "AUTH"):
+			if srv.rejectAuth.Load() {
+				_ = writeLine("535 5.7.8 authentication rejected")
+				return
+			}
 			if !writeLine("235 2.7.0 authentication successful") {
 				return
 			}
@@ -194,6 +206,9 @@ func (srv *fakeSMTPServer) serve(conn net.Conn, allowStartTLS bool) {
 			srv.mu.Lock()
 			srv.messages = append(srv.messages, message.String())
 			srv.mu.Unlock()
+			if srv.dropDataReply.Load() {
+				return
+			}
 			if !writeLine("250 message accepted") {
 				return
 			}
@@ -237,6 +252,10 @@ func (srv *fakeSMTPServer) serveCommands(reader *bufio.Reader, writer *bufio.Wri
 				return
 			}
 		case strings.HasPrefix(upper, "AUTH"):
+			if srv.rejectAuth.Load() {
+				_ = writeLine("535 5.7.8 authentication rejected")
+				return
+			}
 			if !writeLine("235 2.7.0 authentication successful") {
 				return
 			}
@@ -262,6 +281,9 @@ func (srv *fakeSMTPServer) serveCommands(reader *bufio.Reader, writer *bufio.Wri
 			srv.mu.Lock()
 			srv.messages = append(srv.messages, message.String())
 			srv.mu.Unlock()
+			if srv.dropDataReply.Load() {
+				return
+			}
 			if !writeLine("250 message accepted") {
 				return
 			}
@@ -390,5 +412,154 @@ func TestSendEmailWithConfigImplicitTLS(t *testing.T) {
 	}
 	if !srv.sawCommand("DATA") {
 		t.Fatal("expected send path to reach DATA")
+	}
+}
+
+// Only documented encrypted Resend submission ports gain a backup; arbitrary
+// hosts, custom ports and existing optional/plain TLS modes remain unchanged.
+func TestSMTPResendEndpointPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config SMTPConfig
+		want   []smtpEndpoint
+	}{
+		{"implicit primary", SMTPConfig{Host: "smtp.resend.com", Port: 2465, UseTLS: true}, []smtpEndpoint{{port: 2465}, {port: 2587, startTLS: true}}},
+		{"blocked standard implicit", SMTPConfig{Host: "SMTP.RESEND.COM.", Port: 465, UseTLS: true}, []smtpEndpoint{{port: 465}, {port: 2587, startTLS: true}}},
+		{"STARTTLS primary", SMTPConfig{Host: "smtp.resend.com", Port: 2587, UseTLS: true}, []smtpEndpoint{{port: 2587, startTLS: true}, {port: 2465}}},
+		{"standard STARTTLS", SMTPConfig{Host: "smtp.resend.com", Port: 587, UseTLS: true}, []smtpEndpoint{{port: 587, startTLS: true}, {port: 2465}}},
+		{"other host", SMTPConfig{Host: "mail.example.com", Port: 2465, UseTLS: true}, []smtpEndpoint{{port: 2465}}},
+		{"host suffix", SMTPConfig{Host: "smtp.resend.com.example", Port: 2465, UseTLS: true}, []smtpEndpoint{{port: 2465}}},
+		{"custom port", SMTPConfig{Host: "smtp.resend.com", Port: 12345, UseTLS: true}, []smtpEndpoint{{port: 12345}}},
+		{"optional TLS", SMTPConfig{Host: "smtp.resend.com", Port: 2465}, []smtpEndpoint{{port: 2465}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := smtpEndpoints(&tc.config); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("endpoints: got %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+func smtpTestMessage(t *testing.T, config *SMTPConfig) smtpMessage {
+	t.Helper()
+	message, err := buildSMTPMessage(config, "rcpt@example.com", "fallback subject", "<p>one body</p>")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return message
+}
+
+func smtpMessageCount(srv *fakeSMTPServer) int {
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	return len(srv.messages)
+}
+
+// Exercise the actual prepared-message send operation against real sockets:
+// the primary TCP endpoint refuses connections, then the backup upgrades using
+// mandatory STARTTLS and receives exactly one DATA transaction.
+func TestSMTPSendFallbackBeforeSubmission(t *testing.T) {
+	unavailable, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	primaryPort := unavailable.Addr().(*net.TCPAddr).Port
+	defer unavailable.Close()
+	backup, backupPort := startFakeSMTPServer(t, false, true)
+	// Keep the primary reservation until the backup is bound, avoiding reuse.
+	if err := unavailable.Close(); err != nil {
+		t.Fatal(err)
+	}
+	config := smtpTestConfig(primaryPort, true)
+	err = (&EmailService{}).sendSMTPMessage(config, smtpTestMessage(t, config), []smtpEndpoint{{port: primaryPort}, {port: backupPort, startTLS: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !backup.sawCommand("STARTTLS") {
+		t.Fatal("fallback must negotiate STARTTLS")
+	}
+	if got := smtpMessageCount(backup); got != 1 {
+		t.Fatalf("got %d messages, want exactly one", got)
+	}
+}
+
+func TestSMTPSendDoesNotFallbackAfterSession(t *testing.T) {
+	for _, scenario := range []string{"primary success", "AUTH rejected", "DATA acknowledgement lost"} {
+		t.Run(scenario, func(t *testing.T) {
+			primary, primaryPort := startFakeSMTPServer(t, true, false)
+			primaryRoots := smtpTestRootCAs.Clone()
+			backup, backupPort := startFakeSMTPServer(t, false, true)
+			// Both local test CAs remain trusted; production uses system roots.
+			leaf, err := x509.ParseCertificate(backup.tlsConfig.Certificates[0].Certificate[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			primaryRoots.AddCert(leaf)
+			smtpTestRootCAs = primaryRoots
+			if scenario == "AUTH rejected" {
+				primary.rejectAuth.Store(true)
+			}
+			if scenario == "DATA acknowledgement lost" {
+				primary.dropDataReply.Store(true)
+			}
+			config := smtpTestConfig(primaryPort, true)
+			err = (&EmailService{}).sendSMTPMessage(config, smtpTestMessage(t, config), []smtpEndpoint{{port: primaryPort}, {port: backupPort, startTLS: true}})
+			if (err == nil) != (scenario == "primary success") {
+				t.Fatalf("unexpected send result: %v", err)
+			}
+			if got := backup.conns.Load(); got != 0 {
+				t.Fatalf("backup got %d connections after primary session", got)
+			}
+			wantMessages := 1
+			if scenario == "AUTH rejected" {
+				wantMessages = 0
+			}
+			if got := smtpMessageCount(primary); got != wantMessages {
+				t.Fatalf("got %d primary messages, want %d", got, wantMessages)
+			}
+		})
+	}
+}
+
+func TestSMTPFallbackRequiresEncryptedBackup(t *testing.T) {
+	primary, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := primary.Addr().(*net.TCPAddr).Port
+	defer primary.Close()
+	backup, backupPort := startFakeSMTPServer(t, false, false)
+	if err := primary.Close(); err != nil {
+		t.Fatal(err)
+	}
+	config := smtpTestConfig(port, true)
+	err = (&EmailService{}).sendSMTPMessage(config, smtpTestMessage(t, config), []smtpEndpoint{{port: port}, {port: backupPort, startTLS: true}})
+	if err == nil || !strings.Contains(err.Error(), "STARTTLS") {
+		t.Fatalf("expected mandatory STARTTLS rejection, got %v", err)
+	}
+	if backup.sawCommand("AUTH") || backup.sawCommand("DATA") {
+		t.Fatal("plaintext backup received credentials or message")
+	}
+}
+
+func TestSMTPFallbackDoesNotHideCertificateOrGreetingRejection(t *testing.T) {
+	for _, scenario := range []string{"untrusted certificate", "SMTP greeting rejected"} {
+		t.Run(scenario, func(t *testing.T) {
+			primary, primaryPort := startFakeSMTPServer(t, true, false)
+			primaryRoots := smtpTestRootCAs.Clone()
+			backup, backupPort := startFakeSMTPServer(t, false, true)
+			if scenario == "SMTP greeting rejected" {
+				smtpTestRootCAs = primaryRoots
+				primary.rejectGreeting.Store(true)
+			}
+			config := smtpTestConfig(primaryPort, true)
+			err := (&EmailService{}).sendSMTPMessage(config, smtpTestMessage(t, config), []smtpEndpoint{{port: primaryPort}, {port: backupPort, startTLS: true}})
+			if err == nil {
+				t.Fatal("expected primary policy/certificate error")
+			}
+			if got := backup.conns.Load(); got != 0 {
+				t.Fatalf("backup got %d connections after non-network primary rejection", got)
+			}
+		})
 	}
 }

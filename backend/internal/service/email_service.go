@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"log/slog"
 	"math/big"
 	"net"
@@ -207,7 +208,13 @@ func (s *EmailService) SendEmailWithConfig(config *SMTPConfig, to, subject, body
 		return emailDefinitelyNotSent(err)
 	}
 
-	client, err := s.connectSMTP(config)
+	return s.sendSMTPMessage(config, message, smtpEndpoints(config))
+}
+
+// sendSMTPMessage retries connection establishment only. Once a session exists,
+// AUTH, envelope and DATA failures never move the message to another endpoint.
+func (s *EmailService) sendSMTPMessage(config *SMTPConfig, message smtpMessage, endpoints []smtpEndpoint) error {
+	client, err := s.connectSMTPEndpoints(config, endpoints)
 	if err != nil {
 		return emailDefinitelyNotSent(err)
 	}
@@ -251,18 +258,73 @@ func smtpTLSConfig(host string) *tls.Config {
 	}
 }
 
-// connectSMTP 按配置建立 SMTP 会话，发送与测试连接共用此路径，
-// 保证"测试连接成功 ⇔ 实际发信可用"：
-//   - UseTLS=true：先尝试隐式 TLS（465 语义）；若服务器以明文应答
-//     （587/25 等提交端口的 STARTTLS 语义），自动改走"明文连接 + 强制 STARTTLS"。
-//     两种方式都无法建立加密连接时报错，绝不明文继续。
-//   - UseTLS=false：明文连接后若服务器支持 STARTTLS 则机会式升级，
-//     与 smtp.SendMail 的默认行为一致。
+type smtpEndpoint struct {
+	port     int
+	startTLS bool
+}
+
+// Resend documents both implicit TLS and STARTTLS submission endpoints. Keep the
+// configured endpoint first; use one alternative transport only before AUTH.
+// Other hosts, custom ports and optional-TLS configurations keep their behavior.
+func smtpEndpoints(config *SMTPConfig) []smtpEndpoint {
+	primary := smtpEndpoint{port: config.Port}
+	if !config.UseTLS || !strings.EqualFold(strings.TrimSuffix(config.Host, "."), "smtp.resend.com") {
+		return []smtpEndpoint{primary}
+	}
+	switch config.Port {
+	case 465, 2465:
+		return []smtpEndpoint{primary, {port: 2587, startTLS: true}}
+	case 587, 2587:
+		primary.startTLS = true
+		return []smtpEndpoint{primary, {port: 2465}}
+	default:
+		return []smtpEndpoint{primary}
+	}
+}
+
+// connectSMTP is shared by connection tests and actual sends. Endpoint failover
+// ends as soon as an SMTP session is established; no submitted mail is replayed.
 func (s *EmailService) connectSMTP(config *SMTPConfig) (*smtp.Client, error) {
-	addr := fmt.Sprintf("%s:%d", config.Host, config.Port)
+	return s.connectSMTPEndpoints(config, smtpEndpoints(config))
+}
+
+func (s *EmailService) connectSMTPEndpoints(config *SMTPConfig, endpoints []smtpEndpoint) (*smtp.Client, error) {
+	var errs []error
+	for i, endpoint := range endpoints {
+		client, err := s.connectSMTPEndpoint(config, endpoint)
+		if err == nil {
+			if i > 0 {
+				slog.Warn("SMTP connection used fallback port", "host", config.Host, "primary_port", config.Port, "port", endpoint.port)
+			}
+			return client, nil
+		}
+		errs = append(errs, fmt.Errorf("port %d: %w", endpoint.port, err))
+		if !smtpConnectionFailure(err) {
+			break
+		}
+	}
+	return nil, errors.Join(errs...)
+}
+
+// Switch ports for unavailable transports, not certificate or SMTP policy
+// rejections. The alternative still requires verified TLS for the same host.
+func smtpConnectionFailure(err error) bool {
+	var certificateError *tls.CertificateVerificationError
+	if errors.As(err, &certificateError) {
+		return false
+	}
+	var networkError net.Error
+	return errors.As(err, &networkError) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+func (s *EmailService) connectSMTPEndpoint(config *SMTPConfig, endpoint smtpEndpoint) (*smtp.Client, error) {
+	addr := net.JoinHostPort(config.Host, strconv.Itoa(endpoint.port))
 	dialer := &net.Dialer{Timeout: smtpDialTimeout}
 	tlsConfig := smtpTLSConfig(config.Host)
 
+	if endpoint.startTLS {
+		return s.connectSMTPStartTLS(dialer, addr, config.Host, tlsConfig, true)
+	}
 	if config.UseTLS {
 		conn, err := tls.DialWithDialer(dialer, "tcp", addr, tlsConfig)
 		if err == nil {
@@ -272,11 +334,10 @@ func (s *EmailService) connectSMTP(config *SMTPConfig) (*smtp.Client, error) {
 		if !errors.As(err, &recordErr) {
 			return nil, fmt.Errorf("tls dial: %w", err)
 		}
-		// SMTP 服务器先发问候语：明文问候会让 TLS 握手立刻返回
-		// RecordHeaderError，据此可靠判定对端期望 STARTTLS。
+		// Existing generic SMTP compatibility: a plaintext greeting identifies a
+		// STARTTLS submission endpoint, which must then negotiate encryption.
 		return s.connectSMTPStartTLS(dialer, addr, config.Host, tlsConfig, true)
 	}
-
 	return s.connectSMTPStartTLS(dialer, addr, config.Host, tlsConfig, false)
 }
 

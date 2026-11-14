@@ -536,6 +536,21 @@ func prepareOpenAI409OAuthReplay(ctx context.Context, c *gin.Context, body map[s
 	if openAIAgentRecoveryInputDigest(before) != r.inputDigest || openAI409ControlsDigest(before) != r.replayControlsDigest {
 		return openAIAgentRecoveryError("wire_changed")
 	}
+	// Native Codex rejects external_web_access. Derive this existing, narrowly
+	// defined compatibility change only after validating the original controls;
+	// retain the tools themselves and freeze the resulting OAuth wire below.
+	if tools, ok := body["tools"].([]any); ok {
+		for _, value := range tools {
+			tool, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			kind, _ := tool["type"].(string)
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(kind)), "web_search") {
+				delete(tool, "external_web_access")
+			}
+		}
+	}
 	if isInstructionsEmpty(body) {
 		body["instructions"] = defaultCodexSynthInstructions(firstNonEmptyString(body["model"]))
 	}

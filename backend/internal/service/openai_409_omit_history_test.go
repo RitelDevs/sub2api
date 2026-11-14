@@ -264,7 +264,7 @@ func TestOpenAI409RebuildRechecksOriginalDeliveryBeforeSend(t *testing.T) {
 }
 
 func TestOpenAI409OAuthReplayKeepsOriginalSnapshotAndFinalControls(t *testing.T) {
-	for _, mode := range []string{"unchanged", "tools_removed", "insert_instructions", "replace_instructions"} {
+	for _, mode := range []string{"unchanged", "tools_removed", "insert_instructions", "replace_instructions", "web_search_true", "web_search_false"} {
 		t.Run(mode, func(t *testing.T) {
 			svc := &OpenAIGatewayService{cfg: &config.Config{}, settingService: NewSettingService(&codexPolicyMigrationRepoStub{values: map[string]string{SettingKeyOpenAI409OmitEncryptedHistoryEnabled: "true"}}, nil)}
 			issue715LearnRoute(t, svc, &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, issue715OpaqueBody)
@@ -272,6 +272,11 @@ func TestOpenAI409OAuthReplayKeepsOriginalSnapshotAndFinalControls(t *testing.T)
 			if mode == "replace_instructions" {
 				var err error
 				body, err = sjson.Set(body, "instructions", "Original instruction: preserve completed tools")
+				require.NoError(t, err)
+			}
+			if strings.HasPrefix(mode, "web_search_") {
+				var err error
+				body, err = sjson.SetRaw(body, "tools.1", `{"type":"web_search","external_web_access":`+strings.TrimPrefix(mode, "web_search_")+`,"search_context_size":"low"}`)
 				require.NoError(t, err)
 			}
 			c, _ := newTurnStateTestContext(t, 715, "fixture-session")
@@ -293,6 +298,12 @@ func TestOpenAI409OAuthReplayKeepsOriginalSnapshotAndFinalControls(t *testing.T)
 				return
 			}
 			require.NoError(t, prepareOpenAI409OAuthReplay(next, c, decoded))
+			if strings.HasPrefix(mode, "web_search_") {
+				tool := decoded["tools"].([]any)[1].(map[string]any)
+				require.NotContains(t, tool, "external_web_access")
+				require.Equal(t, "web_search", tool["type"])
+				require.Equal(t, "low", tool["search_context_size"])
+			}
 			require.Equal(t, originalInput, r.inputDigest)
 			require.Equal(t, originalControls, r.replayControlsDigest)
 			require.Equal(t, "keep existing results\n\n"+defaultCodexSynthInstructions("gpt-6-astra"), decoded["instructions"])

@@ -250,7 +250,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 
-	if account.IsOpenAIOAuthLike() {
+	// Readable recovery validates the caller's frozen controls before applying
+	// this native compatibility change inside prepareOpenAI409OAuthReplay.
+	recovery := openAIAgentRecoveryFromContext(ctx)
+	if account.IsOpenAIOAuthLike() && (recovery == nil || !recovery.omittedHistory) {
 		stripped, changed, stripErr := stripOpenAICodexUnsupportedWebSearchFields(body)
 		if stripErr != nil {
 			return nil, fmt.Errorf("strip unsupported Codex web search fields: %w", stripErr)
@@ -619,7 +622,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 	instructions := gjson.GetBytes(body, "instructions")
 	instructionsEmpty := !instructions.Exists() || instructions.Type != gjson.String || strings.TrimSpace(instructions.String()) == ""
-	recovery := openAIAgentRecoveryFromContext(ctx)
 	if instructionsEmpty && account.UsesOpenAICodexProtocol() && !compatMessagesBridge && !nativeCNResponses && (recovery == nil || !recovery.omittedHistory) {
 		markPatchSet("instructions", defaultCodexSynthInstructions(upstreamModel))
 	}

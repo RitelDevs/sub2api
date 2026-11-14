@@ -277,6 +277,20 @@ func TestOpenAI429HTTPReadableRecovery(t *testing.T) {
 	}
 }
 
+// Modern Codex web search controls must survive the same known-cooldown
+// A -> B -> B recovery as the plain tool fixture. The native OAuth endpoint
+// requires external_web_access to be removed before sending, but that allowed
+// adaptation must not trip the replay's frozen controls check.
+func TestOpenAI429HTTPModernCodexControls(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, shape := range []string{"web_search_true", "web_search_false", "web_search_absent"} {
+			t.Run(fmt.Sprintf("oauth/stream=%t/%s", stream, shape), func(t *testing.T) {
+				runHTTPRebuildFixture(t, service.AccountTypeOAuth, stream, "rate_limited/"+shape, "completed", "", "")
+			})
+		}
+	}
+}
+
 func TestOpenAI409HTTPControlNormalization(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		for _, accountType := range []string{service.AccountTypeAPIKey, service.AccountTypeOAuth} {
@@ -496,7 +510,23 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 		n := len(providerBodies)
 		mu.Unlock()
 		noToolsFinal := pointer == "no_tools_parallel" && n == 3
-		if (!noToolsFinal && !httpRebuildToolsAvailable(body)) || (noToolsFinal && (gjson.GetBytes(body, "tools").Exists() || gjson.GetBytes(body, "parallel_tool_calls").Exists())) {
+		toolOracleBody := body
+		if strings.HasPrefix(pointer, "web_search_") {
+			web := gjson.GetBytes(body, "tools.2")
+			if len(gjson.GetBytes(body, "tools").Array()) != 3 || web.Get("type").String() != "web_search" || web.Get("external_web_access").Exists() {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(w, `{"error":{"type":"invalid_request_error","message":"fixture rejected missing web search tool or unstripped external_web_access"}}`)
+				return
+			}
+			toolOracleBody, err = sjson.DeleteBytes(body, "tools.2")
+			if err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+		}
+		if (!noToolsFinal && !httpRebuildToolsAvailable(toolOracleBody)) || (noToolsFinal && (gjson.GetBytes(body, "tools").Exists() || gjson.GetBytes(body, "parallel_tool_calls").Exists())) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = io.WriteString(w, `{"error":{"type":"invalid_request_error","message":"fixture rejected missing or changed tool declarations"}}`)
@@ -609,6 +639,13 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 	client.Timeout = 10 * time.Second
 	request := func(history []string, previous gjson.Result) (int, string) {
 		body := map[string]any{"model": "gpt-5.1", "stream": stream, "store": false, "prompt_cache_key": httpRebuildSession, "tools": httpRebuildToolDefinitions()}
+		if strings.HasPrefix(pointer, "web_search_") {
+			webSearch := map[string]any{"type": "web_search"}
+			if pointer != "web_search_absent" {
+				webSearch["external_web_access"] = pointer == "web_search_true"
+			}
+			body["tools"] = append(httpRebuildToolDefinitions(), webSearch)
+		}
 		if previous.Exists() && pointer == "blank_parts" {
 			history = append(append([]string(nil), history...), `{"role":"user","content":[{"type":"input_text","text":"  \n\t "}]}`)
 		}
@@ -630,6 +667,10 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("session_id", httpRebuildSession)
+		if strings.HasPrefix(pointer, "web_search_") {
+			req.Header.Set("User-Agent", "codex_cli_rs/0.99.0")
+			req.Header.Set("originator", "codex_cli_rs")
+		}
 		if boundary == "foreign_user" && previous.Exists() {
 			req.Header.Set("X-Fixture-Foreign-User", "true")
 		}

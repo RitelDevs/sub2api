@@ -105,6 +105,90 @@ class AccountQualityTests(unittest.TestCase):
                 json.loads((state_dir / 'last-run.json').read_text()), \
                 json.loads((state_dir / 'candy-history.json').read_text())
 
+    def pending_account(self):
+        a = self.account(224)
+        a.update(concurrency=500, load_factor=None, priority=1)
+        a['extra'].update(openai_gateway_borrow_quality_mode=m.QUALITY_MODE,
+            openai_gateway_borrow_quality_pending=True,
+            openai_gateway_borrow_initial_ready=True,
+            openai_gateway_borrow_initial_ready_fingerprint='old-defaults')
+        return a
+
+    def test_edited_ready_account_rebinds_current_config_before_quality_commit(self):
+        a = self.pending_account()
+        r = self.result(a)
+        rebound = copy.deepcopy(a)
+        rebound['extra']['openai_gateway_borrow_initial_ready_fingerprint'] = 'current-config'
+        after = self.after_apply(rebound, r)
+        api = mock.Mock(side_effect=[a, {'id':224, 'applied':True}, rebound,
+                                    {'id':224, 'applied':True}, after])
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(candy.legacy, 'admin', api):
+            self.assertTrue(m.apply_account(a, [r], 'test-key', Path(folder))['applied'])
+        calls = api.call_args_list
+        self.assertEqual(calls[1].args[1], '/admin/accounts/224/gateway-borrow-initial-ready')
+        body = calls[1].args[3]
+        self.assertEqual(body['expected_config'], {'concurrency':500, 'load_factor':None,
+            'priority':1, 'group_ids':[2,15,16], 'model_mapping':a['credentials']['model_mapping']})
+        self.assertEqual(body['expected_policy'], m.owned_policy(a))
+        self.assertEqual(calls[3].args[1], '/admin/accounts/224/gateway-borrow-policy')
+        self.assertEqual(calls[3].args[3]['expected_policy'], m.owned_policy(rebound))
+        self.assertTrue(all(c.args[0] in ('GET','POST') for c in calls))
+        self.assertEqual((a['concurrency'],a['priority']), (500,1))
+
+    def test_configuration_or_identity_changes_during_samples_remain_closed(self):
+        for field in ('concurrency','priority','load_factor','group_ids','mapping','token','proxy'):
+            with self.subTest(field=field):
+                a = self.pending_account()
+                r = self.result(a)
+                current = copy.deepcopy(a)
+                if field in ('concurrency','priority','load_factor'): current[field] = 9
+                if field == 'group_ids': current[field] = [3]
+                if field == 'mapping': current['credentials']['model_mapping']['gpt-6-astra']='other'
+                if field == 'token': current['credentials']['access_token']='changed'
+                if field == 'proxy': current['proxy_id']=9
+                api = mock.Mock(return_value=current)
+                with tempfile.TemporaryDirectory() as folder, mock.patch.object(candy.legacy,'admin',api):
+                    self.assertFalse(m.apply_account(a,[r],'key',Path(folder))['applied'])
+                self.assertEqual(api.call_count,1)
+
+    def test_rebind_cas_rejection_never_commits_quality(self):
+        a = self.pending_account()
+        r = self.result(a)
+        api = mock.Mock(side_effect=[a,{'id':224,'applied':False,'reason':'initial_configuration_changed'}])
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(candy.legacy,'admin',api):
+            change=m.apply_account(a,[r],'key',Path(folder))
+        self.assertFalse(change['applied'])
+        self.assertEqual(change['skipped'],'initial_configuration_changed')
+        self.assertEqual(api.call_count,2)
+
+    def test_rebind_readback_conflict_never_commits_quality(self):
+        a = self.pending_account()
+        r = self.result(a)
+        for field in ('priority','token','policy','inactive'):
+            with self.subTest(field=field):
+                after=copy.deepcopy(a)
+                after['extra']['openai_gateway_borrow_initial_ready_fingerprint']='new'
+                if field=='priority': after['priority']=9
+                if field=='token': after['credentials']['access_token']='changed'
+                if field=='policy': after['extra']['openai_gateway_borrow_quality_pending']=False
+                if field=='inactive': after['status']='inactive'
+                api=mock.Mock(side_effect=[a,{'id':224,'applied':True},after])
+                with tempfile.TemporaryDirectory() as folder, mock.patch.object(candy.legacy,'admin',api):
+                    with self.assertRaisesRegex(RuntimeError,'readiness readback'):
+                        m.apply_account(a,[r],'key',Path(folder))
+                self.assertEqual(api.call_count,3)
+
+    def test_unfinished_defaults_are_never_rebound(self):
+        a=self.pending_account()
+        r=self.result(a)
+        a['extra']['openai_gateway_borrow_initial_ready']=False
+        api=mock.Mock(return_value=a)
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(candy.legacy,'admin',api):
+            change=m.apply_account(a,[r],'key',Path(folder))
+        self.assertFalse(change['applied'])
+        self.assertEqual(change['skipped'],'initial_defaults_pending')
+        self.assertEqual(api.call_count,1)
+
     def test_four_sample_threshold_and_all_three_required_names(self):
         a = self.account()
         for answers, state, borrowed in [(['21', '21', '29', '21'], 'healthy', []),

@@ -266,6 +266,13 @@ def desired_borrow(account, results):
     return sorted(models)
 
 
+def initial_configuration(account):
+    # The existing initial-ready API compares these persisted fields atomically.
+    return {field: account.get(field) for field in ('concurrency', 'load_factor', 'priority')} | {
+        'group_ids': sorted(set(account.get('group_ids') or [])),
+        'model_mapping': (account.get('credentials') or {}).get('model_mapping')}
+
+
 def apply_account(account, results, key, backup_dir):
     account_id = account['id']
     current = candy.legacy.admin('GET', f'/admin/accounts/{account_id}', key)
@@ -279,7 +286,37 @@ def apply_account(account, results, key, backup_dir):
               and r.get('action') == 'reuse_classification']
     if not completed and not reused:
         return {'id': account_id, 'applied': False, 'skipped': 'incomplete_probe_set'}
+    extra = account.get('extra') or {}
+    pending = (extra.get('openai_gateway_borrow_quality_mode') == QUALITY_MODE
+               and extra.get('openai_gateway_borrow_quality_pending') is True)
+    if pending and extra.get('openai_gateway_borrow_initial_ready') is not True:
+        return {'id': account_id, 'applied': False, 'skipped': 'initial_defaults_pending'}
+    if identity(current) != identity(account):
+        return {'id': account_id, 'applied': False, 'skipped': 'concurrent_identity_change'}
+    if pending and initial_configuration(current) != initial_configuration(account):
+        return {'id': account_id, 'applied': False, 'skipped': 'initial_configuration_changed_during_probe'}
     candy.legacy.save_private(backup_dir / f'account-{account_id}.borrow-before.json', current)
+    if pending:
+        # Ready is a completed defaults barrier, not a permanent freeze on user
+        # edits. Re-observe the SAME configuration used for this fresh sample
+        # round; the API retains its row-lock, identity and configuration CAS.
+        ready_body = {'observed_at': candy.utcnow(), 'expected_proxy_id': account.get('proxy_id'),
+            'credential_sha256': identity(account)['credential_sha256'],
+            'expected_policy': owned_policy(account), 'expected_config': initial_configuration(account)}
+        ready = candy.legacy.admin('POST', f'/admin/accounts/{account_id}/gateway-borrow-initial-ready', key, ready_body)
+        if ready.get('id') != account_id:
+            raise RuntimeError('initial readiness response identity mismatch')
+        if not ready.get('applied') and ready.get('reason') != 'unchanged':
+            return {'id': account_id, 'applied': False, 'skipped': ready.get('reason', 'initial_readiness_not_confirmed')}
+        after = candy.legacy.admin('GET', f'/admin/accounts/{account_id}', key)
+        expected_policy = owned_policy(account)
+        expected_policy['openai_gateway_borrow_initial_ready_fingerprint'] = (after.get('extra') or {}).get('openai_gateway_borrow_initial_ready_fingerprint')
+        if (not expected_policy['openai_gateway_borrow_initial_ready_fingerprint']
+                or owned_policy(after) != expected_policy or identity(after) != identity(account)
+                or initial_configuration(after) != initial_configuration(account)
+                or after.get('status') != 'active' or after.get('schedulable') is not True):
+            raise RuntimeError('initial readiness readback changed')
+        account = current = after
     payload = {'policy_mode': QUALITY_MODE,
         'observed_at': min(r['checked_at'] for r in completed) if completed else candy.utcnow(),
         'expected_proxy_id': account.get('proxy_id'),

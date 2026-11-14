@@ -102,6 +102,7 @@ def inventory():
 SELECT json_build_object('id',a.id,'type',a.type,'platform',a.platform,
        'credentials',a.credentials,'extra',a.extra,'proxy',row_to_json(p),
        'status',a.status,'schedulable',a.schedulable,'proxy_id',a.proxy_id,
+       'concurrency',a.concurrency,'load_factor',a.load_factor,'priority',a.priority,
        'rate_limited_at',a.rate_limited_at,'rate_limit_reset_at',a.rate_limit_reset_at,
        'overload_until',a.overload_until,'temp_unschedulable_until',a.temp_unschedulable_until,
        'temp_unschedulable_reason',a.temp_unschedulable_reason,

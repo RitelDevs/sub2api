@@ -61,12 +61,12 @@ func TestOpenAIAccountDefaultsBusinessAliasesAndExactMapping(t *testing.T) {
 	}
 }
 
-func TestOpenAIAccountDefaultsFreePreservesImportedLoadFactorAndCost(t *testing.T) {
+func TestOpenAIAccountDefaultsFreeClearsImportedLoadFactorAndPreservesCost(t *testing.T) {
 	for _, importedLF := range []*int{nil, func() *int { v := 6; return &v }()} {
 		c := nativeAccountDefaultsFixture()
 		input := &CreateAccountInput{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"plan_type": "free"}, LoadFactor: importedLF}
 		require.NoError(t, nativeAccountDefaultsService(t, c).ApplyOAuthAutoConfig(t.Context(), input))
-		require.Equal(t, importedLF, input.LoadFactor)
+		require.Nil(t, input.LoadFactor)
 		require.Equal(t, 2, input.Concurrency)
 		require.Zero(t, input.Priority)
 		require.NotContains(t, input.Extra, AccountCostMultiplierExtraKey, "native defaults preserve an omitted imported multiplier")
@@ -194,4 +194,68 @@ func TestOpenAIAccountDefaultsValidationAndProjection(t *testing.T) {
 	template.ModelMappings[0].To = "changed"
 	require.Equal(t, 20, *valid.OpenAIAccountDefaults.Templates["business"].LoadFactor)
 	require.Equal(t, "gpt-6-astra", valid.OpenAIAccountDefaults.Templates["business"].ModelMappings[0].To)
+}
+
+func TestOpenAIAccountDefaultsPremiumCapacityPrefixAndSelf(t *testing.T) {
+	c := nativeAccountDefaultsFixture()
+	self := 6
+	c.OpenAIAccountDefaults.SelfPriority = &self
+	premium := c.OpenAIAccountDefaults.Templates["business"]
+	premium.NamePrefix, premium.Concurrency, premium.Priority, premium.LoadFactor = "#Bus5x ", 50, 1, nil
+	c.OpenAIAccountDefaults.Templates["business_premium"] = premium
+	require.NoError(t, ValidateOAuthAutoConfig(c))
+	for _, tc := range []struct {
+		plan, name, wantName  string
+		concurrency, priority int
+	}{
+		{"self_serve_business_prolite", "native", "#Bus5x native", 50, 1},
+		{"business", "native", "native", 20, 2},
+		{"self_serve_business_prolite", "#Bus5x native", "#Bus5x native", 50, 1},
+		{"self_serve_business_prolite", "#Self native", "#Self native", 50, 6},
+	} {
+		input := &CreateAccountInput{Name: tc.name, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"plan_type": tc.plan}}
+		require.NoError(t, nativeAccountDefaultsService(t, c).ApplyOAuthAutoConfig(t.Context(), input))
+		require.Equal(t, tc.wantName, input.Name)
+		require.Equal(t, tc.concurrency, input.Concurrency)
+		require.Equal(t, tc.priority, input.Priority)
+		if tc.plan == "self_serve_business_prolite" {
+			require.Nil(t, input.LoadFactor)
+		}
+	}
+}
+
+func TestOpenAIAccountDefaultsTokenOnlyCapacityKeepsExemptions(t *testing.T) {
+	for _, mode := range []string{OpenAIAuthModeAgentIdentity, OpenAIAuthModePersonalAccessToken} {
+		c := nativeAccountDefaultsFixture()
+		c.OpenAIAccountDefaults.DedicatedProxyCountryCodes = []string{"US"}
+		template := c.OpenAIAccountDefaults.Templates["free"]
+		template.NamePrefix, template.Concurrency, template.Priority = "#Free ", 3, 1
+		c.OpenAIAccountDefaults.Templates["free"] = template
+		proxy, load := int64(19), 99
+		input := &CreateAccountInput{Name: "token-only", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 2, Priority: 42, LoadFactor: &load,
+			ProxyID: &proxy, GroupIDs: []int64{25}, Credentials: map[string]any{"plan_type": "free", "auth_mode": mode, "access_token": "fixture", "model_mapping": map[string]any{"custom": "native"}}, Extra: map[string]any{"kept": true}}
+		require.NoError(t, nativeAccountDefaultsService(t, c).ApplyOAuthAutoConfig(t.Context(), input))
+		require.Equal(t, "#Free token-only", input.Name)
+		require.Equal(t, 3, input.Concurrency)
+		require.Equal(t, 1, input.Priority)
+		require.Nil(t, input.LoadFactor)
+		require.Equal(t, &proxy, input.ProxyID)
+		require.Equal(t, []int64{25}, input.GroupIDs)
+		require.Equal(t, map[string]any{"custom": "native"}, input.Credentials["model_mapping"])
+		require.Nil(t, input.InitialQualityPlan)
+		require.Nil(t, input.InitialAdmissionPlan)
+		require.Equal(t, map[string]any{"kept": true}, input.Extra)
+	}
+}
+
+func TestOpenAIAccountDefaultsNameAndSelfValidation(t *testing.T) {
+	c := nativeAccountDefaultsFixture()
+	bad := -1
+	c.OpenAIAccountDefaults.SelfPriority = &bad
+	require.Error(t, ValidateOAuthAutoConfig(c))
+	c.OpenAIAccountDefaults.SelfPriority = nil
+	template := c.OpenAIAccountDefaults.Templates["business"]
+	template.NamePrefix = "#Bus\n"
+	c.OpenAIAccountDefaults.Templates["business"] = template
+	require.Error(t, ValidateOAuthAutoConfig(c))
 }

@@ -4,16 +4,18 @@ export interface OAuthAccountTemplate {
   concurrency: number
   load_factor: number | null
   priority: number
+  name_prefix?: string
   model_mappings: OAuthModelMappingRule[]
 }
 export interface OpenAIAccountDefaultsConfig {
   enabled: boolean
+  self_priority?: number | null
   legacy_account_ids?: number[]
   templates: Record<string, OAuthAccountTemplate>
   model_exclusions?: Record<string, string[]>
   dedicated_proxy_country_codes?: string[]
 }
-export const OPENAI_TEMPLATE_PLANS = ['free', 'go', 'plus', 'prolite', 'pro', 'promax', 'business'] as const
+export const OPENAI_TEMPLATE_PLANS = ['free', 'go', 'plus', 'prolite', 'pro', 'promax', 'business_premium', 'business'] as const
 export function defaultOpenAIAccountDefaults(): OpenAIAccountDefaultsConfig {
   return { enabled: false, templates: {}, model_exclusions: {}, dedicated_proxy_country_codes: [] }
 }
@@ -31,9 +33,15 @@ export function openaiAccountDefaultsPayload(config: OpenAIAccountDefaultsConfig
 }
 export function openaiAccountDefaultsError(config?: OpenAIAccountDefaultsConfig | null): string | null {
   if (!config) return null
+  if (config.self_priority != null && (!Number.isInteger(config.self_priority) || config.self_priority < 0 || config.self_priority > 10000)) return 'autoConfig.accountDefaults.invalidSelfPriority'
   const templates = Object.entries(config.templates ?? {})
   if (config.enabled && !templates.length) return 'autoConfig.accountDefaults.templatesRequired'
   for (const [, template] of templates) {
+    const prefix = template.name_prefix
+    if (prefix != null && (new TextEncoder().encode(prefix).length > 100 || [...prefix].some(char => {
+      const code = char.charCodeAt(0)
+      return code < 32 || code >= 127 && code <= 159
+    }))) return 'autoConfig.accountDefaults.invalidNamePrefix'
     if (!Number.isInteger(template.concurrency) || template.concurrency < 1 || template.concurrency > 10000 ||
         !Number.isInteger(template.priority) || template.priority < 0 || template.priority > 10000 ||
         template.load_factor !== null && (!Number.isInteger(template.load_factor) || template.load_factor < 1 || template.load_factor > 10000)) {

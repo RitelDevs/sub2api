@@ -1,3 +1,4 @@
+import { openaiAccountDefaultsError, defaultOpenAIAccountDefaults } from '@/utils/openaiAccountDefaults'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { reactive } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
@@ -971,6 +972,19 @@ describe('OpenAI account plan defaults', () => {
   expect(w.get<HTMLInputElement>('[data-testid="openai-tier-load-business"]').element.value).toBe('')
   w.unmount()
  })
+ it('round-trips Business Premium prefixes and the cross-platform Self priority without trimming spaces', async () => {
+  const premium = { ...structuredClone(native.templates.business), concurrency: 50, load_factor: null, priority: 1, name_prefix: '#Bus5x ' }
+  const defaults = { ...structuredClone(native), self_priority: 6, templates: { ...structuredClone(native.templates), business_premium: premium } }
+  vi.mocked(getAutoConfig).mockResolvedValueOnce({ ...structuredClone(config), enabled: true, group_ids: [5], openai_account_defaults: defaults })
+  const w = mount(AutoConfigView); await flushPromises()
+  expect(w.get<HTMLInputElement>('[data-testid="openai-tier-name-prefix-business_premium"]').element.value).toBe('#Bus5x ')
+  expect(w.get<HTMLInputElement>('[data-testid="openai-self-priority"]').element.value).toBe('6')
+  await w.get('[data-testid="openai-tier-name-prefix-business_premium"]').setValue('#Bus5x ')
+  await w.get('[data-testid="openai-self-priority"]').setValue(6)
+  await w.get('form').trigger('submit'); await flushPromises()
+  expect(vi.mocked(saveAutoConfig).mock.lastCall?.[0].openai_account_defaults).toEqual(defaults)
+  w.unmount()
+ })
  it('starts disabled without inventing templates and requires model rules before enabling', async () => {
   const w = mount(AutoConfigView); await flushPromises()
   expect(w.get('[data-testid="openai-defaults-enabled"]').attributes('aria-checked')).toBe('false')
@@ -1040,5 +1054,24 @@ describe('initial model selection real page interactions', () => {
   await w.get('form').trigger('submit'); await flushPromises()
   expect(vi.mocked(saveAutoConfig).mock.calls.at(-1)![0].selected_models).toContain('custom-model')
   w.unmount()
+ })
+})
+
+
+describe('OpenAI plan name and Self priority validation', () => {
+ it('accepts null load, trailing prefix space and optional Self priority; rejects byte overflow and controls', () => {
+  const config = defaultOpenAIAccountDefaults()
+  config.self_priority = 6
+  config.templates.business_premium = { concurrency: 50, load_factor: null, priority: 1, name_prefix: '#Bus5x ', model_mappings: [{ from: 'gpt-6-astra', to: 'gpt-6-astra' }] }
+  expect(openaiAccountDefaultsError(config)).toBeNull()
+  config.templates.business_premium!.name_prefix = '界'.repeat(34)
+  expect(openaiAccountDefaultsError(config)).toBe('autoConfig.accountDefaults.invalidNamePrefix')
+  config.templates.business_premium!.name_prefix = 'bad\n'
+  expect(openaiAccountDefaultsError(config)).toBe('autoConfig.accountDefaults.invalidNamePrefix')
+  config.templates.business_premium!.name_prefix = '#Bus5x '
+  config.self_priority = 6.5
+  expect(openaiAccountDefaultsError(config)).toBe('autoConfig.accountDefaults.invalidSelfPriority')
+  config.self_priority = null
+  expect(openaiAccountDefaultsError(config)).toBeNull()
  })
 })

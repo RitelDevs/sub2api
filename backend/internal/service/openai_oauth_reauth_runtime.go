@@ -55,7 +55,7 @@ func (s *OpenAIOAuthReauthService) configureWorker(cfg *config.Config, info Buil
 	}
 	runtimeVersion := info.Version
 	switch runtimeVersion {
-	case managedReauthForkVersion, "2.21.1.2-ritel", "2.21.1.1-ritel", "2.19.2.28-ritel", "2.19.2.26-ritel", "2.19.2.25-ritel", "2.19.2.24-ritel", "2.19.2.22-ritel", "2.19.2.21-ritel", "2.19.2.20-ritel", "2.19.2.18-ritel", "2.19.2.17-ritel", "2.19.2.15-ritel", "2.19.2.14-ritel", "2.19.2.13-ritel", "2.19.2.12-ritel", "2.19.2.11-ritel", "2.19.2.10-ritel", "2.19.2.9-ritel":
+	case managedReauthForkVersion, "2.21.2.2-ritel", "2.21.2.1-ritel", "2.21.1.4-ritel", "2.21.1.3-ritel", "2.21.1.2-ritel", "2.21.1.1-ritel", "2.19.2.28-ritel", "2.19.2.26-ritel", "2.19.2.25-ritel", "2.19.2.24-ritel", "2.19.2.22-ritel", "2.19.2.21-ritel", "2.19.2.20-ritel", "2.19.2.18-ritel", "2.19.2.17-ritel", "2.19.2.15-ritel", "2.19.2.14-ritel", "2.19.2.13-ritel", "2.19.2.12-ritel", "2.19.2.11-ritel", "2.19.2.10-ritel", "2.19.2.9-ritel":
 		runtimeVersion = "2.19.2-ritel-reauth.1"
 	case "2.19.2.8-ritel", "2.19.2.7-ritel", "2.19.2.6-ritel", "2.19.2.5-ritel", "2.19.2.4-ritel", "2.19.2.3-ritel":
 		runtimeVersion = managedReauthRuntimeVersion

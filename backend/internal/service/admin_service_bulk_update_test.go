@@ -632,3 +632,59 @@ func TestAdminServiceBulkUpdateAccounts_ValidatesFilterResolvedOpenAITargets(t *
 	require.Equal(t, []int64{7}, repo.getByIDsIDs)
 	require.Zero(t, repo.bulkUpdateCalls)
 }
+
+func TestAdminServiceSelfPriorityAppliesAcrossPlatformsOnCreateAndExplicitEdit(t *testing.T) {
+	c := nativeAccountDefaultsFixture()
+	self := 6
+	c.OpenAIAccountDefaults.SelfPriority = &self
+	svc := nativeAccountDefaultsService(t, c)
+	repo := &accountRepoStubForBulkUpdate{createID: 181, getByIDAccounts: map[int64]*Account{}}
+	svc.accountRepo = repo
+	created, err := svc.CreateAccount(t.Context(), &CreateAccountInput{Name: "#Self Grok", Platform: PlatformGrok, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"cookie": "fixture"}, Concurrency: 3, Priority: 2, SkipDefaultGroupBind: true})
+	require.NoError(t, err)
+	require.Equal(t, 6, created.Priority)
+	synced := &Account{Name: "#Self imported Grok", Platform: PlatformGrok, Type: AccountTypeOAuth, Priority: 1}
+	native, err := svc.createNativeSyncedAccount(t.Context(), synced)
+	require.NoError(t, err)
+	require.False(t, native)
+	require.Equal(t, 6, synced.Priority)
+	repo.getByIDAccounts[created.ID] = created
+	priority := 1
+	updated, err := svc.UpdateAccount(t.Context(), created.ID, &UpdateAccountInput{Priority: &priority})
+	require.NoError(t, err)
+	require.Equal(t, 6, updated.Priority)
+	updated, err = svc.UpdateAccount(t.Context(), created.ID, &UpdateAccountInput{Name: "ordinary Grok", Priority: &priority})
+	require.NoError(t, err)
+	require.Equal(t, 1, updated.Priority, "explicitly removing #Self returns priority ownership to the edit")
+}
+
+type selfPriorityBulkRepo struct {
+	accountRepoStubForBulkUpdate
+	priorityByID map[int64]int
+}
+
+func (r *selfPriorityBulkRepo) BulkUpdate(_ context.Context, ids []int64, update AccountBulkUpdate) (int64, error) {
+	for _, id := range ids {
+		if update.Priority != nil {
+			r.priorityByID[id] = *update.Priority
+		}
+	}
+	return int64(len(ids)), nil
+}
+func TestAdminServiceSelfBulkPriorityDoesNotChangeOtherTargets(t *testing.T) {
+	c := nativeAccountDefaultsFixture()
+	self := 6
+	c.OpenAIAccountDefaults.SelfPriority = &self
+	svc := nativeAccountDefaultsService(t, c)
+	repo := &selfPriorityBulkRepo{accountRepoStubForBulkUpdate: accountRepoStubForBulkUpdate{getByIDsAccounts: []*Account{
+		{ID: 181, Name: "#Self Grok", Platform: PlatformGrok, Type: AccountTypeOAuth},
+		{ID: 182, Name: "ordinary", Platform: PlatformOpenAI, Type: AccountTypeAPIKey},
+	}}, priorityByID: map[int64]int{}}
+	svc.accountRepo = repo
+	priority := 1
+	_, err := svc.BulkUpdateAccounts(t.Context(), &BulkUpdateAccountsInput{AccountIDs: []int64{181, 182}, Priority: &priority})
+	require.NoError(t, err)
+	require.Equal(t, 6, repo.priorityByID[181])
+	require.Equal(t, 1, repo.priorityByID[182])
+}

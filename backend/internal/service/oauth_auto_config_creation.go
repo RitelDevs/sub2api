@@ -175,12 +175,26 @@ func (s *adminServiceImpl) createNativeSyncedAccount(ctx context.Context, accoun
 	if account.IsShadow() {
 		return false, nil
 	}
-	input := &CreateAccountInput{Platform: account.Platform, Type: account.Type,
+	input := &CreateAccountInput{Name: account.Name, Platform: account.Platform, Type: account.Type,
 		Priority: account.Priority, Concurrency: account.Concurrency, LoadFactor: account.LoadFactor,
 		Extra: account.Extra, Credentials: account.Credentials, ProxyID: account.ProxyID}
 	creationCtx, native, err := s.oauthAccountCreationContext(ctx, input)
-	if err != nil || !native {
+	if err != nil {
 		return native, err
+	}
+	if !native {
+		if account.IsOpenAIPersonalAccessToken() || account.IsOpenAIAgentIdentity() {
+			if err := s.ApplyOAuthAutoConfig(ctx, input); err != nil {
+				return false, err
+			}
+			account.Name, account.Priority, account.Concurrency, account.LoadFactor = input.Name, input.Priority, input.Concurrency, input.LoadFactor
+		}
+		if priority, err := s.configuredSelfPriority(creationCtx, account.Name); err != nil {
+			return false, err
+		} else if priority != nil {
+			account.Priority = *priority
+		}
+		return false, nil
 	}
 	created, err := s.withNativeOAuthCreationTransaction(creationCtx, func(txctx context.Context) (*Account, error) {
 		if err := s.ApplyOAuthAutoConfig(txctx, input); err != nil {
@@ -188,7 +202,7 @@ func (s *adminServiceImpl) createNativeSyncedAccount(ctx context.Context, accoun
 		}
 		next := *account
 		next.InitialQualityPlan = input.InitialQualityPlan
-		next.Priority, next.Concurrency, next.LoadFactor = input.Priority, input.Concurrency, input.LoadFactor
+		next.Name, next.Priority, next.Concurrency, next.LoadFactor = input.Name, input.Priority, input.Concurrency, input.LoadFactor
 		next.Extra, next.Credentials, next.ProxyID = input.Extra, input.Credentials, input.ProxyID
 		next.GroupIDs = append([]int64(nil), input.GroupIDs...)
 		prepareGatewayBorrowAccountQualityForCreate(&next)

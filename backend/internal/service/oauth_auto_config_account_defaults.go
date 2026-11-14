@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
@@ -14,6 +15,7 @@ import (
 // Exclusions are keyed by existing account ID and used by model reconciliation.
 type OpenAIAccountDefaultsConfig struct {
 	Enabled                    bool                            `json:"enabled"`
+	SelfPriority               *int                            `json:"self_priority,omitempty"`
 	Templates                  map[string]OAuthAccountTemplate `json:"templates"`
 	ModelExclusions            map[string][]string             `json:"model_exclusions,omitempty"`
 	DedicatedProxyCountryCodes []string                        `json:"dedicated_proxy_country_codes,omitempty"`
@@ -21,6 +23,7 @@ type OpenAIAccountDefaultsConfig struct {
 }
 
 type OAuthAccountTemplate struct {
+	NamePrefix    string                  `json:"name_prefix,omitempty"`
 	Concurrency   int                     `json:"concurrency"`
 	LoadFactor    *int                    `json:"load_factor"`
 	Priority      int                     `json:"priority"`
@@ -29,7 +32,9 @@ type OAuthAccountTemplate struct {
 
 func oauthAccountDefaultsPlanKey(plan string) string {
 	switch plan {
-	case "self_serve_business_prolite", "self_serve_business_usage_based", "team", "business":
+	case "self_serve_business_prolite", "business_premium":
+		return "business_premium"
+	case "self_serve_business_usage_based", "team", "business":
 		return "business"
 	case "free", "go", "plus", "prolite", "pro", "promax":
 		return plan
@@ -49,6 +54,10 @@ func OAuthAccountDefaultsTemplateFor(c *OpenAIAccountDefaultsConfig, plan string
 		return OAuthAccountTemplate{}, false
 	}
 	template, ok := c.Templates[key]
+	if !ok && key == "business_premium" {
+		// Existing seven-tier policies keep their Business behavior until split.
+		template, ok = c.Templates["business"]
+	}
 	if !ok {
 		return OAuthAccountTemplate{}, false
 	}
@@ -87,10 +96,16 @@ func validateOpenAIAccountDefaults(c *OpenAIAccountDefaultsConfig) error {
 		}
 		legacyIDs[id] = true
 	}
-	if len(c.Templates) > 7 || (c.Enabled && len(c.Templates) == 0) {
-		return bad("select between one and seven OpenAI account templates")
+	if c.SelfPriority != nil && (*c.SelfPriority < 0 || *c.SelfPriority > 10000) {
+		return bad("Self priority must be 0–10000")
+	}
+	if len(c.Templates) > 8 || (c.Enabled && len(c.Templates) == 0) {
+		return bad("select between one and eight OpenAI account templates")
 	}
 	for key, template := range c.Templates {
+		if len(template.NamePrefix) > 100 || strings.IndexFunc(template.NamePrefix, unicode.IsControl) >= 0 {
+			return bad("template name prefix must be at most 100 bytes without control characters")
+		}
 		if key == "" || oauthAccountDefaultsPlanKey(key) != key {
 			return bad("unsupported OpenAI account template key")
 		}
@@ -151,11 +166,7 @@ func (s *adminServiceImpl) applyOpenAIAccountDefaults(ctx context.Context, input
 	if !ok {
 		return infraerrors.BadRequest("AUTO_CONFIG_OPENAI_PLAN_UNSUPPORTED", "no automatic configuration template for this OpenAI plan")
 	}
-	input.Priority = template.Priority
-	input.Concurrency = template.Concurrency
-	if template.LoadFactor != nil {
-		input.LoadFactor = template.LoadFactor
-	}
+	applyOpenAIAccountTemplateFields(input, c, template)
 	input.Credentials = maps.Clone(input.Credentials)
 	if input.Credentials == nil {
 		input.Credentials = map[string]any{}
@@ -166,4 +177,39 @@ func (s *adminServiceImpl) applyOpenAIAccountDefaults(ctx context.Context, input
 		return s.applyOAuthDedicatedProxy(ctx, input, c.DedicatedProxyCountryCodes)
 	}
 	return nil
+}
+
+// Capacity/name policy is shared with token-only accounts without enrolling them
+// in model/group/proxy initialization or initial-quality admission.
+func applyOpenAIAccountTemplateFields(input *CreateAccountInput, c *OpenAIAccountDefaultsConfig, template OAuthAccountTemplate) {
+	input.Priority = template.Priority
+	input.Concurrency = template.Concurrency
+	// nil is an explicit "use concurrency" default, including imported accounts.
+	input.LoadFactor = template.LoadFactor
+	if strings.HasPrefix(input.Name, "#Self") {
+		if c.SelfPriority != nil {
+			input.Priority = *c.SelfPriority
+		}
+		return
+	}
+	if template.NamePrefix != "" && !strings.HasPrefix(input.Name, template.NamePrefix) {
+		input.Name = template.NamePrefix + input.Name
+	}
+}
+
+// This name rule applies to every platform, but only to creation or explicit
+// name/priority edits. It does not turn ordinary updates into a template sync.
+func (s *adminServiceImpl) configuredSelfPriority(ctx context.Context, name string) (*int, error) {
+	if !strings.HasPrefix(name, "#Self") || s.settingService == nil {
+		return nil, nil
+	}
+	c, err := getOAuthAutoConfigForCreation(ctx, s.settingService)
+	if err != nil {
+		return nil, err
+	}
+	if c.OpenAIAccountDefaults == nil || c.OpenAIAccountDefaults.SelfPriority == nil {
+		return nil, nil
+	}
+	priority := *c.OpenAIAccountDefaults.SelfPriority
+	return &priority, nil
 }

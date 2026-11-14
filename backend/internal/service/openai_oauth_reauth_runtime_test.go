@@ -82,6 +82,7 @@ func TestOpenAIOAuthReauthForkVersionUsesPinnedRuntimeRelease(t *testing.T) {
 	// Use the actual release version: a version bump must keep its reviewed runtime mapping.
 	for _, tt := range []struct{ version, runtime, repository string }{
 		{strings.TrimSpace(string(version)), "2.19.2-ritel-reauth.1", "RitelDevs/sub2api"},
+		{"2.21.2.8-ritel", "2.19.2-ritel-reauth.1", "RitelDevs/sub2api"},
 		{"2.19.2.8-ritel", "2.18.0", "ranxi2001/sub2api"},
 		{"2.9.8.1-ritel", "2.9.8", "ranxi2001/sub2api"},
 	} {

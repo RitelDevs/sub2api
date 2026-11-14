@@ -19,6 +19,7 @@ type OpenAIAccountDefaultsConfig struct {
 	Templates                  map[string]OAuthAccountTemplate `json:"templates"`
 	ModelExclusions            map[string][]string             `json:"model_exclusions,omitempty"`
 	DedicatedProxyCountryCodes []string                        `json:"dedicated_proxy_country_codes,omitempty"`
+	SharedProxyIDs             []int64                         `json:"shared_proxy_ids,omitempty"`
 	LegacyAccountIDs           []int64                         `json:"legacy_account_ids,omitempty"`
 }
 
@@ -139,6 +140,16 @@ func validateOpenAIAccountDefaults(c *OpenAIAccountDefaultsConfig) error {
 			seen[model] = true
 		}
 	}
+	if len(c.SharedProxyIDs) > 0 && len(c.DedicatedProxyCountryCodes) > 0 {
+		return bad("shared proxy IDs and dedicated proxy countries are mutually exclusive")
+	}
+	sharedIDs := make(map[int64]bool, len(c.SharedProxyIDs))
+	for _, id := range c.SharedProxyIDs {
+		if id <= 0 || sharedIDs[id] {
+			return bad("shared proxy IDs must be positive and unique")
+		}
+		sharedIDs[id] = true
+	}
 	if len(c.DedicatedProxyCountryCodes) > 249 {
 		return bad("too many dedicated proxy country codes")
 	}
@@ -173,6 +184,9 @@ func (s *adminServiceImpl) applyOpenAIAccountDefaults(ctx context.Context, input
 	}
 	input.Credentials["model_mapping"] = OAuthAccountDefaultsModelMapping(template, nil)
 	input.Credentials[OpenAIModelMappingModeKey] = "whitelist"
+	if len(c.SharedProxyIDs) > 0 {
+		return s.applyOAuthSharedProxy(ctx, input, c.SharedProxyIDs)
+	}
 	if len(c.DedicatedProxyCountryCodes) > 0 {
 		return s.applyOAuthDedicatedProxy(ctx, input, c.DedicatedProxyCountryCodes)
 	}

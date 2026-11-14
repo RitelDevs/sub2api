@@ -14,6 +14,7 @@ export interface OpenAIAccountDefaultsConfig {
   templates: Record<string, OAuthAccountTemplate>
   model_exclusions?: Record<string, string[]>
   dedicated_proxy_country_codes?: string[]
+  shared_proxy_ids?: number[]
 }
 export const OPENAI_TEMPLATE_PLANS = ['free', 'go', 'plus', 'prolite', 'pro', 'promax', 'business_premium', 'business'] as const
 export function defaultOpenAIAccountDefaults(): OpenAIAccountDefaultsConfig {
@@ -23,6 +24,7 @@ export function openaiAccountDefaultsPayload(config: OpenAIAccountDefaultsConfig
   return {
     ...config,
     ...(config.legacy_account_ids ? { legacy_account_ids: [...config.legacy_account_ids] } : {}),
+    ...(config.shared_proxy_ids ? { shared_proxy_ids: [...config.shared_proxy_ids] } : {}),
     templates: Object.fromEntries(Object.entries(config.templates ?? {}).map(([plan, template]) => [plan, {
       ...template,
       model_mappings: oauthModelMappingsPayload(template.model_mappings ?? [])

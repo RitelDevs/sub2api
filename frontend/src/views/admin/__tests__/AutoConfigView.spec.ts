@@ -1,4 +1,4 @@
-import { openaiAccountDefaultsError, defaultOpenAIAccountDefaults } from '@/utils/openaiAccountDefaults'
+import { openaiAccountDefaultsError, openaiAccountDefaultsPayload, defaultOpenAIAccountDefaults } from '@/utils/openaiAccountDefaults'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { reactive } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
@@ -948,6 +948,24 @@ it('keeps scopes during a group page failure, retries all pages and preserves ID
 
 
 describe('OpenAI account plan defaults', () => {
+ it('preserves the API-managed shared pool through tier edits and save without aliasing its IDs', async () => {
+  const defaults = { ...structuredClone(native), dedicated_proxy_country_codes: [], shared_proxy_ids: [21, 7] }
+  const payload = openaiAccountDefaultsPayload(defaults)
+  expect(payload.shared_proxy_ids).toEqual([21, 7])
+  expect(payload.shared_proxy_ids).not.toBe(defaults.shared_proxy_ids)
+  vi.mocked(getAutoConfig).mockResolvedValueOnce({ ...structuredClone(config), enabled: true, group_ids: [5], openai_account_defaults: defaults })
+  const w = mount(AutoConfigView); await flushPromises()
+  await w.get('[data-testid="openai-tier-concurrency-business"]').setValue(24)
+  await w.get('[data-testid="openai-tier-load-business"]').setValue('')
+  await w.get('form').trigger('submit'); await flushPromises()
+  const saved = vi.mocked(saveAutoConfig).mock.lastCall?.[0].openai_account_defaults
+  expect(saved?.shared_proxy_ids).toEqual([21, 7])
+  expect(saved?.dedicated_proxy_country_codes).toEqual([])
+  expect(saved?.templates.business.concurrency).toBe(24)
+  expect(saved?.templates.business.load_factor).toBeNull()
+  expect(defaults.shared_proxy_ids).toEqual([21, 7])
+  w.unmount()
+ })
  const native = {
   enabled: true,
   legacy_account_ids: [88, 195],

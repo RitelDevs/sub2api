@@ -299,7 +299,11 @@ func TestOpenAI409OAuthReplayKeepsOriginalSnapshotAndFinalControls(t *testing.T)
 			}
 			require.NoError(t, prepareOpenAI409OAuthReplay(next, c, decoded))
 			if strings.HasPrefix(mode, "web_search_") {
-				tool := decoded["tools"].([]any)[1].(map[string]any)
+				tools, ok := decoded["tools"].([]any)
+				require.True(t, ok)
+				require.Len(t, tools, 2)
+				tool, ok := tools[1].(map[string]any)
+				require.True(t, ok)
 				require.NotContains(t, tool, "external_web_access")
 				require.Equal(t, "web_search", tool["type"])
 				require.Equal(t, "low", tool["search_context_size"])

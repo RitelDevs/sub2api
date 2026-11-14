@@ -27,7 +27,7 @@
           {{ tab.label }}
         </button>
       </div>
-      <UsageFilters v-if="activeTab !== 'traffic'" v-model="filters" ref="usageFiltersRef" :show-record-actions="usagePage === 'records'" flat :mode="activeTab === 'analysis' ? 'usage' : activeTab" class="admin-usage-filters" data-testid="admin-usage-filters" :start-date="startDate" :end-date="endDate" :exporting="exporting" :model-options="modelNameOptions" @change="applyFilters" @refresh="refreshData" @reset="resetFilters" @cleanup="openCleanupDialog" @export="exportToExcel">
+      <UsageFilters v-if="activeTab !== 'traffic'" v-model="filters" ref="usageFiltersRef" :notice-user-id="props.observerMode ? undefined : authStore.user?.id" :show-record-actions="usagePage === 'records'" flat :mode="activeTab === 'analysis' ? 'usage' : activeTab" class="admin-usage-filters" data-testid="admin-usage-filters" :start-date="startDate" :end-date="endDate" :exporting="exporting" :model-options="modelNameOptions" @change="applyFilters" @refresh="refreshData" @reset="resetFilters" @cleanup="openCleanupDialog" @export="exportToExcel">
         <template #before-filters>
           <div class="usage-time-filter">
             <label class="input-label">{{ t('admin.dashboard.timeRange') }}</label>
@@ -78,7 +78,7 @@
             :start-date="startDate"
             :end-date="endDate"
             :filters="breakdownFilters"
-            :enable-breakdown="!props.observerMode"
+            :enable-breakdown="!props.observerMode && !filters.platform"
           />
           <GroupDistributionChart
             v-model:metric="groupDistributionMetric"
@@ -88,7 +88,7 @@
             :start-date="startDate"
             :end-date="endDate"
             :filters="breakdownFilters"
-            :enable-breakdown="!props.observerMode"
+            :enable-breakdown="!props.observerMode && !filters.platform"
           />
         </div>
         <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -105,7 +105,7 @@
             :start-date="startDate"
             :end-date="endDate"
             :filters="breakdownFilters"
-            :enable-breakdown="!props.observerMode"
+            :enable-breakdown="!props.observerMode && !filters.platform"
           />
           <TokenUsageTrend :trend-data="trendData" :loading="chartsLoading" />
         </div>
@@ -337,7 +337,7 @@ const filters = ref<AdminUsageQueryParams>({ user_id: undefined, model: undefine
 const logList = useInfiniteList<AdminUsageLog>({
   keyOf: row => row.id, pageSize: 50,
   fetchPage: (page, signal) => (props.observerMode ? observerUsageAPI.list : adminAPI.usage.list)(
-    buildUsageListParams(page, 50, false), { signal }),
+    buildUsageListParams(page, 50, !props.observerMode && !!filters.value.platform), { signal }),
 })
 const { items: usageLogs, loading } = logList
 const sortState = reactive({
@@ -513,6 +513,7 @@ const loadModelStats = async (source: ModelDistributionSource, force = false) =>
       api_key_id: filters.value.api_key_id,
       account_id: filters.value.account_id,
       group_id: filters.value.group_id,
+      platform: filters.value.platform,
       request_type: requestType,
       stream: legacyStream === null ? undefined : legacyStream,
       native_compaction_v2: filters.value.native_compaction_v2,
@@ -567,6 +568,7 @@ const loadChartData = async () => {
       api_key_id: filters.value.api_key_id,
       account_id: filters.value.account_id,
       group_id: filters.value.group_id,
+      platform: filters.value.platform,
       request_type: requestType,
       stream: legacyStream === null ? undefined : legacyStream,
       native_compaction_v2: filters.value.native_compaction_v2,
@@ -650,6 +652,10 @@ const handleIpGeoBatchFailed = () => {
 const cancelExport = () => exportAbortController?.abort()
 const openCleanupDialog = () => {
   if (props.observerMode) return
+  if (filters.value.platform) {
+    appStore.showWarning(t('admin.usage.platformCleanupUnavailable'))
+    return
+  }
   if (!cleanupUsesCalendarDates.value) {
     appStore.showWarning(t('admin.usage.cleanup.calendarRangeRequired'))
     return
@@ -669,6 +675,7 @@ const getRequestTypeLabel = (log: AdminUsageLog): string => {
 const exportToExcel = async () => {
   if (exporting.value) return; exporting.value = true; exportProgress.show = true
   const c = new AbortController(); exportAbortController = c
+  const exportParams = buildUsageListParams(1, 100, true)
   try {
     let p = 1; let total = logList.total.value ?? 0; let exportedCount = 0
     const XLSX = await import('xlsx')
@@ -689,7 +696,7 @@ const exportToExcel = async () => {
     const ws = XLSX.utils.aoa_to_sheet([headers])
     while (true) {
       const res = await (props.observerMode ? observerUsageAPI.list : adminUsageAPI.list)(
-        buildUsageListParams(p, 100, true),
+        { ...exportParams, page: p },
         { signal: c.signal }
       )
       if (c.signal.aborted) break; if (p === 1) { total = res.total; exportProgress.total = total }
@@ -717,7 +724,7 @@ const exportToExcel = async () => {
     if(!c.signal.aborted) {
       const wb = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(wb, ws, 'Usage')
-      saveAs(new Blob([XLSX.write(wb, { bookType: 'xlsx', type: 'array' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `usage_${filters.value.start_date}_to_${filters.value.end_date}.xlsx`)
+      saveAs(new Blob([XLSX.write(wb, { bookType: 'xlsx', type: 'array' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `usage_${exportParams.start_date}_to_${exportParams.end_date}.xlsx`)
       appStore.showSuccess(t('usage.exportSuccess'))
     }
   } catch (error) { console.error('Failed to export:', error); appStore.showError('Export Failed') }
@@ -823,6 +830,7 @@ const rankingRef = ref<InstanceType<typeof UserTokenRanking> | null>(null)
 
 const switchTab = (tab: UsageDetailTab) => {
   if (!detailTabs.value.some(item => item.key === tab) || activeTab.value === tab) return
+  if (tab !== 'usage' && tab !== 'analysis') filters.value.platform = undefined
   activeTab.value = tab
   invalidateActiveRequests()
   syncLocation()

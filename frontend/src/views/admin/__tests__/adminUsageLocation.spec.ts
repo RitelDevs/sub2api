@@ -4,7 +4,7 @@ const defaults = { start: '2026-10-27T12:00:00Z', end: '2026-10-28T12:00:00Z' }
 describe('admin usage page locations', () => {
   it('roundtrips the full shared filter scope including false and zero', () => {
     const query = { view: 'records', tab: 'usage', start_date: defaults.start, end_date: defaults.end,
-      user_id: '12', api_key_id: '13', account_id: '14', group_id: '15', model: 'gpt-6-astra',
+      user_id: '12', api_key_id: '13', account_id: '14', group_id: '15', model: 'gpt-6-astra', platform: 'unknown',
       request_type: 'ws_v2', stream: 'false', native_compaction_v2: 'false', billing_type: '0',
       billing_mode: 'token', upstream_model_mismatch: 'false', request_id: 'request-123',
       error_phase: 'upstream', error_category: 'rate_limit', status_code: '429', timezone: 'America/Los_Angeles',
@@ -27,6 +27,14 @@ describe('admin usage page locations', () => {
     const query = adminUsageLocationQuery({ ...state, granularity: 'hour' })
     expect(parseAdminUsageLocation(query as any, defaults)).toMatchObject({ tab: 'latency', filters: { account_id: 14, model: 'gpt-6-astra', timezone: 'Europe/Stockholm', start_date: defaults.start, end_date: defaults.end } })
     expect(parseAdminUsageLocation(query as any, defaults, true).tab).toBe('usage')
+  })
+  it.each(['errors', 'connections', 'traffic', 'ranking', 'latency'])('drops platform outside usage/analysis on %s', tab => {
+    const state = parseAdminUsageLocation({ view: tab, platform: 'openai' }, defaults)
+    expect(state.filters.platform).toBeUndefined()
+    expect(adminUsageLocationQuery({ ...state, filters: { ...state.filters, platform: 'openai' }, granularity: 'hour' }, { platform: 'openai' }).platform).toBeUndefined()
+  })
+  it('does not restore the admin platform filter for observers', () => {
+    expect(parseAdminUsageLocation({ view: 'analysis', platform: 'unknown' }, defaults, true).filters.platform).toBeUndefined()
   })
   it('rejects malformed IDs and keeps restricted observer modes within own pages', () => {
     const state = parseAdminUsageLocation({ view: 'ranking', user_id: '44', account_id: '55', api_key_id: '2.5', group_id: '-1' }, defaults, true)

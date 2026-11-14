@@ -54,8 +54,8 @@
           <span
             v-if="row.message"
             class="block max-w-[280px] truncate text-sm text-gray-600 dark:text-gray-400"
-            :title="row.message"
-          >{{ row.message }}</span>
+            :title="userErrorMessage(row, t)"
+          >{{ userErrorMessage(row, t) }}</span>
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
         </template>
 
@@ -120,6 +120,7 @@
 </template>
 
 <script setup lang="ts">
+import { userErrorMessage } from '@/utils/userErrorMessage'
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DataTable from '@/components/common/DataTable.vue'

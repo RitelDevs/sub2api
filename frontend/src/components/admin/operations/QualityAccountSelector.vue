@@ -12,7 +12,7 @@
       <label v-if="!hideTypeFilter" class="space-y-1 text-sm"><span>{{ t('qualityOps.accountType') }}</span>
         <select v-model="accountType" class="input" data-testid="quality-account-type" @change="emit('search', 1)">
           <option value="">{{ t('qualityOps.allAccountTypes') }}</option>
-          <option v-for="option in qualityAccountTypeOptions" :key="option.value" :value="option.value">{{ t(option.label) }}</option>
+          <option v-for="option in typeOptions || qualityAccountTypeOptions" :key="option.value" :value="option.value">{{ t(option.label) }}</option>
         </select>
       </label>
     </div>
@@ -49,12 +49,11 @@
   </div>
 </template>
 
-<script setup lang="ts">
+<script setup lang="ts" generic="T extends { id: number; name: string }">
 import DocumentRows from '@/components/common/DocumentRows.vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import InfiniteListSentinel from '@/components/common/InfiniteListSentinel.vue'
-import type { AccountListItem, AdminGroup } from '@/types'
 import { qualityAccountStatusOptions, qualityAccountTypeOptions } from '@/utils/qualityAccountFilter'
 
 const { t } = useI18n()
@@ -66,8 +65,8 @@ const accountType = defineModel<string>('type', { required: true })
 const statuses = defineModel<string[]>('statuses', { required: true })
 const scope = defineModel<'all' | 'manual'>('scope', { required: true })
 const props = defineProps<{
-  accounts: AccountListItem[]
-  groups: Pick<AdminGroup, 'id' | 'name'>[]
+  accounts: T[]
+  groups: { id: number | string; name: string }[]
   accountsLoading: boolean
   selectingAccounts: boolean
   accountsError: string
@@ -85,7 +84,8 @@ const props = defineProps<{
   searchId?: string
   hideTypeFilter?: boolean
   hideStatusFilter?: boolean
-  disabledReason: (account: AccountListItem) => string
+  typeOptions?: { value: string; label: string }[]
+  disabledReason: (account: T) => string
 }>()
 // Two accounts share a measured grid row; activation still counts source accounts.
 const accountRows = computed(() => Array.from({ length: Math.ceil(props.accounts.length / 2) }, (_, index) => props.accounts.slice(index * 2, index * 2 + 2)))

@@ -574,8 +574,11 @@ export default {
         saveFailed: '儲存 OpenCode Go 用量刷新設定失敗'
       },
       gatewayForwarding: {
+        omitEncryptedHistory400: '400 加密歷史有損恢復',
+        omitEncryptedHistory400Hint: '默認關閉。原生 HTTP Responses 明確返回加密內容無效的 400、常規恢復未成功時，最多增加一次同帳戶恢復，且本次恢復不得超過第 3 次上游發送。省略當前可讀任務之前的舊密文，保留可讀文本和工具關係；被省略的上下文將丟失，不保證續接成功。支持 409 省略後的合格請求。當前加密任務、壓縮狀態、服務端會話指針、WebSocket、200 流內錯誤、已有輸出和交付不確定不適用。',
+
         omitEncryptedHistory409: '409 省略加密內容',
-        omitEncryptedHistory409Hint: '默認關閉。HTTP Responses 在發送前因原加密歷史賬號不可用或路線變化返回 409 時，省略舊密文並重新選擇合格賬號，最多處理一次。保留可讀文本和工具調用關係，但被省略的上下文將丟失，不能保證會話完整或上游接受。當前加密任務、服務端會話指針、WebSocket、交付未確認和存儲故障不適用；不會重放已發送的請求。',
+        omitEncryptedHistory409Hint: '默認關閉。HTTP Responses 在發送前因原加密歷史賬號不可用或路線變化返回 409 時，省略舊密文並重新選擇合格賬號，最多處理一次。保留可讀文本和工具調用關係，但被省略的上下文將丟失，不能保證會話完整或上游接受。當前加密任務、服務端會話指針、WebSocket、交付未確認和存儲故障不適用；本開關不重放已發送的請求；400 恢復由獨立 Beta 控制。',
         title: '請求轉發行為',
         description: '控制請求轉發到上游 OAuth 帳戶時的行為',
         grokDefaultTextModel: '預設 Grok 文本模型',

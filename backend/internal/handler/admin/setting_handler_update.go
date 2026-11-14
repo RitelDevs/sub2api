@@ -379,6 +379,7 @@ type UpdateSettingsRequest struct {
 	GrokDefaultBaseURLMode               *string `json:"grok_default_base_url_mode"`
 	GrokVideoSourceURLEnabled            *bool   `json:"grok_video_source_url_enabled"`
 	OpenAI409OmitEncryptedHistoryEnabled *bool   `json:"openai_409_omit_encrypted_history_enabled"`
+	OpenAI400OmitEncryptedHistoryEnabled *bool   `json:"openai_400_omit_encrypted_history_enabled"`
 
 	// Available Channels feature switch (user-facing)
 	AvailableChannelsEnabled *bool `json:"available_channels_enabled"`
@@ -2440,6 +2441,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.OpenAI409OmitEncryptedHistoryEnabled
 		}(),
+		OpenAI400OmitEncryptedHistoryEnabled: func() bool {
+			if req.OpenAI400OmitEncryptedHistoryEnabled != nil {
+				return *req.OpenAI400OmitEncryptedHistoryEnabled
+			}
+			return previousSettings.OpenAI400OmitEncryptedHistoryEnabled
+		}(),
 		AvailableChannelsEnabled: func() bool {
 			if req.AvailableChannelsEnabled != nil {
 				return *req.AvailableChannelsEnabled
@@ -2967,6 +2974,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		GrokDefaultBaseURLMode:               updatedSettings.GrokDefaultBaseURLMode,
 		GrokVideoSourceURLEnabled:            updatedSettings.GrokVideoSourceURLEnabled,
 		OpenAI409OmitEncryptedHistoryEnabled: updatedSettings.OpenAI409OmitEncryptedHistoryEnabled,
+		OpenAI400OmitEncryptedHistoryEnabled: updatedSettings.OpenAI400OmitEncryptedHistoryEnabled,
 
 		AvailableChannelsEnabled: updatedSettings.AvailableChannelsEnabled,
 		PelicanShowcaseEnabled:   updatedSettings.PelicanShowcaseEnabled,

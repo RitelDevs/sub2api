@@ -272,6 +272,7 @@ type PlatformDashboardStats struct {
 
 // UsageLogFilters represents filters for usage log queries
 type UsageLogFilters struct {
+	Platform  string // Empty: all; unknown: no historical snapshot; otherwise concrete provider.
 	UserID    int64
 	APIKeyID  int64
 	AccountID int64
@@ -393,7 +394,7 @@ type AccountUsageStatsResponse struct {
 // HasRowFilters distinguishes a filtered usage scope from global time-range data.
 // ModelFilterSource alone only chooses a model expression and does not limit rows.
 func (f UsageLogFilters) HasRowFilters() bool {
-	return f.UserID > 0 || f.APIKeyID > 0 || f.AccountID > 0 || f.GroupID > 0 ||
+	return f.Platform != "" || f.UserID > 0 || f.APIKeyID > 0 || f.AccountID > 0 || f.GroupID > 0 ||
 		f.RequestID != "" || f.Model != "" || f.RequestType != nil || f.Stream != nil ||
 		f.NativeCompactionV2 != nil || f.BillingType != nil || f.BillingMode != "" || f.UpstreamModelMismatch != nil
 }

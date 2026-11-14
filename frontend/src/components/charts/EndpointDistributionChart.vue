@@ -93,7 +93,7 @@
             :colspan="5"
             :estimate-height="32"
             item-class="border-t border-gray-100 transition-colors dark:border-dark-700"
-            :detail-when="(item) => expandedKey === item.endpoint"
+            :detail-when="(item) => enableBreakdown && expandedKey === item.endpoint"
           >
             <template #default="{ item: item }">
                 <td class="max-w-[180px] truncate py-1.5 font-medium" :class="enableBreakdown ? 'text-primary-600 hover:text-blue-800 dark:text-primary-400 dark:hover:text-primary-300' : 'text-gray-900 dark:text-white'" :title="item.endpoint">
@@ -222,6 +222,7 @@ const toggleBreakdown = async (endpoint: string) => {
     resetBreakdown()
     return
   }
+  if (!props.enableBreakdown) return
   const generation = ++breakdownGeneration
   const context = breakdownContext.value
   const isCurrent = () => generation === breakdownGeneration && expandedKey.value === key && context === breakdownContext.value

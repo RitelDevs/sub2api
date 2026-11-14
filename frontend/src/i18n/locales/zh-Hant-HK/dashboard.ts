@@ -540,17 +540,26 @@ export default {
     },
     tabs: { usage: '用量明細', errors: '錯誤請求', ranking: '用戶排行' },
     errors: {
+      peerReset: '上游連接被對端重置（{protocol}）。內容可能不完整，請勿自動重試同一請求。',
+      http200StreamFailure: '200 — 響應頭發送後流失敗',
+
       time: '時間', model: '模型', endpoint: '端點', status: '狀態碼',
       category: '分類', platform: '平台', message: '錯誤資訊',
       keyName: 'Key 名稱', keyDeleted: '已刪除', allKeys: '全部 Key',
       modelPlaceholder: '搜索模型', allCategories: '全部分類', allStatuses: '全部狀態碼',
       empty: '暫無錯誤請求', failedToLoad: '載入錯誤請求失敗',
       categories: {
+        transport_error: '傳輸錯誤',
+
         auth: '認證失敗', rate_limit: '限流', quota: '餘額/訂閱',
         invalid_request: '參數錯誤', service_unavailable: '服務暫時不可用',
         upstream: '上游錯誤', internal: '平台錯誤', other: '其他', cyber: '上游網絡安全過濾', session_blocked: '本地會話封鎖', session_identity: '會話身分錯誤',
       },
       detail: {
+        clientHttpStatus: '客戶端實際 HTTP 狀態碼',
+        streamFailedAfterHeaders: 'HTTP 響應頭已發送，隨後流式響應失敗；HTTP 200 不表示生成已完成。',
+        gatewayErrorBody: '網關生成的錯誤詳情',
+
         title: '錯誤請求詳情',
         responseBody: '上游響應內容',
         upstreamStatus: '上游狀態碼',
@@ -832,6 +841,8 @@ export default {
       officialPrice: '官方價格',
       rate: '折扣倍率',
       unitPerMillion: '$ / 1M token',
+      perUnitSecond: '/ 秒',
+      perSecond: '按秒計費',
       perUnitRequest: '/ 次',
       perUnitImage: '/ 張',
       perRequest: '按次計費',

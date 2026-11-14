@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
@@ -22,7 +23,7 @@ func TestUsageSharedFiltersPostgresParity(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 	db.SetMaxOpenConns(1)
-	ctx := context.Background()
+	ctx := timezone.WithUserDay(context.Background(), "UTC")
 	_, err = db.ExecContext(ctx, `CREATE TEMP TABLE usage_logs (
  id BIGINT, user_id BIGINT, api_key_id BIGINT,account_id BIGINT,group_id BIGINT,request_id TEXT,model TEXT,requested_model TEXT,upstream_model TEXT,
  request_type SMALLINT,stream BOOLEAN,openai_ws_mode BOOLEAN,native_compaction_v2 BOOLEAN,billing_type SMALLINT,billing_mode TEXT,upstream_model_mismatch BOOLEAN,
@@ -44,7 +45,10 @@ func TestUsageSharedFiltersPostgresParity(t *testing.T) {
  UPDATE usage_logs SET upstream_model_mismatch=true WHERE id=12;
  UPDATE usage_logs SET created_at='2026-09-30T23:59:59Z' WHERE id=13;
  UPDATE usage_logs SET created_at='2026-10-02T00:00:00Z' WHERE id=14;
- UPDATE usage_logs SET billing_mode=NULL WHERE id=1;`)
+ UPDATE usage_logs SET billing_mode=NULL WHERE id=1;
+ ALTER TABLE usage_logs ADD COLUMN platform TEXT DEFAULT 'openai';
+ INSERT INTO usage_logs SELECT * FROM usage_logs WHERE id=1;
+ UPDATE usage_logs SET id=15, platform='anthropic' WHERE ctid=(SELECT ctid FROM usage_logs ORDER BY ctid DESC LIMIT 1);`)
 	require.NoError(t, err)
 	start := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(24 * time.Hour)
@@ -53,7 +57,7 @@ func TestUsageSharedFiltersPostgresParity(t *testing.T) {
 	native := true
 	bill := int8(1)
 	audit := false
-	f := usagestats.UsageLogFilters{UserID: 11, APIKeyID: 12, AccountID: 13, GroupID: 14, RequestID: "req-match", Model: "client-alias", ModelFilterSource: usagestats.ModelSourceRequested, RequestType: &kind, Stream: &stream, NativeCompactionV2: &native, BillingType: &bill, BillingMode: "image", UpstreamModelMismatch: &audit, StartTime: &start, EndTime: &end}
+	f := usagestats.UsageLogFilters{Platform: "openai", UserID: 11, APIKeyID: 12, AccountID: 13, GroupID: 14, RequestID: "req-match", Model: "client-alias", ModelFilterSource: usagestats.ModelSourceRequested, RequestType: &kind, Stream: &stream, NativeCompactionV2: &native, BillingType: &bill, BillingMode: "image", UpstreamModelMismatch: &audit, StartTime: &start, EndTime: &end}
 	repo := &usageLogRepository{sql: db}
 	// Use the exact canonical WHERE builder used by ListWithFilters, without its association hydration.
 	conditions, recordArgs := usageLogReadConditions(f)
@@ -92,8 +96,54 @@ func TestUsageSharedFiltersPostgresParity(t *testing.T) {
 	require.Len(t, rank.Ranking, 1)
 	require.Equal(t, int64(1), rank.TotalRequests)
 	require.Equal(t, 3.0, rank.TotalActualCost)
+
+	for _, tc := range []struct {
+		platform string
+		requests int64
+	}{{"openai", 12}, {"anthropic", 1}, {"unknown", 0}, {"", 13}} {
+		t.Run("platform-only-"+tc.platform, func(t *testing.T) {
+			scope := UsageLogFilters{Platform: tc.platform}
+			keys, err := repo.GetAPIKeyUsageTrendWithUsageFilters(ctx, start, end, "hour", 12, scope)
+			require.NoError(t, err)
+			var keyRequests int64
+			for _, row := range keys {
+				keyRequests += row.Requests
+			}
+			require.Equal(t, tc.requests, keyRequests)
+			users, err := repo.GetUserUsageTrendWithUsageFilters(ctx, start, end, "hour", 12, "actual_cost", scope)
+			require.NoError(t, err)
+			var userRequests int64
+			for _, row := range users {
+				userRequests += row.Requests
+			}
+			require.Equal(t, tc.requests, userRequests)
+			rank, err := repo.GetUserSpendingRankingWithUsageFilters(ctx, start, end, 12, scope)
+			require.NoError(t, err)
+			require.Equal(t, tc.requests, rank.TotalRequests)
+		})
+	}
 	breakdown, err := repo.GetUserBreakdownStats(ctx, start, end, usagestats.UserBreakdownDimension{UserID: 11, APIKeyID: 12, AccountID: 13, GroupID: 14, Model: "client-alias", ModelType: usagestats.ModelSourceRequested, RequestID: "req-match", RequestType: &kind, Stream: &stream, NativeCompactionV2: &native, BillingType: &bill, BillingMode: "image", UpstreamModelMismatch: &audit}, 50)
 	require.NoError(t, err)
 	require.Len(t, breakdown, 1)
-	require.Equal(t, int64(1), breakdown[0].Requests)
+	require.Equal(t, int64(2), breakdown[0].Requests)
+}
+
+// Platform alone must scope both the ranking CTE and its returned rows.
+func TestUsagePlatformReadFilterSQL(t *testing.T) {
+	for _, tc := range []struct {
+		platform, predicate string
+		args                []any
+	}{
+		{"openai", "ul.platform = $2", []any{"seed", "openai"}},
+		{"unknown", "(ul.platform IS NULL OR ul.platform = '')", []any{"seed"}},
+		{"", "", []any{"seed"}},
+	} {
+		query, args := appendUsageLogReadFilters("WHERE true", []any{"seed"}, UsageLogFilters{Platform: tc.platform}, "ul")
+		require.Equal(t, tc.args, args)
+		if tc.predicate == "" {
+			require.Equal(t, "WHERE true", query)
+		} else {
+			require.Contains(t, query, tc.predicate)
+		}
+	}
 }

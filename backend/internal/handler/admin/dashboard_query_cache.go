@@ -19,6 +19,7 @@ var (
 )
 
 type dashboardTrendCacheKey struct {
+	Platform              string `json:"platform"`
 	Timezone              string `json:"timezone"`
 	StartTime             string `json:"start_time"`
 	EndTime               string `json:"end_time"`
@@ -39,6 +40,7 @@ type dashboardTrendCacheKey struct {
 }
 
 type dashboardModelGroupCacheKey struct {
+	Platform              string `json:"platform"`
 	StartTime             string `json:"start_time"`
 	EndTime               string `json:"end_time"`
 	UserID                int64  `json:"user_id"`
@@ -129,6 +131,7 @@ func (h *DashboardHandler) getUsageTrendCached(
 		NativeCompactionV2:    filters.NativeCompactionV2,
 		BillingType:           filters.BillingType,
 		UpstreamModelMismatch: filters.UpstreamModelMismatch,
+		Platform:              filters.Platform,
 	})
 	entry, hit, err := dashboardTrendCache.GetOrLoad(key, func() (any, error) {
 		return h.dashboardService.GetUsageTrendWithUsageFilters(ctx, startTime, endTime, granularity, filters)
@@ -176,6 +179,7 @@ func (h *DashboardHandler) getModelStatsCached(
 		NativeCompactionV2:    filters.NativeCompactionV2,
 		BillingType:           filters.BillingType,
 		UpstreamModelMismatch: filters.UpstreamModelMismatch,
+		Platform:              filters.Platform,
 	})
 	entry, hit, err := dashboardModelStatsCache.GetOrLoad(key, func() (any, error) {
 		return h.dashboardService.GetModelStatsWithUsageFiltersBySource(ctx, startTime, endTime, filters, modelSource)
@@ -221,6 +225,7 @@ func (h *DashboardHandler) getGroupStatsCached(
 		NativeCompactionV2:    filters.NativeCompactionV2,
 		BillingType:           filters.BillingType,
 		UpstreamModelMismatch: filters.UpstreamModelMismatch,
+		Platform:              filters.Platform,
 	})
 	entry, hit, err := dashboardGroupStatsCache.GetOrLoad(key, func() (any, error) {
 		return h.dashboardService.GetGroupStatsWithUsageFilters(ctx, startTime, endTime, filters)

@@ -125,7 +125,7 @@
             :colspan="distributionColspan"
             :estimate-height="32"
             item-class="border-t border-gray-100 transition-colors dark:border-dark-700"
-            :detail-when="(model) => expandedKey === `model-${model.model}`"
+            :detail-when="(model) => enableBreakdown && expandedKey === `model-${model.model}`"
           >
             <template #default="{ item: model }">
                 <td
@@ -331,6 +331,8 @@ const props = withDefaults(defineProps<{
   rankingError: false
 })
 
+// A requested-model filter cannot be combined with a different breakdown model.
+const enableBreakdown = computed(() => props.enableBreakdown && !props.filters?.model)
 const expandedKey = ref<string | null>(null)
 const breakdownItems = ref<UserBreakdownItem[]>([])
 const breakdownLoading = ref(false)
@@ -338,7 +340,7 @@ const breakdownLoading = ref(false)
 let breakdownGeneration = 0
 const breakdownContext = computed(() => JSON.stringify({
   startDate: props.startDate, endDate: props.endDate, filters: props.filters,
-  enabled: props.enableBreakdown, source: props.source
+  enabled: enableBreakdown.value, source: props.source
 }))
 function resetBreakdown() {
   breakdownGeneration++
@@ -355,6 +357,7 @@ const toggleBreakdown = async (type: string, id: string) => {
     resetBreakdown()
     return
   }
+  if (!enableBreakdown.value) return
   const generation = ++breakdownGeneration
   const context = breakdownContext.value
   const isCurrent = () => generation === breakdownGeneration && expandedKey.value === key && context === breakdownContext.value

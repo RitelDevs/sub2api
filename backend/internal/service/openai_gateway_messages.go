@@ -679,6 +679,9 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	if err != nil {
 		var readErr *openAICompatBufferedReadError
 		if errors.As(err, &readErr) && readErr != nil {
+			if resetErr, handled := handleOpenAIHTTP2PeerReset(c, account, requestID, readErr.cause); handled {
+				return nil, resetErr
+			}
 			return nil, readErr.cause
 		}
 		return nil, err
@@ -1349,6 +1352,11 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		}
 		if err := scanner.Err(); err != nil {
 			handleScanErr(err)
+			if !clientDisconnected {
+				if resetErr, handled := handleOpenAIHTTP2PeerReset(c, account, requestID, err); handled {
+					return resultWithUsage(), resetErr
+				}
+			}
 			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", err)
 		}
 		if frame, ok := parser.Finish(); ok {
@@ -1422,6 +1430,11 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			}
 			if ev.err != nil {
 				handleScanErr(ev.err)
+				if !clientDisconnected {
+					if resetErr, handled := handleOpenAIHTTP2PeerReset(c, account, requestID, ev.err); handled {
+						return resultWithUsage(), resetErr
+					}
+				}
 				return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", ev.err)
 			}
 			lastDataAt = time.Now()

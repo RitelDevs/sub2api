@@ -15,6 +15,11 @@ export interface OpsRequestOptions {
 }
 
 export type OpsUpstreamErrorEvent = {
+  encrypted_history_400?: {
+    applied: boolean
+    after_409: boolean
+    decision: string
+  }
   at_unix_ms?: number
   platform?: string
   account_id?: number

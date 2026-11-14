@@ -70,7 +70,7 @@ func TestOpsRepositoryListRequestDetails_IncludesStreamingCyberPolicy(t *testing
 	start := time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)
 	end := start.Add(time.Hour)
 	filter := &service.OpsRequestDetailFilter{StartTime: &start, EndTime: &end, Kind: "error", Page: 1, PageSize: 10}
-	clause := `(?s)AND \(COALESCE\(o\.status_code, 0\) >= 400 OR o\.error_type = 'cyber_policy'\).*`
+	clause := `(?s)AND \(COALESCE\(o\.status_code, 0\) >= 400 OR o\.error_type IN \('cyber_policy', 'transport_error'\)\).*`
 	mock.ExpectQuery(clause+`SELECT COUNT\(1\) FROM combined WHERE kind = \$3`).
 		WithArgs(start, end, "error").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 	rows := sqlmock.NewRows([]string{

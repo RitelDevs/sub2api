@@ -40,6 +40,7 @@ type dashboardSnapshotV2Response struct {
 }
 
 type dashboardSnapshotV2Filters struct {
+	Platform              string
 	UserID                int64
 	APIKeyID              int64
 	AccountID             int64
@@ -55,6 +56,7 @@ type dashboardSnapshotV2Filters struct {
 }
 
 type dashboardSnapshotV2CacheKey struct {
+	Platform              string `json:"platform"`
 	Timezone              string `json:"timezone"`
 	TodayStart            string `json:"today_start"`
 	TodayEnd              string `json:"today_end"`
@@ -125,6 +127,7 @@ func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
 		APIKeyID:              filters.APIKeyID,
 		AccountID:             filters.AccountID,
 		GroupID:               filters.GroupID,
+		Platform:              filters.Platform,
 		Model:                 filters.Model,
 		RequestID:             filters.RequestID,
 		BillingMode:           filters.BillingMode,
@@ -282,7 +285,12 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 }
 
 func parseDashboardSnapshotV2Filters(c *gin.Context) (*dashboardSnapshotV2Filters, error) {
+	platform, err := parseUsagePlatform(c)
+	if err != nil {
+		return nil, err
+	}
 	filters := &dashboardSnapshotV2Filters{
+		Platform:    platform,
 		Model:       c.Query("model"),
 		RequestID:   strings.TrimSpace(c.Query("request_id")),
 		BillingMode: strings.TrimSpace(c.Query("billing_mode")),
@@ -368,7 +376,8 @@ func parseDashboardSnapshotV2Filters(c *gin.Context) (*dashboardSnapshotV2Filter
 }
 
 func (f *dashboardSnapshotV2Filters) usageFilters() usagestats.UsageLogFilters {
-	return usagestats.UsageLogFilters{UserID: f.UserID, APIKeyID: f.APIKeyID, AccountID: f.AccountID, GroupID: f.GroupID,
+	return usagestats.UsageLogFilters{
+		Platform: f.Platform, UserID: f.UserID, APIKeyID: f.APIKeyID, AccountID: f.AccountID, GroupID: f.GroupID,
 		Model: f.Model, ModelFilterSource: usagestats.ModelSourceRequested, RequestID: f.RequestID, BillingMode: f.BillingMode,
 		RequestType: f.RequestType, Stream: f.Stream, NativeCompactionV2: f.NativeCompactionV2, BillingType: f.BillingType, UpstreamModelMismatch: f.UpstreamModelMismatch}
 }

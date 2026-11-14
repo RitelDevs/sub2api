@@ -9,6 +9,7 @@
         <p class="mt-1 text-xs text-gray-500">{{ t('accountOps.rulesOnceSummary') }}</p>
       </div>
       <div class="flex flex-wrap gap-2">
+        <slot name="actions" />
         <label data-field-role="filter" class="block min-w-0 w-48">
           <span class="sr-only">{{ t('accountOps.search') }}</span>
           <input v-model="search" class="input w-48 text-sm" :placeholder="t('accountOps.search')" :aria-label="t('accountOps.search')" />
@@ -31,20 +32,20 @@
         </label>
       </div>
     </div>
-    <slot name="global-settings" />
     <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-5 py-3 dark:border-dark-700">
       <div class="min-w-0 space-y-1">
         <p class="text-sm font-medium" aria-live="polite">
-          {{ t('accountOps.selectedGroups', { count: selectedGroups.length }) }}
+          {{ selectedGroups.length ? t('accountOps.selectedGroups', { count: selectedGroups.length }) : t('accountOps.directEditHint') }}
           <span v-if="selectedTypes.length" class="ml-2 text-xs text-gray-500">{{ selectedTypes.join(' / ') }}</span>
         </p>
-        <p class="text-xs leading-5 text-gray-500">{{ t('accountOps.batchSelectionHint') }}</p>
+        <p v-if="selectedGroups.length" class="text-xs leading-5 text-gray-500">{{ t('accountOps.batchSelectionHint') }}</p>
       </div>
       <div class="flex shrink-0 items-center gap-3">
         <button v-if="selectedGroups.length" type="button" class="text-sm text-gray-500 hover:underline" :disabled="busy" @click="clearSelection">{{ t('accountOps.clearSelection') }}</button>
         <button type="button" class="btn btn-secondary text-sm" data-testid="batch-edit-rules" :disabled="selectionUnavailable || !selectedGroups.length || !selectedAccounts.length" @click="editBatch">{{ t('accountOps.batchEditRules') }}</button>
       </div>
     </div>
+    <slot name="global-settings" />
     <DataTable :selection-disabled="selectionUnavailable" :loading="loading" :columns="columns" :data="filtered" :row-key="groupKey" :row-attrs="groupRowAttrs" column-order-key="admin-account-notification-rules" selectable :selected-keys="[...selectedIds]" :selection-label="selectionLabel" @update:selected-keys="updateSelection">
         <template #cell-group="{ row }"><p class="font-medium text-gray-900 dark:text-gray-100">{{ row.group.name }}</p>
               <p class="mt-1 text-xs text-gray-500">{{ row.group.site || row.group.provider || '—' }} · {{ t('accountOps.groupMemberCount', { count: row.accounts.length }) }}</p>
@@ -53,9 +54,9 @@
               <span v-if="row.quotaAccounts.length" class="mt-1 block">{{ t('accountOps.quotaMetric') }}</span>
               <span v-if="!row.balanceAccounts.length && !row.quotaAccounts.length">—</span>
               <span v-if="row.quotaWindow" class="mt-1 block">{{ row.quotaWindow }}</span></template>
-        <template #cell-value="{ row }"><p v-if="row.balanceValue" class="font-mono text-xs">{{ row.balanceValue }}</p>
+        <template #cell-value="{ row }"><AccountOpsBalanceStatus v-if="row.balanceAccounts.length" :accounts="row.balanceAccounts" :disabled="selectionUnavailable" @updated="emit('refresh')" />
               <p v-if="row.quotaValue" class="mt-1 font-mono text-xs">{{ row.quotaValue }}</p>
-              <span class="mt-1 inline-block text-xs" :class="row.state === 'warning' ? 'text-amber-700 dark:text-amber-400' : row.state === 'normal' ? 'text-emerald-700 dark:text-emerald-400' : 'text-gray-500'">{{ t(`accountOps.ruleStates.${row.state}`) }}</span></template>
+              <span v-if="row.state !== 'unknown' || row.quotaAccounts.length || row.balanceAccounts.some((account: AccountOpsThresholdAccount) => account.balance_status === 'ok')" class="mt-1 inline-block text-xs" :class="row.state === 'warning' ? 'text-amber-700 dark:text-amber-400' : row.state === 'normal' ? 'text-emerald-700 dark:text-emerald-400' : 'text-gray-500'">{{ t(`accountOps.ruleStates.${row.state}`) }}</span></template>
         <template #cell-rule="{ row }"><template v-if="row.balanceRule || row.quotaRule">
                 <p v-if="row.balanceRule" class="text-xs">≤ {{ formatDisplayAmount(row.balanceRule.threshold, 2) }} {{ row.balanceRule.unit }}</p>
                 <p v-if="row.quotaRule" class="mt-1 text-xs">≥ {{ row.quotaRule.threshold_percent }}%</p>
@@ -67,7 +68,7 @@
                   <input type="checkbox" :checked="row.balanceRule?.enabled ?? row.quotaRule?.enabled" :disabled="busy" :aria-label="`${row.group.name} ${t('accountOps.ruleEnabled')}`" @change="emit('toggle', row.group, row.accounts, ($event.target as HTMLInputElement).checked)" />
                   {{ t('accountOps.channelEnabled') }}
                 </label>
-                <button type="button" class="text-sm text-primary-600 hover:underline" :data-testid="`edit-rule-${row.group.id}`" @click="editRow(row)">{{ t('common.edit') }}</button>
+                <button type="button" class="text-sm text-primary-600 hover:underline" :data-testid="`edit-rule-${row.group.id}`" :disabled="selectionUnavailable" @click="editRow(row)">{{ t('common.edit') }}</button>
               </div></template>
       <template #empty><p v-if="!error" class="p-8 text-center text-sm text-gray-500">{{ t('accountOps.noThresholdAccounts') }}</p></template>
     </DataTable>
@@ -80,6 +81,7 @@ import { formatAmount as formatDisplayAmount } from '@/utils/consoleDisplay'
 import AppHeading from '@/components/common/AppHeading.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import { computed, ref, watch } from 'vue'
+import AccountOpsBalanceStatus from './AccountOpsBalanceStatus.vue'
 import { useI18n } from 'vue-i18n'
 import type { AccountOpsConfig, AccountOpsGroup, AccountOpsThresholdAccount } from '@/api/admin/accountOps'
 
@@ -90,7 +92,6 @@ interface GroupRow {
   quotaAccounts: AccountOpsThresholdAccount[]
   balanceRule?: NonNullable<AccountOpsConfig['balance_thresholds']>[number]
   quotaRule?: NonNullable<AccountOpsConfig['quota_thresholds']>[number]
-  balanceValue: string
   quotaValue: string
   quotaWindow: string
   memberNames: string
@@ -98,7 +99,7 @@ interface GroupRow {
 }
 
 const props = withDefaults(defineProps<{ accounts: AccountOpsThresholdAccount[]; groups?: AccountOpsGroup[]; config: AccountOpsConfig; loading: boolean; ready: boolean; error: string; busy?: boolean }>(), { groups: () => [] })
-const emit = defineEmits<{ (event: 'batch-edit', accounts: AccountOpsThresholdAccount[]): void; (event: 'edit-group', group: AccountOpsGroup): void; (event: 'toggle', group: AccountOpsGroup, accounts: AccountOpsThresholdAccount[], enabled: boolean): void }>()
+const emit = defineEmits<{ (event: 'refresh'): void; (event: 'batch-edit', accounts: AccountOpsThresholdAccount[]): void; (event: 'edit-group', group: AccountOpsGroup): void; (event: 'toggle', group: AccountOpsGroup, accounts: AccountOpsThresholdAccount[], enabled: boolean): void }>()
 const { t } = useI18n()
 const search = ref(''), type = ref('all'), state = ref('all'), selectedIds = ref(new Set<string>())
 const columns = computed(() => [
@@ -154,7 +155,7 @@ const rows = computed<GroupRow[]>(() => groups.value.map(group => {
   const quotaRule = quotaAccounts.map(account => props.config.quota_thresholds?.find(rule => rule.account_id === account.account_id)).find((rule): rule is NonNullable<GroupRow['quotaRule']> => !!rule)
   const statesForGroup = [...balanceAccounts.map(account => metricState(account, balanceRule)), ...quotaAccounts.map(account => metricState(account, quotaRule))]
   const rowState = statesForGroup.includes('warning') ? 'warning' : statesForGroup.includes('unknown') ? 'unknown' : statesForGroup.length > 0 && statesForGroup.every(value => value === 'disabled') ? 'disabled' : statesForGroup.length > 0 && statesForGroup.every(value => value === 'unconfigured') ? 'unconfigured' : 'normal'
-  return { group, accounts, balanceAccounts, quotaAccounts, balanceRule, quotaRule, balanceValue: balanceRule && balanceAccounts[0] ? metricValue(balanceAccounts[0], balanceRule) : '', quotaValue: quotaRule && quotaAccounts[0] ? metricValue(quotaAccounts[0], quotaRule) : '', quotaWindow: quotaRule?.window && quotaRule.window !== 'any' ? quotaRule.window : '', memberNames: accounts.map(account => account.account_name).join('、'), state: rowState }
+  return { group, accounts, balanceAccounts, quotaAccounts, balanceRule, quotaRule, quotaValue: quotaRule && quotaAccounts[0] ? metricValue(quotaAccounts[0], quotaRule) : '', quotaWindow: quotaRule?.window && quotaRule.window !== 'any' ? quotaRule.window : '', memberNames: accounts.map(account => account.account_name).join('、'), state: rowState }
 }))
 const filtered = computed(() => {
   const needle = search.value.trim().toLowerCase()

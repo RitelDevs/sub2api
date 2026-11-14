@@ -56,7 +56,7 @@
             :colspan="distributionColspan"
             :estimate-height="32"
             item-class="border-t border-gray-100 transition-colors dark:border-dark-700"
-            :detail-when="(group) => expandedKey === `group-${group.group_id}`"
+            :detail-when="(group) => enableBreakdown && expandedKey === `group-${group.group_id}`"
           >
             <template #default="{ item: group }">
                 <td
@@ -185,6 +185,7 @@ const toggleBreakdown = async (type: string, id: number | string) => {
     resetBreakdown()
     return
   }
+  if (!props.enableBreakdown) return
   const generation = ++breakdownGeneration
   const context = breakdownContext.value
   const isCurrent = () => generation === breakdownGeneration && expandedKey.value === key && context === breakdownContext.value

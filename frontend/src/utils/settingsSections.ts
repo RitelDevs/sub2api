@@ -125,6 +125,7 @@ export const SETTINGS_SECTION_FIELDS: Record<SettingsTab, readonly string[]> = {
   ],
   "gateway": [
     "openai_409_omit_encrypted_history_enabled",
+    "openai_400_omit_encrypted_history_enabled",
     "prism_browser_base_url",
     "prism_browser_api_key",
     "prism_browser_enabled",

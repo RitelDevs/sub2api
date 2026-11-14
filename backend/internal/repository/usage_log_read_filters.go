@@ -11,6 +11,10 @@ func appendUsageLogReadFilters(query string, args []any, f usagestats.UsageLogFi
 	if alias != "" {
 		prefix = alias + "."
 	}
+	conditions, args := appendUsageLogPlatformCondition(nil, args, f.Platform, prefix)
+	if len(conditions) > 0 {
+		query += " AND " + conditions[0]
+	}
 	for _, id := range []struct {
 		column string
 		value  int64
@@ -57,6 +61,7 @@ func appendUsageLogReadFilters(query string, args []any, f usagestats.UsageLogFi
 func usageLogReadConditions(filters UsageLogFilters) ([]string, []any) {
 	conditions := make([]string, 0, 9)
 	args := make([]any, 0, 9)
+	conditions, args = appendUsageLogPlatformCondition(conditions, args, filters.Platform, "")
 
 	if filters.UserID > 0 {
 		conditions = append(conditions, fmt.Sprintf("user_id = $%d", len(args)+1))

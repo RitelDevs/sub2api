@@ -31,6 +31,23 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: fixture
+          POSTGRES_PASSWORD: fixture
+          POSTGRES_DB: shadow_audit
+        ports: ['15432:5432']
+        options: >-
+          --health-cmd "pg_isready -U fixture -d shadow_audit"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['16379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v6
         with:
@@ -57,6 +74,9 @@ jobs:
         working-directory: backend
         env:
           CI: 'true'
+          PROMPT_AUDIT_TEST_POSTGRES_DSN: 'postgres://fixture:fixture@127.0.0.1:15432/shadow_audit?sslmode=disable'
+          PROMPT_AUDIT_TEST_REDIS_ADDR: '127.0.0.1:16379'
+          GOFLAGS: '-p=1'
         run: make test-all
 
   golangci-lint:

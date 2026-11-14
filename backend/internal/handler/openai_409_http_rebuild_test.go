@@ -332,6 +332,17 @@ func TestOpenAI429HTTPOrphanResultCompatibility(t *testing.T) {
 	}
 }
 
+// Internal message metadata is rejected by Codex but is not task content.
+func TestOpenAI429HTTPNativeInputCompatibility(t *testing.T) {
+	for _, accountType := range []string{service.AccountTypeAPIKey, service.AccountTypeOAuth} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", accountType, stream), func(t *testing.T) {
+				runHTTPRebuildFixture(t, accountType, stream, "rate_limited/input_metadata", "completed", "", "")
+			})
+		}
+	}
+}
+
 type httpRebuildTimezoneSettings struct{ omit409SettingsRepo }
 
 func (s *httpRebuildTimezoneSettings) GetValue(ctx context.Context, key string) (string, error) {
@@ -645,6 +656,12 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 				!strings.Contains(string(body), "fixture-opaque-A") &&
 				!strings.Contains(string(body), "resp_rebuild_A") && !strings.Contains(string(body), "conv_rebuild_A") &&
 				httpRebuildToolPair(body, "apply_patch", httpRebuildPatch)
+			if pointer == "input_metadata" {
+				valid = valid && strings.Contains(readable, "Continue using the completed tool results.")
+				if accountType == service.AccountTypeOAuth {
+					valid = valid && !strings.Contains(readable, "internal_chat_message_metadata_passthrough")
+				}
+			}
 			if pointer == "orphan_result" {
 				preserved := 0
 				for _, item := range gjson.GetBytes(body, "input").Array() {
@@ -779,6 +796,10 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 				webSearch["external_web_access"] = pointer == "web_search_true"
 			}
 			body["tools"] = append(httpRebuildToolDefinitions(), webSearch)
+		}
+		if previous.Exists() && pointer == "input_metadata" {
+			message := `{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue using the completed tool results."}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["text"]}}`
+			history = append(append([]string(nil), history...), message)
 		}
 		if previous.Exists() && pointer == "orphan_result" {
 			orphan := httpRebuildJSON(map[string]any{"type": "function_call_output", "call_id": httpRebuildOrphanID, "output": httpRebuildOrphanText})

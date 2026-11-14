@@ -632,6 +632,10 @@ func prepareOpenAI409OAuthReplay(ctx context.Context, c *gin.Context, body map[s
 			}
 		}
 	}
+	// The ordinary native transform drops provider-internal message metadata.
+	// Derive that same narrow adaptation after the original input proof, so
+	// its later idempotent pass cannot invalidate the frozen replay.
+	normalizeOpenAIOAuthResponsesCompatibilityFields(body)
 	if isInstructionsEmpty(body) {
 		body["instructions"] = defaultCodexSynthInstructions(firstNonEmptyString(body["model"]))
 	}
@@ -643,6 +647,16 @@ func prepareOpenAI409OAuthReplay(ctx context.Context, c *gin.Context, body map[s
 	}
 	setCodexToolNameReverse(c, reverse)
 	normalizeCodexToolChoice(body)
+	// Historical search items still need the native declaration even when
+	// readable replay skips the general input filter. Freeze this known
+	// compatibility projection, including Lite's additional_tools item.
+	responsesLite := isOpenAIResponsesLiteWebSocketPayload(before)
+	if c != nil && c.Request != nil {
+		responsesLite = responsesLite || isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader))
+	}
+	if !isOpenAIResponsesCompactPath(c) {
+		ensureOpenAIOAuthWebSearchToolForHistory(body, responsesLite)
+	}
 	prepared, err := json.Marshal(body)
 	if err != nil {
 		return err

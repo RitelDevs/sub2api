@@ -3,7 +3,7 @@ import ColumnSettings from '@/components/common/ColumnSettings.vue';
 import { excelBPSImageLimits } from "@/utils/excelBPSImageLimits";
 import { createPinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { defineComponent, h, reactive } from "vue";
+import { defineComponent, h, reactive, type Component } from "vue";
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 
 import enCommon from "@/i18n/locales/en/common";
@@ -28,6 +28,7 @@ vi.mock('vue-router', async (importOriginal) => ({
   useRouter: () => ({ replace: vi.fn(async (location) => Object.assign(settingsRoute, location)) }),
 }));
 beforeEach(() => {
+  getGroups.mockReset().mockResolvedValue([]);
   settingsRoute.query = {};
   settingsRoute.hash = '';
   Element.prototype.scrollIntoView = vi.fn();
@@ -165,6 +166,13 @@ vi.mock("@/api", () => ({
       deleteProvider,
     },
   },
+}));
+
+// The real quick-key child imports the endpoint directly, while SettingsView
+// uses the API barrel. Both must receive the same AdminGroup[] fixture.
+vi.mock("@/api/admin/groups", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/api/admin/groups")>(),
+  getAll: getGroups,
 }));
 
 vi.mock("@/stores", () => ({
@@ -311,8 +319,16 @@ vi.mock("vue-i18n", async () => {
 });
 
 const AppLayoutStub = { template: "<div><slot /></div>" };
+const RouterLinkStub = defineComponent({
+  props: { to: String },
+  setup(props, { slots }) {
+    return () => h("router-link", { to: props.to }, slots.default?.());
+  },
+});
+
 const ToggleStub = defineComponent({
   props: {
+    size: String,
     modelValue: {
       type: Boolean,
       default: false,
@@ -610,11 +626,12 @@ const baseSettingsResponse = {
   },
 };
 
-function mountView(realToggle = false, realServerless = false) {
+function mountView(realToggle = false, realServerless = false, extraStubs: Record<string, Component | boolean> = {}) {
   return mount(SettingsView, {
     global: {
       stubs: {
         AppLayout: AppLayoutStub,
+        RouterLink: RouterLinkStub,
         Select: SelectStub,
         Toggle: realToggle ? false : ToggleStub,
         Icon: true,
@@ -629,6 +646,7 @@ function mountView(realToggle = false, realServerless = false) {
         EmailTemplateEditor: true,
         ServerlessSettings: realServerless ? false : defineComponent({ setup(_props, { expose }) { expose({ dirty: false, save: vi.fn(), discard: vi.fn() }); return () => h('div'); } }),
         AdminAccessKeysSettings: true,
+        ...extraStubs,
       },
       plugins: [createPinia()],
     },
@@ -2686,25 +2704,7 @@ describe("admin SettingsView payment visible method controls", () => {
       },
     });
 
-    const wrapper = mount(SettingsView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          Select: SelectStub,
-          Toggle: ToggleStub,
-          Icon: true,
-          ConfirmDialog: true,
-          PaymentProviderList: PaymentProviderListStub,
-          PaymentProviderDialog: true,
-          GroupBadge: true,
-          GroupOptionItem: true,
-          ProxySelector: true,
-          ImageUpload: ImageUploadStub,
-          BackupSettings: true,
-        },
-        plugins: [createPinia()],
-      },
-    });
+    const wrapper = mountView(false, false, { PaymentProviderList: PaymentProviderListStub });
 
     await flushPromises();
     await openPaymentTab(wrapper);
@@ -3147,25 +3147,7 @@ describe("admin SettingsView payment visible method controls", () => {
       },
     });
 
-    const wrapper = mount(SettingsView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          Select: SelectStub,
-          Toggle: ToggleStub,
-          Icon: true,
-          ConfirmDialog: true,
-          PaymentProviderList: PaymentProviderListCapture,
-          PaymentProviderDialog: true,
-          GroupBadge: true,
-          GroupOptionItem: true,
-          ProxySelector: true,
-          ImageUpload: ImageUploadStub,
-          BackupSettings: true,
-        },
-        plugins: [createPinia()],
-      },
-    });
+    const wrapper = mountView(false, false, { PaymentProviderList: PaymentProviderListCapture });
 
     await flushPromises();
     await openPaymentTab(wrapper);

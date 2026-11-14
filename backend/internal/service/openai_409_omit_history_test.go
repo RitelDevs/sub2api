@@ -97,7 +97,7 @@ func TestOpenAI409OmissionSettingDefaultsOff(t *testing.T) {
 func TestOpenAI409OmissionCannotClearRecoveryBarriers(t *testing.T) {
 	s := &OpenAIGatewayService{settingService: NewSettingService(&codexPolicyMigrationRepoStub{values: map[string]string{SettingKeyOpenAI409OmitEncryptedHistoryEnabled: "true"}}, nil)}
 	body := []byte(`{"input":[{"type":"agent_message","encrypted_content":"OLD"},{"role":"user","content":"continue"}]}`)
-	for _, reason := range []string{"delivery_pending", "store_unavailable", "owner_conflict", "owner_rate_limited", "owner_overloaded", "http_previous_response_unsupported"} {
+	for _, reason := range []string{"delivery_pending", "store_unavailable", "owner_conflict", "owner_overloaded", "http_previous_response_unsupported"} {
 		ctx := context.WithValue(context.Background(), openAIAgentRecoveryContextKey{}, &openAIAgentRecoveryRequest{owner: &openAIAgentRecoveryBinding{accountID: 1}})
 		_, clean, changed := s.TryOmitOpenAI409History(ctx, nil, body, "fixture", "gpt-5.1", &OpenAIAgentRecoveryError{Reason: reason})
 		require.False(t, changed, reason)

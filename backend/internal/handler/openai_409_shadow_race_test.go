@@ -50,6 +50,12 @@ type shadowRestoredRequestBarrier struct {
 }
 
 func (b *shadowRestoredRequestBarrier) Check(ctx context.Context, req securityaudit.Request) (*securityaudit.LegacyDecision, error) {
+	// Ritel also audits the original request before subscription routing.
+	// Hold only the actual recovered-text audit; the exact input assertion below
+	// still proves restoration and the original no-send fence.
+	if !req.NoBodyRetention {
+		return nil, nil
+	}
 	select {
 	case b.observed <- append([]byte(nil), req.Body...):
 	case <-ctx.Done():

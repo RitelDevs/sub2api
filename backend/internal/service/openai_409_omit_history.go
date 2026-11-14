@@ -42,7 +42,10 @@ func (s *OpenAIGatewayService) TryRebuildOpenAI409History(ctx context.Context, c
 		return ctx, body, false, nil
 	}
 	r := openAIAgentRecoveryFromContext(ctx)
-	allowed := refusal.Reason == "owner_unavailable" || refusal.Reason == "route_changed" || refusal.Reason == "wire_changed" ||
+	// A recorded cooldown is a pre-send routing refusal, not an uncertain
+	// upstream attempt. The handler and original delivery fences still gate
+	// rebuilding; the cooled-down account remains unavailable to selection.
+	allowed := refusal.Reason == "owner_rate_limited" || refusal.Reason == "owner_unavailable" || refusal.Reason == "route_changed" || refusal.Reason == "wire_changed" ||
 		refusal.Reason == "http_previous_response_unsupported" || (refusal.Reason == "owner_conflict" && r != nil && r.mixedOwners)
 	if !allowed || s == nil || r == nil || r.disallowLearning || r.omittedHistory || r.delivery != nil || s.settingService == nil ||
 		!s.settingService.IsOpenAI409OmitEncryptedHistoryEnabled(ctx) {

@@ -46,9 +46,9 @@ func (e *OpenAIAgentRecoveryError) ClientMessage() string {
 	var reason, action string
 	switch e.Reason {
 	case "readable_intent_missing":
-		return "The current request has no readable task or summary from which a new provider conversation can be built. The opaque contents are unavailable; no generation or tool was replayed."
+		return "The current request has no readable task or summary from which a new provider conversation can be built. Continue in this conversation with a brief description of the current task and completed work. Do not repeat completed tools. The opaque contents are unavailable; no generation or tool was replayed."
 	case "readable_history_unsupported":
-		return "The supplied history has an unsupported readable representation. No provider state was transferred and no generation or tool was replayed."
+		return "The supplied history has an unsupported readable representation. Preserve this conversation and provide a readable task summary with completed tool results. No provider state was transferred and no generation or tool was replayed."
 	case "http_previous_response_unsupported":
 		reason = "HTTP previous_response_id continuation is unsupported for this encrypted agent owner."
 		action = "For HTTP continuation, send the complete original history without previous_response_id; current permissions and route compatibility still apply. Waiting alone will not make this request supported. Do not replay tool results while an earlier delivery is uncertain."

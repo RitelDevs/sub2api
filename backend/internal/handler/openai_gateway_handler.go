@@ -969,6 +969,16 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	if openAICompatibleRequestPlatform(c.Request.Context(), apiKey) == service.PlatformOpenAI {
 		shadowCtx, restored := h.gatewayService.RestoreOpenAIReadableShadow(c.Request.Context(), c, body, h.gatewayService.GenerateSessionHash(c, sessionHashBody))
 		c.Request = c.Request.WithContext(shadowCtx)
+		if !bytes.Equal(body, restored) {
+			// The earlier decision covered the opaque request, not the recovered
+			// text. Audit the restored body in both source and effective scopes;
+			// the recovery provenance prevents persisting its private contents.
+			c.Set(securityAuditCompletedContextKey, false)
+			if decision := h.checkSecurityAudit(c, reqLog, service.SubscriptionOverflowSourceAPIKey(apiKey), subject, service.ContentModerationProtocolOpenAIResponses, reqModel, restored); decision != nil && !decision.AllowNextStage {
+				h.openAISecurityAuditError(c, decision)
+				return
+			}
+		}
 		body = restored
 	}
 

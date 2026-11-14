@@ -259,6 +259,24 @@ func TestOpenAI409HTTPTaskRebuild(t *testing.T) {
 	}
 }
 
+// A known cooldown is handled before any new upstream generation. Reuse the
+// real HTTP/OAuth, Redis and coding-tool fixture to verify A -> B -> B without
+// resubmitting the completed patch or clearing the original owner.
+func TestOpenAI429HTTPReadableRecovery(t *testing.T) {
+	for _, accountType := range []string{service.AccountTypeAPIKey, service.AccountTypeOAuth} {
+		for _, stream := range []bool{false, true} {
+			for _, boundary := range []string{"", "strict", "delivery_pending", "delivery_failed", "b_disabled"} {
+				t.Run(fmt.Sprintf("%s/stream=%t/%s", accountType, stream, boundary), func(t *testing.T) {
+					runHTTPRebuildFixture(t, accountType, stream, "rate_limited/intent", "completed", boundary, "")
+				})
+			}
+			t.Run(fmt.Sprintf("%s/stream=%t/provider_rejects", accountType, stream), func(t *testing.T) {
+				runHTTPRebuildFixture(t, accountType, stream, "rate_limited/intent", "rejected", "", "")
+			})
+		}
+	}
+}
+
 func TestOpenAI409HTTPControlNormalization(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		for _, accountType := range []string{service.AccountTypeAPIKey, service.AccountTypeOAuth} {
@@ -453,6 +471,8 @@ func httpRebuildOwnerKey(t *testing.T, h *OpenAIGatewayHandler, agent string) st
 
 func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointer, outcome, boundary, mutation string) {
 	t.Helper()
+	rateLimited := strings.HasPrefix(pointer, "rate_limited/")
+	pointer = strings.TrimPrefix(pointer, "rate_limited/")
 	noOpaque := strings.HasSuffix(pointer, "_no_opaque")
 	pointer = strings.TrimSuffix(pointer, "_no_opaque")
 	mixed := strings.HasPrefix(boundary, "mixed/")
@@ -659,10 +679,20 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 	} else {
 		require.Len(t, ownersA, 1)
 	}
-	accounts[0].Schedulable = false
+	if rateLimited {
+		resetAt := time.Now().Add(48 * time.Hour)
+		accounts[0].RateLimitResetAt = &resetAt
+	} else {
+		accounts[0].Schedulable = false
+	}
 	disabled, err := (openAIImagesFailoverAccountRepo{accounts: accounts}).GetByID(context.Background(), 1)
 	require.NoError(t, err)
-	require.False(t, disabled.Schedulable)
+	if rateLimited {
+		require.True(t, disabled.Schedulable, "temporary quota exhaustion must not disable A")
+		require.True(t, disabled.RateLimitResetAt.After(time.Now()))
+	} else {
+		require.False(t, disabled.Schedulable)
+	}
 	switch boundary {
 	case "pointer_only":
 		history = nil
@@ -683,6 +713,10 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 	status, answer = request(history, first)
 	if boundary != "" && !mixed {
 		if boundary == "strict" {
+			if rateLimited {
+				require.Equal(t, http.StatusTooManyRequests, status, answer)
+				require.Contains(t, answer, "encrypted_agent_recovery_owner_rate_limited")
+			}
 			require.Len(t, transport.snapshot(), 1, "HTTP_POINTER_STRICT_A_STATE_LEAK: disabled A pointer must never reach B under default strict policy; response=%s", answer)
 		}
 		require.GreaterOrEqual(t, status, 400, "unrecoverable input/delivery must not pretend completion: %s", answer)
@@ -808,7 +842,12 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 	require.Equal(t, 1, tools.patches)
 	require.Equal(t, 1, tools.verifications)
 	require.Equal(t, []string{httpRebuildSession, httpRebuildSession, httpRebuildSession}, sessions)
-	require.False(t, accounts[0].Schedulable)
+	if rateLimited {
+		require.True(t, accounts[0].Schedulable, "recovery must not permanently disable A")
+		require.Equal(t, disabled.RateLimitResetAt, accounts[0].RateLimitResetAt, "recovery must not clear the original cooldown")
+	} else {
+		require.False(t, accounts[0].Schedulable)
+	}
 	wires = transport.snapshot()
 	require.Len(t, wires, 3, "one A generation and exactly two B generations")
 	require.Equal(t, int64(2), wires[2].account)

@@ -291,8 +291,6 @@ def apply_account(account, results, key, backup_dir):
                and extra.get('openai_gateway_borrow_quality_pending') is True)
     if pending and extra.get('openai_gateway_borrow_initial_ready') is not True:
         return {'id': account_id, 'applied': False, 'skipped': 'initial_defaults_pending'}
-    if identity(current) != identity(account):
-        return {'id': account_id, 'applied': False, 'skipped': 'concurrent_identity_change'}
     if pending and initial_configuration(current) != initial_configuration(account):
         return {'id': account_id, 'applied': False, 'skipped': 'initial_configuration_changed_during_probe'}
     candy.legacy.save_private(backup_dir / f'account-{account_id}.borrow-before.json', current)
@@ -312,11 +310,14 @@ def apply_account(account, results, key, backup_dir):
         expected_policy = owned_policy(account)
         expected_policy['openai_gateway_borrow_initial_ready_fingerprint'] = (after.get('extra') or {}).get('openai_gateway_borrow_initial_ready_fingerprint')
         if (not expected_policy['openai_gateway_borrow_initial_ready_fingerprint']
-                or owned_policy(after) != expected_policy or identity(after) != identity(account)
+                or owned_policy(after) != expected_policy or after.get('proxy_id') != account.get('proxy_id')
                 or initial_configuration(after) != initial_configuration(account)
                 or after.get('status') != 'active' or after.get('schedulable') is not True):
             raise RuntimeError('initial readiness readback changed')
-        account = current = after
+        # Admin GET intentionally redacts tokens. Keep the sampled credential
+        # identity for both server-side CAS operations; refresh only the policy.
+        account = dict(account, extra=after.get('extra'))
+        current = after
     payload = {'policy_mode': QUALITY_MODE,
         'observed_at': min(r['checked_at'] for r in completed) if completed else candy.utcnow(),
         'expected_proxy_id': account.get('proxy_id'),

@@ -135,8 +135,34 @@ class AccountQualityTests(unittest.TestCase):
         self.assertTrue(all(c.args[0] in ('GET','POST') for c in calls))
         self.assertEqual((a['concurrency'],a['priority']), (500,1))
 
+    def test_redacted_admin_reads_retain_sampled_identity_for_both_cas_calls(self):
+        a=self.pending_account()
+        r=self.result(a)
+        current=copy.deepcopy(a)
+        current['credentials'].pop('access_token')
+        rebound=copy.deepcopy(current)
+        rebound['extra']['openai_gateway_borrow_initial_ready_fingerprint']='current'
+        after=self.after_apply(rebound,r)
+        api=mock.Mock(side_effect=[current,{'id':224,'applied':True},rebound,
+                                  {'id':224,'applied':True},after])
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(candy.legacy,'admin',api):
+            self.assertTrue(m.apply_account(a,[r],'key',Path(folder))['applied'])
+        for i in (1,3):
+            self.assertEqual(api.call_args_list[i].args[3]['credential_sha256'],
+                             m.identity(a)['credential_sha256'])
+
+    def test_rebind_identity_cas_rejection_never_commits_quality(self):
+        a=self.pending_account()
+        r=self.result(a)
+        current=copy.deepcopy(a)
+        current['credentials'].pop('access_token')
+        api=mock.Mock(side_effect=[current,{'id':224,'applied':False,'reason':'identity_changed'}])
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(candy.legacy,'admin',api):
+            self.assertEqual(m.apply_account(a,[r],'key',Path(folder))['skipped'],'identity_changed')
+        self.assertEqual(api.call_count,2)
+
     def test_configuration_or_identity_changes_during_samples_remain_closed(self):
-        for field in ('concurrency','priority','load_factor','group_ids','mapping','token','proxy'):
+        for field in ('concurrency','priority','load_factor','group_ids','mapping','proxy'):
             with self.subTest(field=field):
                 a = self.pending_account()
                 r = self.result(a)
@@ -144,7 +170,6 @@ class AccountQualityTests(unittest.TestCase):
                 if field in ('concurrency','priority','load_factor'): current[field] = 9
                 if field == 'group_ids': current[field] = [3]
                 if field == 'mapping': current['credentials']['model_mapping']['gpt-6-astra']='other'
-                if field == 'token': current['credentials']['access_token']='changed'
                 if field == 'proxy': current['proxy_id']=9
                 api = mock.Mock(return_value=current)
                 with tempfile.TemporaryDirectory() as folder, mock.patch.object(candy.legacy,'admin',api):
@@ -164,12 +189,12 @@ class AccountQualityTests(unittest.TestCase):
     def test_rebind_readback_conflict_never_commits_quality(self):
         a = self.pending_account()
         r = self.result(a)
-        for field in ('priority','token','policy','inactive'):
+        for field in ('priority','proxy','policy','inactive'):
             with self.subTest(field=field):
                 after=copy.deepcopy(a)
                 after['extra']['openai_gateway_borrow_initial_ready_fingerprint']='new'
                 if field=='priority': after['priority']=9
-                if field=='token': after['credentials']['access_token']='changed'
+                if field=='proxy': after['proxy_id']=9
                 if field=='policy': after['extra']['openai_gateway_borrow_quality_pending']=False
                 if field=='inactive': after['status']='inactive'
                 api=mock.Mock(side_effect=[a,{'id':224,'applied':True},after])

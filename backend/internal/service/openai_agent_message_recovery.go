@@ -433,6 +433,7 @@ func (s *OpenAIGatewayService) prepareOpenAIAgentRecoveryAttempt(ctx context.Con
 	}
 	if request.omittedHistory && (gjson.GetBytes(body, "previous_response_id").Exists() || gjson.GetBytes(body, "conversation").Exists() ||
 		openAI409ControlsDigest(body) != expectedControls) {
+		logger.FromContext(ctx).Warn("openai.encrypted_history_409_refused", zap.String("stage", "final_controls"))
 		return noop, openAIAgentRecoveryError("wire_changed")
 	}
 	if request.previousResponseID != "" && gjson.GetBytes(body, "previous_response_id").String() != request.previousResponseID {

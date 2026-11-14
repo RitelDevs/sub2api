@@ -289,10 +289,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	// 在分流到 passthrough / Codex transform / 原生 ChatCompletions 之前统一修正
 	// 显式为 null 的工具 Schema type，否则 upstream 的 400 会被归一成可重试的 502，
 	// 同一份坏定义在账号池里反复重放。
-	if sanitizedToolBody, toolSchemaSanitized, toolSchemaErr := sanitizeOpenAIResponsesToolSchemasForPlatform(body, account.Platform); toolSchemaErr != nil {
-		return nil, toolSchemaErr
-	} else if toolSchemaSanitized {
-		body = sanitizedToolBody
+	// A readable replay must validate its frozen controls before this known
+	// schema compatibility pass derives the selected native wire expectation.
+	if recovery == nil || !recovery.omittedHistory {
+		if sanitizedToolBody, toolSchemaSanitized, toolSchemaErr := sanitizeOpenAIResponsesToolSchemasForPlatform(body, account.Platform); toolSchemaErr != nil {
+			return nil, toolSchemaErr
+		} else if toolSchemaSanitized {
+			body = sanitizedToolBody
+		}
 	}
 	if account.IsOpenAIOAuthLike() || (account.IsOpenAI() && (openai.IsGPT61SolModelSpelling(account.GetMappedModel(gjson.GetBytes(body, "model").String())) || openai.IsGPT61TerraModelSpelling(account.GetMappedModel(gjson.GetBytes(body, "model").String())))) {
 		reasoningBody, reasoningChanged, reasoningErr := normalizeOpenAIResponsesReasoningMode(body, account.GetMappedModel(gjson.GetBytes(body, "model").String()))

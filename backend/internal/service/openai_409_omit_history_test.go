@@ -264,7 +264,7 @@ func TestOpenAI409RebuildRechecksOriginalDeliveryBeforeSend(t *testing.T) {
 }
 
 func TestOpenAI409OAuthReplayKeepsOriginalSnapshotAndFinalControls(t *testing.T) {
-	for _, mode := range []string{"unchanged", "tools_removed", "insert_instructions", "replace_instructions", "web_search_true", "web_search_false"} {
+	for _, mode := range []string{"unchanged", "tools_removed", "insert_instructions", "replace_instructions", "web_search_true", "web_search_false", "schema_null", "schema_pattern"} {
 		t.Run(mode, func(t *testing.T) {
 			svc := &OpenAIGatewayService{cfg: &config.Config{}, settingService: NewSettingService(&codexPolicyMigrationRepoStub{values: map[string]string{SettingKeyOpenAI409OmitEncryptedHistoryEnabled: "true"}}, nil)}
 			issue715LearnRoute(t, svc, &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, issue715OpaqueBody)
@@ -272,6 +272,15 @@ func TestOpenAI409OAuthReplayKeepsOriginalSnapshotAndFinalControls(t *testing.T)
 			if mode == "replace_instructions" {
 				var err error
 				body, err = sjson.Set(body, "instructions", "Original instruction: preserve completed tools")
+				require.NoError(t, err)
+			}
+			if mode == "schema_null" || mode == "schema_pattern" {
+				path, raw := "tools.0.parameters.type", "null"
+				if mode == "schema_pattern" {
+					path, raw = "tools.0.parameters.pattern", `"(?=allowed).*"`
+				}
+				var err error
+				body, err = sjson.SetRaw(body, path, raw)
 				require.NoError(t, err)
 			}
 			if strings.HasPrefix(mode, "web_search_") {
@@ -298,6 +307,12 @@ func TestOpenAI409OAuthReplayKeepsOriginalSnapshotAndFinalControls(t *testing.T)
 				return
 			}
 			require.NoError(t, prepareOpenAI409OAuthReplay(next, c, decoded))
+			if mode == "schema_null" || mode == "schema_pattern" {
+				wire, err := json.Marshal(decoded)
+				require.NoError(t, err)
+				require.Equal(t, "object", gjson.GetBytes(wire, "tools.0.parameters.type").String())
+				require.False(t, gjson.GetBytes(wire, "tools.0.parameters.pattern").Exists())
+			}
 			if strings.HasPrefix(mode, "web_search_") {
 				tools, ok := decoded["tools"].([]any)
 				require.True(t, ok)

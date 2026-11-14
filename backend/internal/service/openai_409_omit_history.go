@@ -10,9 +10,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+	"go.uber.org/zap"
 )
 
 const openAIHistoricalCiphertextOmitted = "[Historical encrypted content omitted by the gateway. Its contents are unavailable; do not infer missing instructions or results.]"
@@ -506,10 +508,17 @@ func prepareOpenAI409APIKeyReplay(ctx context.Context, body []byte, responsesLit
 	if r == nil || !r.omittedHistory {
 		return body, nil
 	}
-	if openAIAgentRecoveryInputDigest(body) != r.inputDigest || openAI409ControlsDigest(body) != r.replayControlsDigest {
+	inputChanged := openAIAgentRecoveryInputDigest(body) != r.inputDigest
+	controlsChanged := openAI409ControlsDigest(body) != r.replayControlsDigest
+	if inputChanged || controlsChanged {
+		logger.FromContext(ctx).Warn("openai.encrypted_history_409_refused", zap.String("stage", "api_prepare"), zap.Bool("input_changed", inputChanged), zap.Bool("controls_changed", controlsChanged))
 		return nil, openAIAgentRecoveryError("wire_changed")
 	}
-	prepared, _, err := normalizeOpenAIParallelToolCallsWithoutTools(body, responsesLite)
+	prepared, _, err := sanitizeOpenAIResponsesToolSchemasForPlatform(body, PlatformOpenAI)
+	if err != nil {
+		return nil, err
+	}
+	prepared, _, err = normalizeOpenAIParallelToolCallsWithoutTools(prepared, responsesLite)
 	if err != nil {
 		return nil, err
 	}
@@ -533,8 +542,28 @@ func prepareOpenAI409OAuthReplay(ctx context.Context, c *gin.Context, body map[s
 	if err != nil {
 		return err
 	}
-	if openAIAgentRecoveryInputDigest(before) != r.inputDigest || openAI409ControlsDigest(before) != r.replayControlsDigest {
+	inputChanged := openAIAgentRecoveryInputDigest(before) != r.inputDigest
+	controlsChanged := openAI409ControlsDigest(before) != r.replayControlsDigest
+	if inputChanged || controlsChanged {
+		logger.FromContext(ctx).Warn("openai.encrypted_history_409_refused", zap.String("stage", "oauth_prepare"), zap.Bool("input_changed", inputChanged), zap.Bool("controls_changed", controlsChanged))
 		return openAIAgentRecoveryError("wire_changed")
+	}
+	// Use the same native schema adapter as ordinary forwarding, but only
+	// after proving the caller's original controls. Never rebase on an
+	// arbitrary pre-mutated body or weaken the final wire check.
+	adapted, changed, err := sanitizeOpenAIResponsesToolSchemasForPlatform(before, PlatformOpenAI)
+	if err != nil {
+		return err
+	}
+	if changed {
+		var normalized map[string]any
+		if err := decodeOpenAIJSONUseNumber(adapted, &normalized); err != nil {
+			return err
+		}
+		clear(body)
+		for key, value := range normalized {
+			body[key] = value
+		}
 	}
 	// Native Codex rejects external_web_access. Derive this existing, narrowly
 	// defined compatibility change only after validating the original controls;

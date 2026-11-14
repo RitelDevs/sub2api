@@ -291,6 +291,21 @@ func TestOpenAI429HTTPModernCodexControls(t *testing.T) {
 	}
 }
 
+// Native schema compatibility changes must be applied before freezing replay
+// controls. The independent provider still requires the original canonical
+// schemas, and the full coding loop must complete A -> B -> B exactly once.
+func TestOpenAI429HTTPSchemaCompatibility(t *testing.T) {
+	for _, accountType := range []string{service.AccountTypeAPIKey, service.AccountTypeOAuth} {
+		for _, stream := range []bool{false, true} {
+			for _, shape := range []string{"type_null", "regex_lookaround"} {
+				t.Run(fmt.Sprintf("%s/stream=%t/%s", accountType, stream, shape), func(t *testing.T) {
+					runHTTPRebuildFixture(t, accountType, stream, "rate_limited/"+shape, "completed", "", "")
+				})
+			}
+		}
+	}
+}
+
 func TestOpenAI409HTTPControlNormalization(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		for _, accountType := range []string{service.AccountTypeAPIKey, service.AccountTypeOAuth} {
@@ -639,6 +654,17 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 	client.Timeout = 10 * time.Second
 	request := func(history []string, previous gjson.Result) (int, string) {
 		body := map[string]any{"model": "gpt-5.1", "stream": stream, "store": false, "prompt_cache_key": httpRebuildSession, "tools": httpRebuildToolDefinitions()}
+		// Both inputs normalize back to httpRebuildToolDefinitions; keep the
+		// provider's strict deep-equality oracle independent of the sanitizer.
+		switch pointer {
+		case "type_null", "regex_lookaround":
+			parameters := body["tools"].([]any)[0].(map[string]any)["parameters"].(map[string]any)
+			if pointer == "type_null" {
+				parameters["type"] = nil
+			} else {
+				parameters["properties"].(map[string]any)["source"].(map[string]any)["pattern"] = "(?=package)"
+			}
+		}
 		if strings.HasPrefix(pointer, "web_search_") {
 			webSearch := map[string]any{"type": "web_search"}
 			if pointer != "web_search_absent" {

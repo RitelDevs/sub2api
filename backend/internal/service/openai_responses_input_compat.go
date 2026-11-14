@@ -30,6 +30,10 @@ func openAIResponsesMayNeedOrphanCleanupWithTypes(body []byte, outputTypes []str
 // no matching call or item reference anywhere in the current input. Named
 // function outputs without a call ID are standalone inputs, not orphan results.
 func sanitizeOpenAIResponsesOrphanToolOutputs(reqBody map[string]any, input []any, hasPreviousResponseID bool) bool {
+	return normalizeOpenAIResponsesOrphanToolOutputs(reqBody, input, hasPreviousResponseID, false)
+}
+
+func normalizeOpenAIResponsesOrphanToolOutputs(reqBody map[string]any, input []any, hasPreviousResponseID, preserveReadable bool) bool {
 	if len(input) == 0 || hasPreviousResponseID {
 		return false
 	}
@@ -82,6 +86,18 @@ func sanitizeOpenAIResponsesOrphanToolOutputs(reqBody map[string]any, input []an
 			continue
 		}
 
+		if preserveReadable {
+			encoded, err := json.Marshal(item)
+			if err != nil {
+				// Preserve an unrepresentable item for strict final validation.
+				normalized = append(normalized, rawItem)
+				continue
+			}
+			normalized = append(normalized, map[string]any{
+				"type": "message", "role": "assistant",
+				"content": []any{map[string]any{"type": "output_text", "text": "Historical tool result (original call unavailable; already completed, do not repeat): " + string(encoded)}},
+			})
+		}
 		modified = true
 	}
 	if !modified {

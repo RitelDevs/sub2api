@@ -42,6 +42,8 @@ const (
 	httpRebuildSource      = "package fixture\nfunc Sum(a, b int) int { return a + b }\n"
 	httpRebuildPatch       = "sum.go patched once: return a + b"
 	httpRebuildCheck       = "Sum(2,3)=5; PASS"
+	httpRebuildOrphanID    = "call_historical_missing_fixture"
+	httpRebuildOrphanText  = "historical-fixture-already-done: dependency inspection completed; do not repeat"
 	httpRebuildAgentA      = `{"type":"agent_message","author":"/root","recipient":"/root/worker","encrypted_content":"fixture-opaque-A"}`
 	httpRebuildAgentB      = `{"type":"agent_message","author":"/root","recipient":"/root/worker","encrypted_content":"fixture-readable-B"}`
 	httpRebuildAgentAExtra = `{"type":"agent_message","author":"/root","recipient":"/root/worker","encrypted_content":"fixture-opaque-A-extra"}`
@@ -313,6 +315,18 @@ func TestOpenAI429HTTPTimezoneCompatibility(t *testing.T) {
 		for _, stream := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/stream=%t", accountType, stream), func(t *testing.T) {
 				runHTTPRebuildFixture(t, accountType, stream, "rate_limited/timezone", "completed", "", "")
+			})
+		}
+	}
+}
+
+// A missing historical call must not erase its completed result or become
+// a live tool output after readable recovery. Keep the valid patch pair intact.
+func TestOpenAI429HTTPOrphanResultCompatibility(t *testing.T) {
+	for _, accountType := range []string{service.AccountTypeAPIKey, service.AccountTypeOAuth} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", accountType, stream), func(t *testing.T) {
+				runHTTPRebuildFixture(t, accountType, stream, "rate_limited/orphan_result", "completed", "", "")
 			})
 		}
 	}
@@ -631,6 +645,20 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 				!strings.Contains(string(body), "fixture-opaque-A") &&
 				!strings.Contains(string(body), "resp_rebuild_A") && !strings.Contains(string(body), "conv_rebuild_A") &&
 				httpRebuildToolPair(body, "apply_patch", httpRebuildPatch)
+			if pointer == "orphan_result" {
+				preserved := 0
+				for _, item := range gjson.GetBytes(body, "input").Array() {
+					if item.Get("type").String() == "function_call_output" && item.Get("call_id").String() == httpRebuildOrphanID {
+						valid = false // Never send an executable result without its call.
+					}
+					if item.Get("role").String() == "assistant" &&
+						strings.Contains(item.Get("content").Raw, httpRebuildOrphanID) &&
+						strings.Contains(item.Get("content").Raw, httpRebuildOrphanText) {
+						preserved++
+					}
+				}
+				valid = valid && preserved == 1
+			}
 			if n == 2 {
 				valid = valid && !gjson.GetBytes(body, "previous_response_id").Exists() && !gjson.GetBytes(body, "conversation").Exists()
 				if pointer == "nested_choice" {
@@ -751,6 +779,10 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 				webSearch["external_web_access"] = pointer == "web_search_true"
 			}
 			body["tools"] = append(httpRebuildToolDefinitions(), webSearch)
+		}
+		if previous.Exists() && pointer == "orphan_result" {
+			orphan := httpRebuildJSON(map[string]any{"type": "function_call_output", "call_id": httpRebuildOrphanID, "output": httpRebuildOrphanText})
+			history = append(append([]string(nil), history...), orphan)
 		}
 		if previous.Exists() && pointer == "blank_parts" {
 			history = append(append([]string(nil), history...), `{"role":"user","content":[{"type":"input_text","text":"  \n\t "}]}`)

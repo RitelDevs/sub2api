@@ -407,3 +407,30 @@ func TestOpenAI409TimezoneReplayRetainsOriginalAndRejectsMutation(t *testing.T) 
 		}
 	}
 }
+
+func TestOpenAI409PreservesOrphanResultsBeforeFreeze(t *testing.T) {
+	raw := []byte(`{"model":"gpt-5.1","metadata":{"sequence":9007199254740993},"input":[{"type":"function_call","name":"keep","call_id":"paired","arguments":"{}"},{"type":"function_call_output","call_id":"paired","output":"paired result"},{"type":"function_call_output","call_id":"missing","output":{"finding":"already completed","sequence":9007199254740993}},{"type":"function_call_output","name":"external_event","output":"standalone"},{"type":"item_reference","id":"referenced"},{"type":"function_call_output","call_id":"referenced","output":"referenced result"}],"tools":[{"type":"function","name":"keep","parameters":{"type":"object"}}]}`)
+	prepared, err := prepareOpenAI409ReadableReplay(raw)
+	require.NoError(t, err)
+	require.Equal(t, gjson.GetBytes(raw, "tools").Raw, gjson.GetBytes(prepared, "tools").Raw)
+	require.Equal(t, gjson.GetBytes(raw, "metadata").Raw, gjson.GetBytes(prepared, "metadata").Raw)
+	require.Equal(t, int64(6), gjson.GetBytes(prepared, "input.#").Int())
+	require.Equal(t, "function_call_output", gjson.GetBytes(prepared, "input.1.type").String())
+	require.Equal(t, "paired result", gjson.GetBytes(prepared, "input.1.output").String())
+	require.Equal(t, "message", gjson.GetBytes(prepared, "input.2.type").String())
+	text := gjson.GetBytes(prepared, "input.2.content.0.text").String()
+	require.Contains(t, text, "already completed, do not repeat")
+	require.Contains(t, text, `"call_id":"missing"`)
+	require.Contains(t, text, `"sequence":9007199254740993`)
+	require.Equal(t, "function_call_output", gjson.GetBytes(prepared, "input.3.type").String())
+	require.Equal(t, "external_event", gjson.GetBytes(prepared, "input.3.name").String())
+	require.Equal(t, "referenced result", gjson.GetBytes(prepared, "input.5.output").String())
+	var body map[string]any
+	require.NoError(t, decodeOpenAIJSONUseNumber(prepared, &body))
+	input, ok := body["input"].([]any)
+	require.True(t, ok)
+	require.False(t, sanitizeOpenAIResponsesOrphanToolOutputs(body, input, false), "native cleanup must not change the already frozen replay")
+	again, err := prepareOpenAI409ReadableReplay(prepared)
+	require.NoError(t, err)
+	require.Equal(t, prepared, again)
+}

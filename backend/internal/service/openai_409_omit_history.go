@@ -343,7 +343,7 @@ func omitOpenAIHistoricalCiphertext(raw []byte) ([]byte, bool) {
 func prepareOpenAI409ReadableReplay(raw []byte) ([]byte, error) {
 	prepared, err := prepareOpenAI409KnownReadableReplay(raw)
 	if err == nil {
-		return prepared, nil
+		return preserveOpenAI409OrphanToolResults(prepared)
 	}
 	if !utf8.Valid(raw) || !openAIEncryptedJSONUnambiguous(raw) {
 		return nil, err
@@ -376,7 +376,30 @@ func prepareOpenAI409ReadableReplay(raw []byte) ([]byte, error) {
 	if marshalErr != nil {
 		return nil, marshalErr
 	}
-	return sjson.SetRawBytes(clean, "input", encoded)
+	clean, err = sjson.SetRawBytes(clean, "input", encoded)
+	if err != nil {
+		return nil, err
+	}
+	return preserveOpenAI409OrphanToolResults(clean)
+}
+
+// After opaque provider state is detached, an output can outlive its original
+// call. Keep that completed result as attributed inert history before freezing
+// input, rather than letting ordinary native cleanup silently remove it later.
+func preserveOpenAI409OrphanToolResults(raw []byte) ([]byte, error) {
+	var body map[string]any
+	if err := decodeOpenAIJSONUseNumber(raw, &body); err != nil {
+		return nil, err
+	}
+	input, _ := body["input"].([]any)
+	if !normalizeOpenAIResponsesOrphanToolOutputs(body, input, false, true) {
+		return raw, nil
+	}
+	encoded, err := json.Marshal(body["input"])
+	if err != nil {
+		return nil, err
+	}
+	return sjson.SetRawBytes(raw, "input", encoded)
 }
 
 // Only used for historical agent/reasoning/compaction envelopes. Ordinary

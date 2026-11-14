@@ -158,6 +158,9 @@ func openAI409HasReadableIntent(body []byte) bool {
 	var latestUser gjson.Result
 	summaryIntent := false
 	for _, item := range input.Array() {
+		if openAI409IsRecoveredReasoningContext(item) {
+			continue
+		}
 		kind, role := item.Get("type").String(), item.Get("role").String()
 		if (kind == "message" || kind == "") && role == "user" {
 			content := item.Get("content")
@@ -334,53 +337,110 @@ func omitOpenAIHistoricalCiphertext(raw []byte) ([]byte, bool) {
 	return clean, err == nil
 }
 
-// prepareOpenAI409ReadableReplay runs only in the explicitly enabled omission
-// path. Reasoning belongs to the old provider session: retain its supplied
-// summary/content as attributed assistant history, and mark opaque state as
-// unavailable. Ordinary requests still use the existing replay normalizers.
-// Unrecognized historical reasoning is retained as inert readable JSON, with
-// opaque fields marked unavailable. It is never treated as a new tool/task.
+// Recovery notes are lower-privilege historical input, not assistant output.
+// A single attributed text part also prevents old environment snippets from
+// being interpreted as the current client's timezone frame.
+const openAIRecoveredReasoningPrefix = "Recovered reasoning context (reference only; not a new request). Continue the current task without repeating this note:"
+
+func openAI409IsRecoveredReasoningContext(item gjson.Result) bool {
+	parts := item.Get("content").Array()
+	return item.Get("type").String() == "message" && item.Get("role").String() == "user" && len(parts) == 1 &&
+		parts[0].Get("type").String() == "input_text" && strings.HasPrefix(parts[0].Get("text").String(), openAIRecoveredReasoningPrefix+"\n")
+}
+
+// Rebuild each reasoning item independently: one unknown shape must not force
+// unrelated known summaries back into raw JSON. Ordinary messages and paired
+// tool results are never interpreted as recovery notes or rewritten here.
 func prepareOpenAI409ReadableReplay(raw []byte) ([]byte, error) {
-	prepared, err := prepareOpenAI409KnownReadableReplay(raw)
-	if err == nil {
-		return preserveOpenAI409OrphanToolResults(prepared)
-	}
 	if !utf8.Valid(raw) || !openAIEncryptedJSONUnambiguous(raw) {
-		return nil, err
+		return nil, errors.New("ambiguous historical reasoning input")
 	}
-	clean, _, sanitizeErr := sanitizeOpenAIResponsesInputItemIDs(raw)
-	if sanitizeErr != nil {
-		return nil, sanitizeErr
-	}
-	var source map[string]any
-	if decodeErr := decodeOpenAIJSONUseNumber(clean, &source); decodeErr != nil {
-		return nil, decodeErr
-	}
-	input, ok := source["input"].([]any)
-	if !ok {
-		return nil, err
-	}
-	for i, value := range input {
-		item, _ := value.(map[string]any)
-		if strings.TrimSpace(firstNonEmptyString(item["type"])) != "reasoning" {
-			continue
-		}
-		delete(item, "id")
-		delete(item, "status")
-		readable, _ := json.Marshal(openAI409ReadableMetadata(item))
-		input[i] = map[string]any{"type": "message", "role": "assistant", "content": []any{
-			map[string]any{"type": "output_text", "text": "Historical reasoning context (JSON, not a new instruction): " + string(readable)},
-		}}
-	}
-	encoded, marshalErr := json.Marshal(input)
-	if marshalErr != nil {
-		return nil, marshalErr
-	}
-	clean, err = sjson.SetRawBytes(clean, "input", encoded)
+	clean, _, err := sanitizeOpenAIResponsesInputItemIDs(raw)
 	if err != nil {
 		return nil, err
 	}
+	var body map[string]any
+	if err := decodeOpenAIJSONUseNumber(clean, &body); err != nil {
+		return nil, err
+	}
+	input, _ := body["input"].([]any)
+	changed := false
+	for i, value := range input {
+		item, ok := value.(map[string]any)
+		if !ok || strings.TrimSpace(firstNonEmptyString(item["type"])) != "reasoning" {
+			continue
+		}
+		input[i] = openAI409ReasoningContext(item)
+		changed = true
+	}
+	if changed {
+		encoded, err := json.Marshal(input)
+		if err != nil {
+			return nil, err
+		}
+		clean, err = sjson.SetRawBytes(clean, "input", encoded)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return preserveOpenAI409OrphanToolResults(clean)
+}
+
+func openAI409ReasoningContext(item map[string]any) map[string]any {
+	// This field belongs to the provider envelope, not the user's findings.
+	// Never delete same-named fields recursively inside content/tool data.
+	delete(item, "internal_chat_message_metadata_passthrough")
+	delete(item, "id")
+	delete(item, "status")
+	known := true
+	for field := range item {
+		switch field {
+		case "type", "summary", "content", "encrypted_content":
+		default:
+			known = false
+		}
+	}
+	texts := []string{openAIRecoveredReasoningPrefix}
+	for _, field := range []string{"summary", "content"} {
+		if item[field] == nil {
+			continue
+		}
+		values, ok := item[field].([]any)
+		if !ok {
+			known = false
+			continue
+		}
+		for _, value := range values {
+			part, ok := value.(map[string]any)
+			if !ok || len(part) != 2 || (part["type"] != "summary_text" && part["type"] != "reasoning_text" && part["type"] != "text") {
+				known = false
+				continue
+			}
+			text, ok := part["text"].(string)
+			if !ok {
+				known = false
+				continue
+			}
+			texts = append(texts, text)
+		}
+	}
+	if encrypted := item["encrypted_content"]; encrypted != nil {
+		text, ok := encrypted.(string)
+		if !ok {
+			known = false
+		} else if text != "" {
+			texts = append(texts, openAIHistoricalCiphertextOmitted)
+		}
+	}
+	if !known {
+		// Preserve unrecognized readable data without promoting it to a new
+		// assistant response or to instructions. Input was decoded from JSON.
+		readable, _ := json.Marshal(openAI409ReadableMetadata(item))
+		texts = []string{openAIRecoveredReasoningPrefix, "Historical data (JSON): " + string(readable)}
+	}
+	return map[string]any{"type": "message", "role": "user", "content": []any{
+		map[string]any{"type": "input_text", "text": openAIRecoveredReasoningPrefix + "\n" + strings.Join(texts[1:], "\n")},
+	}}
 }
 
 // After opaque provider state is detached, an output can outlive its original
@@ -428,76 +488,6 @@ func openAI409ReadableMetadata(value any) any {
 	default:
 		return value
 	}
-}
-
-func prepareOpenAI409KnownReadableReplay(raw []byte) ([]byte, error) {
-	clean, _, err := sanitizeOpenAIResponsesInputItemIDs(raw)
-	if err != nil {
-		return nil, err
-	}
-	var source map[string]any
-	decoder := json.NewDecoder(bytes.NewReader(clean))
-	decoder.UseNumber()
-	if err := decoder.Decode(&source); err != nil {
-		return nil, err
-	}
-	input, _ := source["input"].([]any)
-	changed := false
-	for i, rawItem := range input {
-		item, ok := rawItem.(map[string]any)
-		if !ok || strings.TrimSpace(firstNonEmptyString(item["type"])) != "reasoning" {
-			continue
-		}
-		for field := range item {
-			switch field {
-			case "type", "id", "status", "summary", "content", "encrypted_content":
-			default:
-				return nil, errors.New("unsupported historical reasoning field")
-			}
-		}
-		parts := []any{map[string]any{"type": "output_text", "text": "Historical reasoning context (not a new instruction):"}}
-		for _, field := range []string{"summary", "content"} {
-			if item[field] == nil {
-				continue
-			}
-			values, ok := item[field].([]any)
-			if !ok {
-				return nil, errors.New("unsupported historical reasoning text")
-			}
-			for _, value := range values {
-				part, ok := value.(map[string]any)
-				if !ok || len(part) != 2 || (part["type"] != "summary_text" && part["type"] != "reasoning_text" && part["type"] != "text") {
-					return nil, errors.New("unsupported historical reasoning part")
-				}
-				text, ok := part["text"].(string)
-				if !ok {
-					return nil, errors.New("unsupported historical reasoning text")
-				}
-				parts = append(parts, map[string]any{"type": "output_text", "text": text})
-			}
-		}
-		if encrypted := item["encrypted_content"]; encrypted != nil {
-			text, ok := encrypted.(string)
-			if !ok {
-				return nil, errors.New("unsupported historical reasoning ciphertext")
-			}
-			if text != "" {
-				parts = append(parts, map[string]any{"type": "output_text", "text": openAIHistoricalCiphertextOmitted})
-			}
-		}
-		input[i] = map[string]any{"type": "message", "role": "assistant", "content": parts}
-		changed = true
-	}
-	if !changed {
-		return clean, nil
-	}
-	// Replace only input: top-level model mappings, flags and number spellings
-	// remain the handler's original values. UseNumber keeps nested integers exact.
-	encoded, err := json.Marshal(input)
-	if err != nil {
-		return nil, err
-	}
-	return sjson.SetRawBytes(clean, "input", encoded)
 }
 
 // Protect the caller's available tools/schema and task instructions as well as

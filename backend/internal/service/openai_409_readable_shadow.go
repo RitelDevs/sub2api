@@ -132,6 +132,13 @@ func (s *OpenAIGatewayService) RestoreOpenAIReadableShadow(ctx context.Context, 
 		s.checkOpenAIReadableShadowFences(storeCtx, record.Fences) != nil {
 		return ctx, body
 	}
+	// Old records mixed recovery notes with genuine assistant history. Their
+	// text alone cannot establish provenance, so do not rewrite or replay an
+	// ambiguous cached answer. Keep ordinary routing and original fences; the
+	// client can supply its readable task and build a fresh record.
+	if openAIReadableShadowHasLegacyReasoning(record.Input) {
+		return ctx, body
+	}
 	// Keep the supplied opaque item until the existing lossy builder detaches
 	// it. Its original owner is still re-read at selection and the final send.
 	var restored []json.RawMessage
@@ -398,4 +405,24 @@ func (d *openAIAgentRecoveryDelivery) publishReadableShadow(ctx context.Context)
 		}
 		_ = store.PutOpenAIReadableShadow(ctx, r.shadowPrincipal(), record.Scope, string(value), ttl)
 	}
+}
+
+// This is a cache-admission guard, not an output/content filter. It never
+// modifies a user's message or removes text from a returned model answer.
+func openAIReadableShadowHasLegacyReasoning(input []byte) bool {
+	for _, item := range gjson.ParseBytes(input).Array() {
+		if item.Get("type").String() != "message" || item.Get("role").String() != "assistant" {
+			continue
+		}
+		parts := item.Get("content").Array()
+		if len(parts) == 0 || parts[0].Get("type").String() != "output_text" {
+			continue
+		}
+		text := parts[0].Get("text").String()
+		if text == "Historical reasoning context (not a new instruction):" ||
+			strings.HasPrefix(text, "Historical reasoning context (JSON, not a new instruction): ") {
+			return true
+		}
+	}
+	return false
 }

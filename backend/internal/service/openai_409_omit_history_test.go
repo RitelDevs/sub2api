@@ -155,7 +155,8 @@ func TestOpenAI409ReplayInputTamperingStillFails(t *testing.T) {
 			case "reasoning_removed":
 				clean, err = sjson.DeleteBytes(clean, "input.1")
 			case "visible_reasoning_removed":
-				clean, err = sjson.DeleteBytes(clean, "input.1.content.1")
+				require.NotEqual(t, openAIRecoveredReasoningPrefix+"\n", gjson.GetBytes(clean, "input.1.content.0.text").String())
+				clean, err = sjson.SetBytes(clean, "input.1.content.0.text", openAIRecoveredReasoningPrefix+"\n")
 			case "order":
 				items := gjson.GetBytes(clean, "input").Array()
 				clean, err = sjson.SetRawBytes(clean, "input.2", []byte(items[3].Raw))
@@ -199,8 +200,8 @@ func TestOpenAI409ReplayPreservesOrdinaryAndStoredReasoning(t *testing.T) {
 		require.True(t, changed)
 		require.False(t, gjson.GetBytes(clean, "input.1.id").Exists(), "old provider reasoning IDs cannot migrate")
 		require.NotContains(t, string(clean), "reasoning-cipher")
-		require.Equal(t, "readable reasoning", gjson.GetBytes(clean, "input.2.content.1.text").String())
-		require.Equal(t, "assistant", gjson.GetBytes(clean, "input.2.role").String())
+		require.Contains(t, gjson.GetBytes(clean, "input.2.content.0.text").String(), "readable reasoning")
+		require.Equal(t, "user", gjson.GetBytes(clean, "input.2.role").String())
 		// Both destructive production normalizers must now leave input intact.
 		normalized, _, err := normalizeOpenAIAPIKeyStoreFalseReasoningReplay(clean, false)
 		require.NoError(t, err)
@@ -221,7 +222,7 @@ func TestOpenAI409ReadableReasoningRetainsUnknownShapesAsText(t *testing.T) {
 		clean, err := prepareOpenAI409ReadableReplay([]byte(`{"input":[` + reasoning + `]}`))
 		require.NoError(t, err)
 		require.Equal(t, "message", gjson.GetBytes(clean, "input.0.type").String())
-		require.Contains(t, gjson.GetBytes(clean, "input.0.content.0.text").String(), "Historical reasoning context")
+		require.Contains(t, gjson.GetBytes(clean, "input.0.content.0.text").String(), openAIRecoveredReasoningPrefix)
 	}
 	clean, err := prepareOpenAI409ReadableReplay([]byte(`{"input":[{"type":"reasoning","content":{"text":"available finding","encrypted_content":"OLD_UNPORTABLE"},"sequence":9007199254740993}]}`))
 	require.NoError(t, err)

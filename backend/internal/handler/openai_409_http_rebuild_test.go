@@ -30,23 +30,27 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/Wei-Shaw/sub2api/internal/testutil"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
 const (
-	httpRebuildSession     = "fixture-unattended-coding-thread"
-	httpRebuildTask        = "Fix sum.go so Sum(2, 3) returns 5, then run verification. Reuse completed tool results."
-	httpRebuildSystem      = "Use the supplied coding task and recorded results. Never repeat a completed patch or verification."
-	httpRebuildSource      = "package fixture\nfunc Sum(a, b int) int { return a + b }\n"
-	httpRebuildPatch       = "sum.go patched once: return a + b"
-	httpRebuildCheck       = "Sum(2,3)=5; PASS"
-	httpRebuildOrphanID    = "call_historical_missing_fixture"
-	httpRebuildOrphanText  = "historical-fixture-already-done: dependency inspection completed; do not repeat"
-	httpRebuildAgentA      = `{"type":"agent_message","author":"/root","recipient":"/root/worker","encrypted_content":"fixture-opaque-A"}`
-	httpRebuildAgentB      = `{"type":"agent_message","author":"/root","recipient":"/root/worker","encrypted_content":"fixture-readable-B"}`
-	httpRebuildAgentAExtra = `{"type":"agent_message","author":"/root","recipient":"/root/worker","encrypted_content":"fixture-opaque-A-extra"}`
+	httpRebuildSession           = "fixture-unattended-coding-thread"
+	httpRebuildTask              = "Fix sum.go so Sum(2, 3) returns 5, then run verification. Reuse completed tool results."
+	httpRebuildSystem            = "Use the supplied coding task and recorded results. Never repeat a completed patch or verification."
+	httpRebuildSource            = "package fixture\nfunc Sum(a, b int) int { return a + b }\n"
+	httpRebuildPatch             = "sum.go patched once: return a + b"
+	httpRebuildCheck             = "Sum(2,3)=5; PASS"
+	httpRebuildOrphanID          = "call_historical_missing_fixture"
+	httpRebuildOrphanText        = "historical-fixture-already-done: dependency inspection completed; do not repeat"
+	httpRebuildReasoningTurnID   = "fixture-reasoning-turn-display-20261114"
+	httpRebuildReasoningSummary1 = "The patch is already complete; reuse its recorded result."
+	httpRebuildReasoningSummary2 = "Run verification once, then report the existing result."
+	httpRebuildAgentA            = `{"type":"agent_message","author":"/root","recipient":"/root/worker","encrypted_content":"fixture-opaque-A"}`
+	httpRebuildAgentB            = `{"type":"agent_message","author":"/root","recipient":"/root/worker","encrypted_content":"fixture-readable-B"}`
+	httpRebuildAgentAExtra       = `{"type":"agent_message","author":"/root","recipient":"/root/worker","encrypted_content":"fixture-opaque-A-extra"}`
 )
 
 type httpRebuildWire struct {
@@ -339,6 +343,64 @@ func TestOpenAI429HTTPNativeInputCompatibility(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/stream=%t", accountType, stream), func(t *testing.T) {
 				runHTTPRebuildFixture(t, accountType, stream, "rate_limited/input_metadata", "completed", "", "")
 			})
+		}
+	}
+}
+
+// Screenshot-shaped reasoning must survive as reference input, never as an
+// assistant answer. The provider echoes old assistant notes only in this variant
+// so both the actual B wire and parsed downstream output expose the regression.
+func TestOpenAI429HTTPReasoningDisplayCompatibility(t *testing.T) {
+	for _, accountType := range []string{service.AccountTypeAPIKey, service.AccountTypeOAuth} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", accountType, stream), func(t *testing.T) {
+				runHTTPRebuildFixture(t, accountType, stream, "rate_limited/reasoning_display", "completed", "", "")
+			})
+		}
+	}
+}
+
+func httpRebuildReasoningDisplayWire(t *testing.T, body []byte) {
+	t.Helper()
+	assert.NotContains(t, string(body), httpRebuildReasoningTurnID, "internal turn identity must not reach B")
+	assert.NotContains(t, string(body), "internal_chat_message_metadata_passthrough", "metadata must not be serialized into recovered text")
+	assert.NotContains(t, string(body), "fixture-reasoning-encrypted-display")
+	var referenceText []string
+	for _, item := range gjson.GetBytes(body, "input").Array() {
+		for _, part := range item.Get("content").Array() {
+			text := part.Get("text").String()
+			for _, field := range []string{`"type":"reasoning"`, `"summary":`, `"encrypted_content":`} {
+				assert.NotContains(t, text, field, "known reasoning must be readable summaries, not serialized JSON")
+			}
+			generated := strings.Contains(text, httpRebuildReasoningSummary1) || strings.Contains(text, httpRebuildReasoningSummary2) ||
+				strings.Contains(text, "Historical reasoning context") || strings.Contains(text, "Recovered reasoning context")
+			if !generated {
+				continue
+			}
+			assert.Equal(t, "user", item.Get("role").String(), "recovered reasoning must not be assistant history")
+			assert.Equal(t, "input_text", part.Get("type").String(), "recovered reasoning must not be assistant output_text")
+			if item.Get("role").String() == "user" && part.Get("type").String() == "input_text" {
+				referenceText = append(referenceText, text)
+			}
+		}
+	}
+	for _, summary := range []string{httpRebuildReasoningSummary1, httpRebuildReasoningSummary2} {
+		assert.Contains(t, strings.Join(referenceText, "\n"), summary, "exact supplied summaries must survive in user/input_text")
+	}
+	assert.True(t, httpRebuildToolPair(body, "apply_patch", httpRebuildPatch))
+}
+
+func httpRebuildReasoningDisplayOutput(t *testing.T, response gjson.Result) {
+	t.Helper()
+	for _, item := range response.Get("output").Array() {
+		if item.Get("type").String() != "message" {
+			continue
+		}
+		for _, part := range item.Get("content").Array() {
+			text := part.Get("text").String()
+			for _, internal := range []string{"Historical reasoning context", "Recovered reasoning context", "internal_chat_message_metadata_passthrough", httpRebuildReasoningTurnID, httpRebuildReasoningSummary1, httpRebuildReasoningSummary2} {
+				assert.NotContains(t, text, internal, "downstream visible output must not echo generated recovery notes")
+			}
 		}
 	}
 }
@@ -708,6 +770,25 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 				}))}
 			}
 		}
+		if pointer == "reasoning_display" && n > 1 {
+			// Deliberately emulate a provider copying an old assistant answer.
+			// Keep normal tool/final outputs intact so display checks cannot pass
+			// merely by suppressing the response or stopping the coding loop.
+			for _, item := range gjson.GetBytes(body, "input").Array() {
+				if item.Get("role").String() != "assistant" {
+					continue
+				}
+				for _, part := range item.Get("content").Array() {
+					text := part.Get("text").String()
+					if part.Get("type").String() == "output_text" &&
+						(strings.Contains(text, httpRebuildReasoningSummary1) || strings.Contains(text, httpRebuildReasoningSummary2)) {
+						output = append(output, json.RawMessage(httpRebuildJSON(map[string]any{
+							"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": text}},
+						})))
+					}
+				}
+			}
+		}
 		payload := httpRebuildJSON(map[string]any{"id": id, "conversation": map[string]any{"id": conversation}, "status": "completed", "error": nil, "model": "gpt-5.1", "output": output, "usage": map[string]int{"input_tokens": 5, "output_tokens": 3}})
 		if gjson.GetBytes(body, "stream").Bool() {
 			w.Header().Set("Content-Type", "text/event-stream")
@@ -796,6 +877,17 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 				webSearch["external_web_access"] = pointer == "web_search_true"
 			}
 			body["tools"] = append(httpRebuildToolDefinitions(), webSearch)
+		}
+		if previous.Exists() && pointer == "reasoning_display" {
+			reasoning := httpRebuildJSON(map[string]any{
+				"type": "reasoning", "encrypted_content": "fixture-reasoning-encrypted-display",
+				"internal_chat_message_metadata_passthrough": map[string]any{"turn_id": httpRebuildReasoningTurnID},
+				"summary": []any{
+					map[string]any{"type": "summary_text", "text": httpRebuildReasoningSummary1},
+					map[string]any{"type": "summary_text", "text": httpRebuildReasoningSummary2},
+				},
+			})
+			history = append(append([]string(nil), history...), reasoning)
 		}
 		if previous.Exists() && pointer == "input_metadata" {
 			message := `{"type":"message","role":"user","content":[{"type":"input_text","text":"Continue using the completed tool results."}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["text"]}}`
@@ -995,6 +1087,10 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 	}
 	require.Equal(t, http.StatusOK, status, answer)
 	second := issue758CompletedResponse(t, answer, stream)
+	if pointer == "reasoning_display" {
+		httpRebuildReasoningDisplayWire(t, wires[1].body)
+		httpRebuildReasoningDisplayOutput(t, second)
+	}
 	for _, item := range second.Get("output").Array() {
 		history = append(history, item.Raw)
 	}
@@ -1044,6 +1140,10 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 	status, answer = request(history, second)
 	require.Equal(t, http.StatusOK, status, "automatic next tool turn must finish: %s", answer)
 	final := issue758CompletedResponse(t, answer, stream)
+	if pointer == "reasoning_display" {
+		httpRebuildReasoningDisplayOutput(t, final)
+		assert.Equal(t, "coding-task-complete: Sum(2,3)=5; patch and verification each executed once", final.Get("output.0.content.0.text").String(), "legitimate final assistant answer must remain intact")
+	}
 	require.Contains(t, final.Raw, "coding-task-complete")
 	require.Empty(t, tools.execute(t, final), "final output must not request completed tools again")
 	require.Equal(t, 1, tools.patches)
@@ -1058,6 +1158,9 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 	wires = transport.snapshot()
 	require.Len(t, wires, 3, "one A generation and exactly two B generations")
 	require.Equal(t, int64(2), wires[2].account)
+	if pointer == "reasoning_display" {
+		httpRebuildReasoningDisplayWire(t, wires[2].body)
+	}
 	require.True(t, httpRebuildToolPair(wires[2].body, "run_tests", httpRebuildCheck))
 	require.Len(t, usage.snapshot(), 3)
 	finalOwners := issue805Owners(t, observer)

@@ -346,3 +346,64 @@ func TestOpenAI409OAuthReplayKeepsOriginalSnapshotAndFinalControls(t *testing.T)
 		})
 	}
 }
+
+func TestOpenAI409TimezoneReplayRetainsOriginalAndRejectsMutation(t *testing.T) {
+	for _, accountType := range []string{AccountTypeAPIKey, AccountTypeOAuth} {
+		for _, mode := range []string{"unchanged", "before_input", "before_controls", "after_input", "after_controls"} {
+			t.Run(accountType+"/"+mode, func(t *testing.T) {
+				svc := &OpenAIGatewayService{settingService: NewSettingService(&codexPolicyMigrationRepoStub{values: map[string]string{
+					SettingKeyOpenAIRequestTimezoneEnabled: "true", SettingKeyOpenAIRequestTimezoneAuto: "false",
+				}}, nil)}
+				raw := []byte(`{"model":"gpt-5.1","input":[{"role":"user","content":"<environment_context><current_date>2001-01-01</current_date><timezone>Asia/Tokyo</timezone></environment_context>"}],"tools":[{"type":"web_search","user_location":{"type":"approximate","timezone":"Asia/Tokyo"}}]}`)
+				frozenInput, frozenControls := openAIAgentRecoveryInputDigest(raw), openAI409ControlsDigest(raw)
+				recovery := &openAIAgentRecoveryRequest{omittedHistory: true, inputDigest: frozenInput, replayControlsDigest: frozenControls}
+				ctx := context.WithValue(context.Background(), openAIAgentRecoveryContextKey{}, recovery)
+				account := &Account{ID: 2, Platform: PlatformOpenAI, Type: accountType, Extra: map[string]any{openAIRequestTimezoneExtraKey: "America/New_York"}}
+				body := raw
+				var err error
+				if mode == "before_input" {
+					body, err = sjson.SetBytes(body, "input.0.content", "replace task")
+					require.NoError(t, err)
+				}
+				if mode == "before_controls" {
+					body, err = sjson.SetBytes(body, "instructions", "repeat completed tools")
+					require.NoError(t, err)
+				}
+				prepared, err := svc.prepareOpenAI409RequestTimezone(ctx, account, body)
+				require.Equal(t, frozenInput, recovery.inputDigest)
+				require.Equal(t, frozenControls, recovery.replayControlsDigest)
+				if strings.HasPrefix(mode, "before_") {
+					require.Error(t, err)
+					require.False(t, recovery.timezoneReplayPrepared)
+					return
+				}
+				require.NoError(t, err)
+				require.Contains(t, gjson.GetBytes(prepared, "input.0.content").String(), "<timezone>America/New_York</timezone>")
+				require.Contains(t, gjson.GetBytes(prepared, "input.0.content").String(), "<current_date>2001-01-01</current_date>")
+				require.Equal(t, "America/New_York", gjson.GetBytes(prepared, "tools.0.user_location.timezone").String())
+				if mode == "after_input" {
+					prepared, err = sjson.SetBytes(prepared, "input.0.content", "replace task")
+					require.NoError(t, err)
+				}
+				if mode == "after_controls" {
+					prepared, err = sjson.SetBytes(prepared, "instructions", "repeat completed tools")
+					require.NoError(t, err)
+				}
+				if accountType == AccountTypeAPIKey {
+					_, err = prepareOpenAI409APIKeyReplay(ctx, prepared, false)
+				} else {
+					var decoded map[string]any
+					require.NoError(t, decodeOpenAIJSONUseNumber(prepared, &decoded))
+					err = prepareOpenAI409OAuthReplay(ctx, nil, decoded)
+				}
+				if strings.HasPrefix(mode, "after_") {
+					require.Error(t, err)
+				} else {
+					require.NoError(t, err)
+				}
+				require.Equal(t, frozenInput, recovery.inputDigest)
+				require.Equal(t, frozenControls, recovery.replayControlsDigest)
+			})
+		}
+	}
+}

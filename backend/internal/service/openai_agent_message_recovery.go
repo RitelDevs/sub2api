@@ -45,45 +45,48 @@ type openAIAgentRecoveryState struct {
 }
 
 type openAIAgentRecoveryRequest struct {
-	omitted400History    bool // one authorized, same-route HTTP 400 history replacement
-	retry400Route        *openAIAgentRecoveryBinding
-	omittedHistory       bool // explicit Beta sanitization; preserve the resulting input and prohibit replay
-	disableOwnerBinding  bool
-	previousResponseID   string
-	inputDigest          [32]byte
-	replayControlsDigest [32]byte
-	apiControlsDigest    [32]byte
-	apiInputDigest       [32]byte
-	apiReplayPrepared    bool
-	oauthInputDigest     [32]byte
-	oauthControlsDigest  [32]byte
-	oauthReplayPrepared  bool
-	omittedSource        *openAIAgentRecoveryRequest
-	shadowModel          string // original requested model, independent of account/channel projection
-	shadowReadableIntent bool
-	shadowCandidate      *openAIReadableShadow
-	shadowOutputSafe     bool
-	shadowUnsafeOutput   bool
-	shadowFences         map[string]string
-	shadowObservation    *openAIReadableShadowObservation
-	keyID                int64
-	userID               int64
-	httpResponsePointer  bool
-	delivery             *openAIAgentRecoveryDelivery
-	outputs              [][32]byte
-	disallowLearning     bool
-	nativeCompaction     bool
-	lookupErr            error
-	toolResult           bool
-	known                map[[32]byte]bool
-	keys                 [][32]byte
-	items                [][32]byte
-	owner                *openAIAgentRecoveryBinding
-	conflict             bool
-	mixedOwners          bool // different completed producers, not a delivery conflict
-	groupID              int64
-	model                string
-	session              string
+	omitted400History      bool // one authorized, same-route HTTP 400 history replacement
+	retry400Route          *openAIAgentRecoveryBinding
+	omittedHistory         bool // explicit Beta sanitization; preserve the resulting input and prohibit replay
+	disableOwnerBinding    bool
+	previousResponseID     string
+	inputDigest            [32]byte
+	replayControlsDigest   [32]byte
+	timezoneInputDigest    [32]byte
+	timezoneControlsDigest [32]byte
+	timezoneReplayPrepared bool
+	apiControlsDigest      [32]byte
+	apiInputDigest         [32]byte
+	apiReplayPrepared      bool
+	oauthInputDigest       [32]byte
+	oauthControlsDigest    [32]byte
+	oauthReplayPrepared    bool
+	omittedSource          *openAIAgentRecoveryRequest
+	shadowModel            string // original requested model, independent of account/channel projection
+	shadowReadableIntent   bool
+	shadowCandidate        *openAIReadableShadow
+	shadowOutputSafe       bool
+	shadowUnsafeOutput     bool
+	shadowFences           map[string]string
+	shadowObservation      *openAIReadableShadowObservation
+	keyID                  int64
+	userID                 int64
+	httpResponsePointer    bool
+	delivery               *openAIAgentRecoveryDelivery
+	outputs                [][32]byte
+	disallowLearning       bool
+	nativeCompaction       bool
+	lookupErr              error
+	toolResult             bool
+	known                  map[[32]byte]bool
+	keys                   [][32]byte
+	items                  [][32]byte
+	owner                  *openAIAgentRecoveryBinding
+	conflict               bool
+	mixedOwners            bool // different completed producers, not a delivery conflict
+	groupID                int64
+	model                  string
+	session                string
 }
 
 // WithOpenAIAgentMessageRecovery observes only opaque item identities. A route

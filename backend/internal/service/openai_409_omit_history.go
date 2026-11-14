@@ -503,13 +503,38 @@ func openAI409ControlsDigest(raw []byte) [32]byte {
 	return sha256.Sum256(canonical)
 }
 
+// The configured timezone adapter may rewrite environment_context input and
+// web-search location controls. Prove the untouched replay before deriving that
+// existing policy's result; never replace the original frozen snapshot.
+func (s *OpenAIGatewayService) prepareOpenAI409RequestTimezone(ctx context.Context, account *Account, body []byte) ([]byte, error) {
+	r := openAIAgentRecoveryFromContext(ctx)
+	if r == nil || !r.omittedHistory {
+		return s.normalizeRequestTimezone(ctx, account, body, "http"), nil
+	}
+	inputChanged := openAIAgentRecoveryInputDigest(body) != r.inputDigest
+	controlsChanged := openAI409ControlsDigest(body) != r.replayControlsDigest
+	if inputChanged || controlsChanged {
+		logger.FromContext(ctx).Warn("openai.encrypted_history_409_refused", zap.String("stage", "timezone_prepare"), zap.Bool("input_changed", inputChanged), zap.Bool("controls_changed", controlsChanged))
+		return nil, openAIAgentRecoveryError("wire_changed")
+	}
+	prepared := s.normalizeRequestTimezone(ctx, account, body, "http")
+	r.timezoneInputDigest = openAIAgentRecoveryInputDigest(prepared)
+	r.timezoneControlsDigest = openAI409ControlsDigest(prepared)
+	r.timezoneReplayPrepared = true
+	return prepared, nil
+}
+
 func prepareOpenAI409APIKeyReplay(ctx context.Context, body []byte, responsesLite bool) ([]byte, error) {
 	r := openAIAgentRecoveryFromContext(ctx)
 	if r == nil || !r.omittedHistory {
 		return body, nil
 	}
-	inputChanged := openAIAgentRecoveryInputDigest(body) != r.inputDigest
-	controlsChanged := openAI409ControlsDigest(body) != r.replayControlsDigest
+	expectedInput, expectedControls := r.inputDigest, r.replayControlsDigest
+	if r.timezoneReplayPrepared {
+		expectedInput, expectedControls = r.timezoneInputDigest, r.timezoneControlsDigest
+	}
+	inputChanged := openAIAgentRecoveryInputDigest(body) != expectedInput
+	controlsChanged := openAI409ControlsDigest(body) != expectedControls
 	if inputChanged || controlsChanged {
 		logger.FromContext(ctx).Warn("openai.encrypted_history_409_refused", zap.String("stage", "api_prepare"), zap.Bool("input_changed", inputChanged), zap.Bool("controls_changed", controlsChanged))
 		return nil, openAIAgentRecoveryError("wire_changed")
@@ -542,8 +567,12 @@ func prepareOpenAI409OAuthReplay(ctx context.Context, c *gin.Context, body map[s
 	if err != nil {
 		return err
 	}
-	inputChanged := openAIAgentRecoveryInputDigest(before) != r.inputDigest
-	controlsChanged := openAI409ControlsDigest(before) != r.replayControlsDigest
+	expectedInput, expectedControls := r.inputDigest, r.replayControlsDigest
+	if r.timezoneReplayPrepared {
+		expectedInput, expectedControls = r.timezoneInputDigest, r.timezoneControlsDigest
+	}
+	inputChanged := openAIAgentRecoveryInputDigest(before) != expectedInput
+	controlsChanged := openAI409ControlsDigest(before) != expectedControls
 	if inputChanged || controlsChanged {
 		logger.FromContext(ctx).Warn("openai.encrypted_history_409_refused", zap.String("stage", "oauth_prepare"), zap.Bool("input_changed", inputChanged), zap.Bool("controls_changed", controlsChanged))
 		return openAIAgentRecoveryError("wire_changed")

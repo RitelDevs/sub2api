@@ -160,7 +160,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 	defer func() { resultErr = regionalMeterFinishForward(ctx, result, resultErr, finishMeter) }()
 	ctx = s.withRequestTimezoneEgress(ctx, account)
-	body = s.normalizeRequestTimezone(ctx, account, body, "http")
+	timezoneBody, timezoneErr := s.prepareOpenAI409RequestTimezone(ctx, account, body)
+	if timezoneErr != nil {
+		return nil, timezoneErr
+	}
+	body = timezoneBody
 	ctx = withOpenAITransportRoute(ctx, "http", "native", "", "")
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)

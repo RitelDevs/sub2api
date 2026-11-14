@@ -306,6 +306,38 @@ func TestOpenAI429HTTPSchemaCompatibility(t *testing.T) {
 	}
 }
 
+// Manual account timezones may adapt the synthetic environment, but must
+// preserve the frozen task and completed tools through A -> B -> B recovery.
+func TestOpenAI429HTTPTimezoneCompatibility(t *testing.T) {
+	for _, accountType := range []string{service.AccountTypeAPIKey, service.AccountTypeOAuth} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", accountType, stream), func(t *testing.T) {
+				runHTTPRebuildFixture(t, accountType, stream, "rate_limited/timezone", "completed", "", "")
+			})
+		}
+	}
+}
+
+type httpRebuildTimezoneSettings struct{ omit409SettingsRepo }
+
+func (s *httpRebuildTimezoneSettings) GetValue(ctx context.Context, key string) (string, error) {
+	switch key {
+	case service.SettingKeyOpenAIRequestTimezoneEnabled:
+		return "true", nil
+	case service.SettingKeyOpenAIRequestTimezoneAuto:
+		return "false", nil
+	default:
+		return s.omit409SettingsRepo.GetValue(ctx, key)
+	}
+}
+
+func (s *httpRebuildTimezoneSettings) GetMultiple(ctx context.Context, keys []string) (map[string]string, error) {
+	values, err := s.omit409SettingsRepo.GetMultiple(ctx, keys)
+	values[service.SettingKeyOpenAIRequestTimezoneEnabled] = "true"
+	values[service.SettingKeyOpenAIRequestTimezoneAuto] = "false"
+	return values, err
+}
+
 func TestOpenAI409HTTPControlNormalization(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		for _, accountType := range []string{service.AccountTypeAPIKey, service.AccountTypeOAuth} {
@@ -524,6 +556,43 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 		providerHeaders = append(providerHeaders, r.Header.Clone())
 		n := len(providerBodies)
 		mu.Unlock()
+		if pointer == "timezone" {
+			expectedZone := "America/Los_Angeles"
+			if n > 1 {
+				expectedZone = "Europe/Berlin"
+			}
+			expectedEnvironment := "<environment_context><timezone>" + expectedZone + "</timezone></environment_context>"
+			environments, tasks := 0, 0
+			for _, item := range gjson.GetBytes(body, "input").Array() {
+				if item.Get("role").String() != "user" {
+					continue
+				}
+				content := item.Get("content")
+				texts := []string{content.String()}
+				if content.IsArray() {
+					texts = nil
+					for _, part := range content.Array() {
+						if part.Get("type").String() == "input_text" {
+							texts = append(texts, part.Get("text").String())
+						}
+					}
+				}
+				for _, text := range texts {
+					if text == expectedEnvironment {
+						environments++
+					}
+					if text == httpRebuildTask {
+						tasks++
+					}
+				}
+			}
+			if environments != 1 || tasks != 1 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(w, `{"error":{"type":"invalid_request_error","message":"fixture rejected account timezone or changed task"}}`)
+				return
+			}
+		}
 		noToolsFinal := pointer == "no_tools_parallel" && n == 3
 		toolOracleBody := body
 		if strings.HasPrefix(pointer, "web_search_") {
@@ -613,7 +682,18 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 	for i, label := range []string{"A", "B"} {
 		accounts[i].Credentials = map[string]any{"base_url": provider.URL, "api_key": "fixture-rebuild-" + label, "access_token": "fixture-rebuild-" + label, "chatgpt_account_id": "fixture-chatgpt-" + label}
 	}
-	settings := service.NewSettingService(&omit409SettingsRepo{enabled: boundary != "strict"}, cfg)
+	var settingsRepo service.SettingRepository = &omit409SettingsRepo{enabled: boundary != "strict"}
+	if pointer == "timezone" {
+		settingsRepo = &httpRebuildTimezoneSettings{omit409SettingsRepo{enabled: true}}
+		for i, zone := range []string{"America/Los_Angeles", "Europe/Berlin"} {
+			if accounts[i].Extra == nil {
+				accounts[i].Extra = make(map[string]any)
+			}
+			accounts[i].Extra["openai_request_timezone"] = zone
+			require.NoError(t, service.ValidateOpenAIRequestTimezoneExtra(accounts[i].Platform, accounts[i].Extra))
+		}
+	}
+	settings := service.NewSettingService(settingsRepo, cfg)
 	usage := &readable409UsageRepo{}
 	h := newOpenAIResponsesFailoverTestHandlerWithUsage(t, transport, repository.NewGatewayCache(clients()), settings, usage, accounts...)
 	h.cfg.Security.URLAllowlist.AllowInsecureHTTP = true
@@ -713,6 +793,13 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 		return response.StatusCode, string(answer)
 	}
 	history := []string{httpRebuildMessage("system", httpRebuildSystem), httpRebuildMessage("user", httpRebuildTask)}
+	if pointer == "timezone" {
+		history = []string{
+			httpRebuildMessage("system", httpRebuildSystem),
+			httpRebuildMessage("user", "<environment_context><timezone>Asia/Tokyo</timezone></environment_context>"),
+			httpRebuildMessage("user", httpRebuildTask),
+		}
+	}
 	status, answer := request(history, gjson.Result{})
 	require.Equal(t, http.StatusOK, status, answer)
 	first := issue758CompletedResponse(t, answer, stream)

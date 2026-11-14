@@ -345,6 +345,11 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 	if err := NormalizeProtocolRulesCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
+	if priority, err := s.configuredSelfPriority(ctx, input.Name); err != nil {
+		return nil, err
+	} else if priority != nil {
+		input.Priority = *priority
+	}
 	duplicate, err := buildAccountForCreate(input, accountExtra)
 	if err != nil {
 		return nil, err
@@ -527,6 +532,11 @@ func (s *adminServiceImpl) createAccount(ctx context.Context, input *CreateAccou
 	}
 	if err := s.ApplyOAuthAutoConfig(ctx, input); err != nil {
 		return nil, err
+	}
+	if priority, err := s.configuredSelfPriority(ctx, input.Name); err != nil {
+		return nil, err
+	} else if priority != nil {
+		input.Priority = *priority
 	}
 	if err := s.applyOpenAITwoFAAdmission(ctx, input); err != nil {
 		return nil, err
@@ -933,6 +943,13 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.Priority != nil {
 		account.Priority = *input.Priority
 	}
+	if input.Priority != nil || input.Name != "" {
+		if priority, err := s.configuredSelfPriority(ctx, account.Name); err != nil {
+			return nil, err
+		} else if priority != nil {
+			account.Priority = *priority
+		}
+	}
 	if input.RateMultiplier != nil {
 		if *input.RateMultiplier < 0 {
 			return nil, errors.New("rate_multiplier must be >= 0")
@@ -1220,7 +1237,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil {
+	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil || input.Priority != nil || input.Name != "" {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -1438,8 +1455,47 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if s.excelOAuthReauth != nil && bpsChanged {
 		repoUpdates.ExcelBPSAuthorizationPending = pendingByAccount
 	}
-	if _, err := s.accountRepo.BulkUpdate(ctx, input.AccountIDs, repoUpdates); err != nil {
-		return nil, err
+	selfIDs := make([]int64, 0)
+	var selfPriority *int
+	if input.Priority != nil || input.Name != "" {
+		for _, account := range cachedTargets {
+			if account == nil {
+				continue
+			}
+			name := account.Name
+			if input.Name != "" {
+				name = input.Name
+			}
+			priority, err := s.configuredSelfPriority(ctx, name)
+			if err != nil {
+				return nil, err
+			}
+			if priority != nil {
+				selfIDs = append(selfIDs, account.ID)
+				selfPriority = priority
+			}
+		}
+	}
+	regularIDs := input.AccountIDs
+	if len(selfIDs) > 0 {
+		regularIDs = make([]int64, 0, len(input.AccountIDs)-len(selfIDs))
+		for _, id := range input.AccountIDs {
+			if !slices.Contains(selfIDs, id) {
+				regularIDs = append(regularIDs, id)
+			}
+		}
+	}
+	if len(regularIDs) > 0 {
+		if _, err := s.accountRepo.BulkUpdate(ctx, regularIDs, repoUpdates); err != nil {
+			return nil, err
+		}
+	}
+	if len(selfIDs) > 0 {
+		selfUpdates := repoUpdates
+		selfUpdates.Priority = selfPriority
+		if _, err := s.accountRepo.BulkUpdate(ctx, selfIDs, selfUpdates); err != nil {
+			return nil, err
+		}
 	}
 
 	ctx = accounttimer.WithoutManualIntent(ctx)

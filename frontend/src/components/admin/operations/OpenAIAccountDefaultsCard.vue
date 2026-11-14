@@ -20,6 +20,8 @@
             <label><span class="field-label">{{ t('autoConfig.priority') }}</span><input v-model.number="template.priority" :data-testid="'openai-tier-priority-' + plan" type="number" inputmode="numeric" min="0" max="10000" step="1" required class="input w-full" /></label>
           </div>
           <p class="text-xs leading-5 text-gray-500">{{ t('autoConfig.accountDefaults.loadHint') }}</p>
+          <label class="block"><span class="field-label">{{ t('autoConfig.accountDefaults.namePrefix') }}</span><input v-model="template.name_prefix" :data-testid="'openai-tier-name-prefix-' + plan" class="input w-full" type="text" maxlength="100" autocomplete="off" :spellcheck="false" /></label>
+          <p class="text-xs leading-5 text-gray-500">{{ t('autoConfig.accountDefaults.namePrefixHint') }}</p>
           <fieldset class="min-w-0 space-y-3">
             <legend class="field-label">{{ t('autoConfig.accountDefaults.models') }}</legend>
             <p class="text-xs leading-5 text-gray-500">{{ t('autoConfig.accountDefaults.modelsHint') }}</p>
@@ -37,6 +39,8 @@
         <label class="min-w-0 flex-1"><span class="field-label">{{ t('autoConfig.accountDefaults.plan') }}</span><select v-model="newPlan" class="input w-full" data-testid="openai-tier-plan"><option v-for="plan in availablePlans" :key="plan" :value="plan">{{ tierLabel(plan) }}</option></select></label>
         <button type="button" class="btn btn-secondary" data-testid="openai-tier-add" @click="addTier">{{ t('autoConfig.accountDefaults.addTier') }}</button>
       </div>
+      <label class="block"><span class="field-label">{{ t('autoConfig.accountDefaults.selfPriority') }}</span><input :value="draft.self_priority ?? ''" data-testid="openai-self-priority" class="input w-full" type="number" inputmode="numeric" min="0" max="10000" step="1" @input="setSelfPriority" /></label>
+      <p class="text-xs leading-5 text-gray-500">{{ t('autoConfig.accountDefaults.selfPriorityHint') }}</p>
       <label class="block"><span class="field-label">{{ t('autoConfig.accountDefaults.countries') }}</span><input v-model="countryText" data-testid="openai-proxy-countries" class="input w-full" type="text" placeholder="US, GB, DE" autocomplete="off" autocapitalize="characters" :spellcheck="false" /></label>
       <p class="text-xs leading-5 text-gray-500">{{ t('autoConfig.accountDefaults.countriesHint') }}</p>
       <p v-if="Object.keys(draft.model_exclusions ?? {}).length" class="text-xs leading-5 text-gray-500">{{ t('autoConfig.accountDefaults.exclusionsHint', { count: Object.keys(draft.model_exclusions).length }) }}</p>
@@ -73,6 +77,10 @@ function tierLabel(plan: string) { return OPENAI_TEMPLATE_PLANS.includes(plan as
 function setLoad(template: OAuthAccountTemplate, event: Event) {
   const value = (event.target as HTMLInputElement).value
   template.load_factor = value === '' ? null : Number(value)
+}
+function setSelfPriority(event: Event) {
+  const value = (event.target as HTMLInputElement).value
+  update({ self_priority: value === '' ? null : Number(value) })
 }
 function addTier() {
   if (!availablePlans.value.includes(newPlan.value as typeof availablePlans.value[number])) return

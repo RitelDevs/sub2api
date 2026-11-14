@@ -212,6 +212,11 @@ func (s *adminServiceImpl) ApplyOAuthAutoConfig(ctx context.Context, input *Crea
 	}
 	nativeDefaults := c.Platform == PlatformOpenAI && c.OpenAIAccountDefaults != nil && c.OpenAIAccountDefaults.Enabled
 	if nativeDefaults && !openAIAccountDefaultsInputEligible(input) {
+		// PAT/AgentIdentity imports retain their auth, model, group and admission
+		// exemptions; only their recognized plan's capacity and name defaults apply.
+		if template, ok := OAuthAccountDefaultsTemplateFor(c.OpenAIAccountDefaults, (&Account{Credentials: input.Credentials}).GetCredential("plan_type")); ok {
+			applyOpenAIAccountTemplateFields(input, c.OpenAIAccountDefaults, template)
+		}
 		return nil
 	}
 	if err := ValidateObserverGroupBindings(ctx, c.GroupIDs); err != nil {

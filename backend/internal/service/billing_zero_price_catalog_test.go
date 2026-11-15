@@ -40,6 +40,7 @@ func TestPreviouslyUnpricedModelsChargeTokens(t *testing.T) {
 			{"hy4", 3 / 6.7841, 9 / 6.7841, .15 / 6.7841},
 			{"hy4-preview", 6 / 6.7841, 18 / 6.7841, .30 / 6.7841},
 			{"mimo-v2.6-pro", .435, .87, .0036},
+			{"mimo-v2.6-flash", .14, .28, .0028},
 		} {
 			mode := "offline"
 			if dynamic {

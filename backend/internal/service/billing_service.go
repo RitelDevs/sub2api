@@ -562,6 +562,11 @@ func (s *BillingService) initFallbackPricing() {
 		OutputPricePerToken:    2.6532627761972847e-06,
 		CacheReadPricePerToken: 4.4221046269954745e-08,
 	}
+	s.fallbackPrices["mimo-v2.6-flash"] = &ModelPricing{
+		InputPricePerToken:     .14e-6,
+		OutputPricePerToken:    .28e-6,
+		CacheReadPricePerToken: .0028e-6,
+	}
 	s.fallbackPrices["mimo-v2.6-pro"] = &ModelPricing{
 		InputPricePerToken:     4.35e-07,
 		OutputPricePerToken:    8.7e-07,
@@ -1110,7 +1115,7 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	modelLower := normalizeAntigravityClaudeTierAlias(strings.ToLower(model))
 	// Exact new model IDs and known Gemini reasoning aliases share their own card.
 	switch normalized := normalizeModelNameForPricing(modelLower); normalized {
-	case "gemini-4-carbon", "gemini-4-hydrogen", "kimi-k3.1-pro", "hy3", "hy4", "hy4-preview", "mimo-v2.6-pro":
+	case "gemini-4-carbon", "gemini-4-hydrogen", "kimi-k3.1-pro", "hy3", "hy4", "hy4-preview", "mimo-v2.6-pro", "mimo-v2.6-flash":
 		return s.fallbackPrices[normalized]
 	}
 	if modelLower == "jev-latest" {

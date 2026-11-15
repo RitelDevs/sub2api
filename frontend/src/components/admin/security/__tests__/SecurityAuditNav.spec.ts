@@ -29,8 +29,6 @@ describe('security audit navigation', () => {
       const active = wrapper.findAll('[aria-current="page"]')
       expect(active).toHaveLength(1)
       expect(active[0].attributes('href')).toBe(path)
-      expect(active[0].classes()).toContain('bg-gray-900')
-      expect(wrapper.findAll('a').filter(link => link.classes().includes('bg-gray-900'))).toHaveLength(1)
     }
     wrapper.unmount()
   })

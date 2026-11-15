@@ -221,10 +221,10 @@ pnpm --dir frontend run dev
 | --- | --- |
 | 所有改动 | `git diff --check`，检查改动范围、凭据与临时文件 |
 | 纯文档 / Issue / PR 模板 | 校对内容、相对链接、YAML 字段与必填项；不需要启动服务或运行完整应用测试 |
-| 后端 | `make -C backend test-unit`、`make -C backend test-integration`；`(cd backend && golangci-lint run --timeout=30m ./...)` |
+| 后端 | 按 [TESTING.md](TESTING.md) 运行受影响包的定向测试；涉及真实存储/事务时选择对应 integration 用例。需要全量时只运行一次 `make -C backend test-all`，不再叠加 unit/integration 两轮 |
 | 后端并发/资源生命周期 | 对受影响包增加 `go test -race` 检查，记录 build tags 与测试范围 |
-| 前端 | `pnpm --dir frontend install --frozen-lockfile`、`make test-frontend`、`pnpm --dir frontend run build`；为受影响功能补充定向 Vitest |
-| 前端完整测试 | 需要全量验证时使用 `pnpm --dir frontend run test:run`；`make test-frontend` 仅包含 lint、类型检查和根 Makefile 中的关键测试集 |
+| 前端 | 运行受影响功能的现有 Vitest 及适用的 lint/types；依赖不变时复用已安装依赖，只有需要交付构建时执行 `pnpm --dir frontend run build` |
+| 前端完整测试 | `make test-frontend` 已包含 lint、类型检查和完整保留套件；执行后不要再叠加 `test:run`。只需测试、无需 lint/types 时可单独运行 `pnpm --dir frontend run test:run` |
 | Ent schema / Wire | `make -C backend generate`，检查生成文件，按 [迁移说明](backend/migrations/README.md) 验证新旧数据和升级路径 |
 | 部署脚本 / Compose | 对修改的脚本执行 `bash -n` / `sh -n`，运行 CI 中对应的离线部署测试；不要用部署入口做语法测试 |
 | Release 辅助脚本 | 按 CI 安装其 requirements，执行 `python3 -m unittest discover -s .github/release-tools -p 'test_release_matrix.py'` 及对应 shell 语法检查 |

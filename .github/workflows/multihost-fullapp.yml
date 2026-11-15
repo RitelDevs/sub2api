@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   isolated-real-applications:
     runs-on: ubuntu-latest
@@ -54,6 +58,15 @@ jobs:
           echo '727b91701a392de6ebc5027509f548bf39979e5216340d0faed8fa5e69c84f8b  '"$fullapp_fixture_dir/caddy.tar.gz" | sha256sum --check --strict
           tar -xzf "$fullapp_fixture_dir/caddy.tar.gz" -C "$fullapp_fixture_dir" caddy
           echo "CADDY_BIN=$fullapp_fixture_dir/caddy" >> "$GITHUB_ENV"
+      - name: Prepare fixture images once for all scenarios
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, 'deploy/traffic')
+          from test_fullapp_bootstrap import PG_IMAGE, REDIS_IMAGE, RUNTIME_IMAGE, docker
+          for image in (PG_IMAGE, REDIS_IMAGE, RUNTIME_IMAGE):
+              docker('pull', image, timeout=120)
+          PY
       - name: Initialize two full Sub2API applications and real Caddy in isolation
         timeout-minutes: 15
         run: python3 deploy/traffic/test_fullapp_bootstrap.py

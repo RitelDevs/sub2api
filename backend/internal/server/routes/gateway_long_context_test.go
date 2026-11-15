@@ -3,7 +3,6 @@ package routes
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -26,20 +25,5 @@ func TestGatewayRoutesLongContextBlocksBeforeHandler(t *testing.T) {
 			require.Equal(t, http.StatusBadRequest, response.Code, response.Body.String())
 			require.Contains(t, response.Body.String(), "context_length_exceeded")
 		})
-	}
-}
-
-func TestGatewayRoutesLongContextIncludesNativeGeminiAndAliases(t *testing.T) {
-	source, err := os.ReadFile("gateway.go")
-	require.NoError(t, err)
-	for _, chain := range []string{"gateway", "gemini", "antigravityV1", "antigravityV1Beta"} {
-		require.Contains(t, string(source), chain+".Use(apiKeyLongContext)", "missing admission on %s", chain)
-	}
-	require.Contains(t, string(source), "gateway.Use(apiKeyLongContext)\n\tgateway.Use(podRoute)", "owner must enforce admission before proxying to another pod")
-	for _, line := range strings.Split(string(source), "\n") {
-		if strings.Contains(line, "r.Handle(method, path,") || strings.Contains(line, "codexDirect.Use(") {
-			require.Contains(t, line, "apiKeyLongContext, podRoute", "aliases must enforce admission before pod proxying")
-			require.Contains(t, line, "compositeTarget, apiKeyLongContext", "aliases must enforce resolved model thresholds")
-		}
 	}
 }

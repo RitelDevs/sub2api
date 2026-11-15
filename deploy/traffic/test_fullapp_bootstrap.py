@@ -132,10 +132,9 @@ class RealApplicationBootstrapTest(unittest.TestCase):
                        "http_observations": {}}
         self.addCleanup(self.save_report)
         docker("info", timeout=15)
-        # Pull before creating the network; application containers have no
-        # external network. These match existing isolated PG/Redis CI versions.
+        # The workflow prepares these images once; each test keeps its own
+        # containers and internal network.
         for image in (PG_IMAGE, REDIS_IMAGE, RUNTIME_IMAGE):
-            docker("pull", image, timeout=120)
             image_id = docker("image", "inspect", "--format", "{{.Id}}", image).stdout.strip()
             self.report["images"].append({"tag": image, "id": image_id})
         docker("network", "create", "--internal", "--label", "sub2api.fixture=" + self.prefix,

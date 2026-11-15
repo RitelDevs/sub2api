@@ -31,9 +31,11 @@ create disposable fixtures. Never point tests at production.
   keep frontend-only changes from starting the backend suite. Untagged Go tests
   are not rerun in separate full unit and integration passes.
 - Real multi-host and packaged re-login runtime checks have separate workflows
-  because they exercise deployment boundaries that unit tests cannot. Their path
-  filters limit unrelated runs. Dependency security checks and release packaging
-  remain separate.
+  because they exercise deployment boundaries that unit tests cannot. Deployment
+  helpers and the Prism adapter also run only for their own paths. Superseded
+  runs are cancelled. Dependency audits run per language for relevant changes
+  and weekly; release packaging remains separate. Historical issue/screenshot
+  workflows live in Git rather than separate maintained entry points.
 - `pnpm --dir frontend run build` performs type checking and compilation. It does
   not start test suites or custom source/style scanners. `check:i18n` remains an
   explicit focused check, also discovered by the retained frontend test suite.

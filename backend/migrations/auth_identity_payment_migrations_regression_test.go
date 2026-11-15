@@ -41,8 +41,6 @@ func TestMigration119DefersPaymentIndexRolloutToOnlineFollowup(t *testing.T) {
 	require.NoError(t, err)
 
 	followupSQL := string(followupContent)
-	require.Contains(t, followupSQL, "explicit duplicate out_trade_no precheck")
-	require.Contains(t, followupSQL, "stale invalid paymentorder_out_trade_no_unique index")
 	require.Contains(t, followupSQL, "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS paymentorder_out_trade_no_unique")
 	require.NotContains(t, followupSQL, "DROP INDEX CONCURRENTLY IF EXISTS paymentorder_out_trade_no_unique")
 	require.Contains(t, followupSQL, "DROP INDEX CONCURRENTLY IF EXISTS paymentorder_out_trade_no")

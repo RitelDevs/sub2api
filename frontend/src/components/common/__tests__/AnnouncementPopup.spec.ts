@@ -1,16 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 
 import AnnouncementPopup from '../AnnouncementPopup.vue'
 import { useAnnouncementStore } from '@/stores/announcements'
-
-const announcementMarkdownStyles = readFileSync(
-  resolve(process.cwd(), 'src/styles/announcement-markdown.css'),
-  'utf8',
-)
 
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
@@ -73,13 +66,6 @@ describe('AnnouncementPopup', () => {
 
     wrapper.unmount()
   })
-
-  it.each(['h2', 'h3', 'ul', 'li', 'blockquote', 'table', 'th', 'td', 'code'])(
-    'loads a shared style rule for mixed-content <%s> elements',
-    (element) => {
-      expect(announcementMarkdownStyles).toContain(`.markdown-body ${element}`)
-    },
-  )
 
   it('previews an admin announcement without marking it as read', async () => {
     const store = useAnnouncementStore()

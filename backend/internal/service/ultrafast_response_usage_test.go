@@ -170,19 +170,19 @@ func ultrafastUsageEvent(t *testing.T, repo *ultrafastUsageRepo) UsageBillingEve
 }
 
 func TestUltrafastUsageRecordUsageCachedTokenMatrix(t *testing.T) {
+	// Full model rates live in TestUltrafastResponseToCost. Here cover
+	// the distinct Astra multiplier, Sol/Terra rates and the long-context boundary
+	// through RecordUsage without multiplying the complete pricing table again.
 	for _, model := range []struct {
 		name                       string
 		input, output, read, write float64
 		ultrafastMultiplier        float64
 	}{
-		{"gpt-5.6-sol", 5e-6, 30e-6, .5e-6, 6.25e-6, 2},
-		{"gpt-5.6-terra", 2e-6, 12e-6, .2e-6, 2.5e-6, 2},
 		{"gpt-6-astra", 10e-6, 50e-6, 1e-6, 12.5e-6, 6},
-		{"gpt-6-sol", 2e-6, 10e-6, .2e-6, 2.5e-6, 2},
 		{"gpt-6.1-sol", 2e-6, 10e-6, .1e-6, 2.5e-6, 2},
 		{"gpt-6.1-terra", 1e-6, 5e-6, .05e-6, 1.25e-6, 2},
 	} {
-		for _, total := range []int{10000, 272000, 272001, 500001} {
+		for _, total := range []int{272000, 272001} {
 			for _, tier := range []struct {
 				name, requested, observed, billed string
 				factor                            float64

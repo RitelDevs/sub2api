@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 )
 
 // GeminiRequestPricingModel exposes the same final mapping used by ForwardGemini.
@@ -19,6 +22,9 @@ func (s *GatewayService) CheckGeminiTokenRequestPricing(ctx context.Context, key
 	}
 	if isGeminiImageGenerationIntent(body, model, upstreamModel) {
 		return nil
+	}
+	if s == nil || s.billingService == nil {
+		return ErrModelPricingUnavailable
 	}
 	result := &ForwardResult{Model: model, UpstreamModel: upstreamModel}
 	billingModel := s.recordUsageBillingModel(ctx, key, result, fields)
@@ -74,4 +80,15 @@ func (s *OpenAIGatewayService) CheckDeepSeekTokenRequestPricing(ctx context.Cont
 		lastErr = err
 	}
 	return fmt.Errorf("check native DeepSeek token pricing: %w", lastErr)
+}
+
+// MessagesRequestPricingModel shares Forward's Claude thinking-model mapping.
+func (s *AntigravityGatewayService) MessagesRequestPricingModel(account *Account, model string, body []byte) (string, error) {
+	var request antigravity.ClaudeRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		return "", err
+	}
+	mapped := s.getMappedModelForThinkingLevel(account, model, geminiThinkingLevelFromClaudeThinking(request.Thinking))
+	enabled := request.Thinking != nil && (request.Thinking.Type == "enabled" || request.Thinking.Type == "adaptive")
+	return applyThinkingModelSuffix(mapped, enabled), nil
 }

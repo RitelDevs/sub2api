@@ -347,6 +347,118 @@ func TestOpenAI429HTTPNativeInputCompatibility(t *testing.T) {
 	}
 }
 
+// IDs are normalized before the readable replay is frozen. These controls
+// isolate ID removal from later native compatibility changes.
+func TestOpenAI429HTTPInputIDCompatibility(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, shape := range []string{"message_id", "non_pair_call_id", "tool_call_id"} {
+			t.Run(fmt.Sprintf("oauth/stream=%t/%s", stream, shape), func(t *testing.T) {
+				runHTTPRebuildFixture(t, service.AccountTypeOAuth, stream, "rate_limited/input_ids/"+shape, "completed", "", "")
+			})
+		}
+	}
+}
+
+// Direct message/result namespaces are native envelope fields, while the
+// function call namespace is required for replay. The calls-only control
+// distinguishes their removal from an unrelated tool declaration change.
+func TestOpenAI429HTTPInputNamespaceCompatibility(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, shape := range []string{"message", "tool_output", "tool_call_only"} {
+			t.Run(fmt.Sprintf("oauth/stream=%t/%s", stream, shape), func(t *testing.T) {
+				runHTTPRebuildFixture(t, service.AccountTypeOAuth, stream, "rate_limited/input_namespace/"+shape, "completed", "", "")
+			})
+		}
+	}
+}
+
+func httpRebuildNativeInputHistory(t *testing.T, history []string, pointer string) []string {
+	t.Helper()
+	history = append([]string(nil), history...)
+	for i, raw := range history {
+		item := gjson.Parse(raw)
+		field, value := "", ""
+		switch {
+		case item.Get("role").String() == "user":
+			switch pointer {
+			case "input_ids/message_id":
+				field, value = "id", "item_invalid_message"
+			case "input_ids/non_pair_call_id":
+				// Share the real call_id: removing a non-pair field must not
+				// delete the actual completed call or its result.
+				field, value = "call_id", "call_patch_once"
+			case "input_namespace/message":
+				field, value = "namespace", "functions"
+			}
+		case item.Get("type").String() == "function_call" && pointer == "input_ids/tool_call_id":
+			field, value = "id", "item_invalid_tool_call"
+		case item.Get("type").String() == "function_call_output" && pointer == "input_namespace/tool_output":
+			field, value = "namespace", "functions"
+		}
+		if field != "" {
+			var err error
+			history[i], err = sjson.Set(raw, field, value)
+			require.NoError(t, err)
+		}
+	}
+	return history
+}
+
+// This oracle observes the actual loopback provider body. It does not call a
+// production sanitizer or accept a subset of the original tool arguments.
+func httpRebuildNativeInputWire(t *testing.T, body []byte, pointer string, turn int) bool {
+	t.Helper()
+	valid := true
+	tasks := 0
+	var calls, results []any
+	for _, item := range gjson.GetBytes(body, "input").Array() {
+		switch item.Get("type").String() {
+		case "message":
+			valid = assert.False(t, item.Get("namespace").Exists(), "message namespace must not reach the native provider") && valid
+			if item.Get("role").String() != "user" {
+				continue
+			}
+			content := item.Get("content")
+			texts := []string{content.String()}
+			if content.IsArray() {
+				texts = nil
+				for _, part := range content.Array() {
+					if part.Get("type").String() == "input_text" {
+						texts = append(texts, part.Get("text").String())
+					}
+				}
+			}
+			for _, text := range texts {
+				if text == httpRebuildTask {
+					tasks++
+					valid = assert.False(t, item.Get("id").Exists(), "invalid message item ID must be removed") && valid
+					valid = assert.False(t, item.Get("call_id").Exists(), "message must not retain a non-pair call_id") && valid
+				}
+			}
+		case "function_call":
+			calls = append(calls, item.Value())
+		case "function_call_output":
+			results = append(results, item.Value())
+		}
+	}
+	valid = assert.Equal(t, 1, tasks, "the exact readable task must reach B once") && valid
+	valid = assert.Equal(t, 1, strings.Count(gjson.GetBytes(body, "instructions").String(), httpRebuildSystem), "the original system guidance must survive once") && valid
+	wantCalls := []any{gjson.Parse(httpRebuildCall("apply_patch", "call_patch_once", map[string]any{"path": "sum.go", "source": httpRebuildSource})).Value()}
+	wantResults := []any{map[string]any{"type": "function_call_output", "call_id": "call_patch_once", "output": httpRebuildPatch}}
+	if turn == 3 {
+		wantCalls = append(wantCalls, gjson.Parse(httpRebuildCall("run_tests", "call_verify_once", map[string]any{"path": "sum.go"})).Value())
+		wantResults = append(wantResults, map[string]any{"type": "function_call_output", "call_id": "call_verify_once", "output": httpRebuildCheck})
+	}
+	if strings.HasPrefix(pointer, "input_namespace/") {
+		for _, call := range wantCalls {
+			call.(map[string]any)["namespace"] = "functions"
+		}
+	}
+	valid = assert.Equal(t, wantCalls, calls, "call IDs, raw argument strings, names and native call namespaces must stay exact") && valid
+	valid = assert.Equal(t, wantResults, results, "completed outputs and their call IDs must stay exact, without result namespaces or duplicates") && valid
+	return valid
+}
+
 // Screenshot-shaped reasoning must survive as reference input, never as an
 // assistant answer. The provider echoes old assistant notes only in this variant
 // so both the actual B wire and parsed downstream output expose the regression.
@@ -628,6 +740,16 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 	observer := clients()
 	patchCall := httpRebuildCall("apply_patch", "call_patch_once", map[string]any{"path": "sum.go", "source": httpRebuildSource})
 	checkCall := httpRebuildCall("run_tests", "call_verify_once", map[string]any{"path": "sum.go"})
+	if strings.HasPrefix(pointer, "input_namespace/") {
+		// The native provider emits these; both subsequent requests must
+		// preserve their namespace while stripping message/result metadata.
+		var err error
+		patchCall, err = sjson.Set(patchCall, "namespace", "functions")
+		require.NoError(t, err)
+		checkCall, err = sjson.Set(checkCall, "namespace", "functions")
+		require.NoError(t, err)
+	}
+	checkNativeInput := strings.HasPrefix(pointer, "input_ids/") || strings.HasPrefix(pointer, "input_namespace/")
 	var mu sync.Mutex
 	var providerBodies [][]byte
 	var providerHeaders []http.Header
@@ -718,6 +840,9 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 				!strings.Contains(string(body), "fixture-opaque-A") &&
 				!strings.Contains(string(body), "resp_rebuild_A") && !strings.Contains(string(body), "conv_rebuild_A") &&
 				httpRebuildToolPair(body, "apply_patch", httpRebuildPatch)
+			if checkNativeInput {
+				valid = httpRebuildNativeInputWire(t, body, pointer, n) && valid
+			}
 			if pointer == "input_metadata" {
 				valid = valid && strings.Contains(readable, "Continue using the completed tool results.")
 				if accountType == service.AccountTypeOAuth {
@@ -877,6 +1002,9 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 				webSearch["external_web_access"] = pointer == "web_search_true"
 			}
 			body["tools"] = append(httpRebuildToolDefinitions(), webSearch)
+		}
+		if previous.Exists() && checkNativeInput {
+			history = httpRebuildNativeInputHistory(t, history, pointer)
 		}
 		if previous.Exists() && pointer == "reasoning_display" {
 			reasoning := httpRebuildJSON(map[string]any{
@@ -1140,6 +1268,9 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 	status, answer = request(history, second)
 	require.Equal(t, http.StatusOK, status, "automatic next tool turn must finish: %s", answer)
 	final := issue758CompletedResponse(t, answer, stream)
+	if checkNativeInput {
+		require.Equal(t, "coding-task-complete: Sum(2,3)=5; patch and verification each executed once", final.Get("output.0.content.0.text").String())
+	}
 	if pointer == "reasoning_display" {
 		httpRebuildReasoningDisplayOutput(t, final)
 		assert.Equal(t, "coding-task-complete: Sum(2,3)=5; patch and verification each executed once", final.Get("output.0.content.0.text").String(), "legitimate final assistant answer must remain intact")

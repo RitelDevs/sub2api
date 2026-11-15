@@ -179,9 +179,11 @@ func TestModelBillingGenericTokenAndSearchCharges(t *testing.T) {
 	svc := &GatewayService{billingService: NewBillingService(&config.Config{}, nil)}
 	result := &ForwardResult{Model: "claude-sonnet-4-5", Usage: ClaudeUsage{InputTokens: 1000, OutputTokens: 100}, SearchCount: 2}
 	key := &APIKey{ID: 1}
-	base := svc.calculateRecordUsageCost(t.Context(), result, key, result.Model, .2, .2, time.Time{})
+	base, pricingErr1 := svc.calculateRecordUsageCost(t.Context(), result, key, result.Model, .2, .2, time.Time{})
+	require.NoError(t, pricingErr1)
 	svc.settingService = modelBillingSettings(t, cfg)
-	cost := svc.calculateRecordUsageCost(t.Context(), result, key, result.Model, .2, .2, time.Time{})
+	cost, pricingErr2 := svc.calculateRecordUsageCost(t.Context(), result, key, result.Model, .2, .2, time.Time{})
+	require.NoError(t, pricingErr2)
 	search := svc.billingService.CalculateSearchCost(2, nil, .2)
 	require.InDelta(t, (base.ActualCost-search.ActualCost)*10+search.ActualCost, cost.ActualCost, 1e-12)
 	require.InDelta(t, base.TotalCost, cost.TotalCost, 1e-12)

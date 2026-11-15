@@ -119,6 +119,18 @@ func (h *OpenAIGatewayHandler) runDeepSeekRecovery(c *gin.Context, in deepSeekRe
 			continue
 		}
 		account = fresh
+		if err := h.gatewayService.CheckDeepSeekTokenRequestPricing(child.Request.Context(), in.apiKey, account,
+			in.model, in.forwardModel, clientRequestedUsageFields(child, in.mapping, in.model, ""), in.pricingAt); err != nil {
+			if release != nil {
+				release()
+			}
+			if in.protocol == "messages" {
+				h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "model_pricing_unavailable", "Model pricing is unavailable", c.Writer.Written())
+			} else {
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "model_pricing_unavailable", "Model pricing is unavailable", c.Writer.Written())
+			}
+			return
+		}
 		attempts++
 		requesttiming.BeginOperationAttempt(c.Request.Context(), attempts)
 		attemptCtx, attempt := service.NewDeepSeekRecoveryAttempt(child.Request.Context())

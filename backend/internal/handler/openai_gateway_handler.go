@@ -1268,6 +1268,17 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			return
 		}
 
+		if !imageIntent {
+			if err := h.gatewayService.CheckDeepSeekTokenRequestPricing(c.Request.Context(), apiKey, account,
+				reqModel, forwardModel, clientRequestedUsageFields(c, channelMapping, reqModel, ""), pricingAt); err != nil {
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				h.handleStreamingAwareErrorWithCode(c, http.StatusServiceUnavailable, "api_error", "model_pricing_unavailable", "Model pricing is unavailable", streamStarted, false)
+				return
+			}
+		}
+
 		// Omission is only allowed before this request has attempted any forward.
 		upstreamAttempted = true
 		// Forward request
@@ -1974,6 +1985,21 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		defaultMappedModel := strings.TrimSpace(effectiveMappedModel)
 		// 应用渠道模型映射到请求体
 		forwardBody := mappedBodyForMessages(channelMappingMsg.Mapped, channelMappingMsg.MappedModel)
+		pricingForwardModel := routingModel
+		if effectiveMappedModel != "" {
+			pricingForwardModel = effectiveMappedModel
+		}
+		if channelMappingMsg.Mapped {
+			pricingForwardModel = channelMappingMsg.MappedModel
+		}
+		if err := h.gatewayService.CheckDeepSeekTokenRequestPricing(c.Request.Context(), apiKey, account,
+			reqModel, pricingForwardModel, clientRequestedUsageFields(c, channelMappingMsg, reqModel, ""), pricingAt); err != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "model_pricing_unavailable", "Model pricing is unavailable", streamStarted)
+			return
+		}
 		writerSizeBeforeForward := c.Writer.Size()
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {

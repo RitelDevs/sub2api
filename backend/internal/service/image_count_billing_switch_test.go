@@ -45,10 +45,12 @@ func TestCalculateRecordUsageCost_ImageCountBillingGroupTokenPricing(t *testing.
 	apiKey := &APIKey{ID: 1, GroupID: &groupID, Group: group}
 	svc := &GatewayService{billingService: resolver.billingService, resolver: resolver}
 
-	cost := svc.calculateRecordUsageCost(context.Background(), &ForwardResult{
+	cost, pricingErr1 := svc.calculateRecordUsageCost(context.Background(), &ForwardResult{
 		Model: model, ImageCount: 2, ImageSize: "1K", ImageEndpoint: true,
 		Usage: ClaudeUsage{InputTokens: 1000, OutputTokens: 1000},
 	}, apiKey, model, 1, 1, time.Time{})
+
+	require.NoError(t, pricingErr1)
 
 	require.NotNil(t, cost)
 	require.InDelta(t, 0.018, cost.TotalCost, 1e-12, "显式分组 token 价不得被按张开关覆盖")
@@ -72,10 +74,12 @@ func TestCalculateRecordUsageCost_ImageCountBillingChannelTokenPricing(t *testin
 	apiKey := &APIKey{ID: 2, GroupID: &groupID, Group: group}
 	svc := &GatewayService{billingService: resolver.billingService, resolver: resolver}
 
-	cost := svc.calculateRecordUsageCost(context.Background(), &ForwardResult{
+	cost, pricingErr2 := svc.calculateRecordUsageCost(context.Background(), &ForwardResult{
 		Model: model, ImageCount: 2, ImageSize: "1K", ImageEndpoint: true,
 		Usage: ClaudeUsage{InputTokens: 1_000_000, OutputTokens: 10_000},
 	}, apiKey, model, 1, 1, time.Time{})
+
+	require.NoError(t, pricingErr2)
 
 	require.NotNil(t, cost)
 	expected, err := resolver.billingService.CalculateCostUnified(CostInput{
@@ -106,10 +110,12 @@ func TestCalculateRecordUsageCost_ImageCountBillingIgnoresMixedRequests(t *testi
 	apiKey := &APIKey{ID: 3, GroupID: &groupID, Group: group}
 	svc := &GatewayService{billingService: resolver.billingService, resolver: resolver}
 
-	cost := svc.calculateRecordUsageCost(context.Background(), &ForwardResult{
+	cost, pricingErr3 := svc.calculateRecordUsageCost(context.Background(), &ForwardResult{
 		Model: model, ImageCount: 1, ImageSize: "1K", ImageEndpoint: false,
 		Usage: ClaudeUsage{InputTokens: 1_000_000, OutputTokens: 10_000},
 	}, apiKey, model, 1, 1, time.Time{})
+
+	require.NoError(t, pricingErr3)
 
 	require.NotNil(t, cost)
 	require.Equal(t, string(BillingModeToken), cost.BillingMode)
@@ -220,10 +226,12 @@ func TestCalculateRecordUsageCost_ChannelPerRequestContextTierUsesTokens(t *test
 		apiKey := &APIKey{ID: 5, GroupID: &groupID, Group: group}
 		svc := &GatewayService{billingService: resolver.billingService, resolver: resolver}
 
-		cost := svc.calculateRecordUsageCost(context.Background(), &ForwardResult{
+		cost, pricingErr4 := svc.calculateRecordUsageCost(context.Background(), &ForwardResult{
 			Model: model, ImageCount: 2, ImageSize: "1K", ImageEndpoint: true,
 			Usage: ClaudeUsage{InputTokens: 5000, OutputTokens: 100},
 		}, apiKey, model, 1, 1, time.Time{})
+
+		require.NoError(t, pricingErr4)
 
 		require.NotNil(t, cost)
 		require.InDelta(t, 0.6, cost.TotalCost, 1e-12, "switch=%v: 应按上下文档 0.3 × 2 张结算", switchOn)
@@ -235,7 +243,8 @@ func TestImageCountBillingUsesFallbackWithoutOperatorTokenCard(t *testing.T) {
 	group := &Group{ID: groupID, Platform: PlatformOpenAI, AllowImageGeneration: true, ImageCountBilling: true, ImagePrice1K: f64p(0.4)}
 	key := &APIKey{GroupID: &groupID, Group: group}
 	svc := &GatewayService{billingService: NewBillingService(nil, nil)}
-	cost := svc.calculateRecordUsageCost(context.Background(), &ForwardResult{Model: "gpt-image-2", ImageCount: 3, ImageSize: "1K", ImageEndpoint: true}, key, "gpt-image-2", 1, 1, time.Time{})
+	cost, pricingErr5 := svc.calculateRecordUsageCost(context.Background(), &ForwardResult{Model: "gpt-image-2", ImageCount: 3, ImageSize: "1K", ImageEndpoint: true}, key, "gpt-image-2", 1, 1, time.Time{})
+	require.NoError(t, pricingErr5)
 	require.InDelta(t, 1.2, cost.TotalCost, 1e-12)
 	require.Equal(t, string(BillingModeImage), cost.BillingMode)
 }
@@ -258,10 +267,11 @@ func TestImageCountBillingPreservesExplicitTokenCardsAcrossGateways(t *testing.T
 			}
 			key := &APIKey{GroupID: &groupID, Group: group}
 			claude := &GatewayService{billingService: resolver.billingService, resolver: resolver}
-			cost := claude.calculateRecordUsageCost(context.Background(), &ForwardResult{
+			cost, pricingErr6 := claude.calculateRecordUsageCost(context.Background(), &ForwardResult{
 				Model: model, ImageCount: 3, ImageSize: "1K", ImageEndpoint: imageEndpoint,
 				Usage: ClaudeUsage{InputTokens: 100, OutputTokens: 10},
 			}, key, model, 1, 1, time.Time{})
+			require.NoError(t, pricingErr6)
 			require.Equal(t, string(BillingModeToken), cost.BillingMode)
 			require.InDelta(t, want, cost.TotalCost, 1e-12)
 			openai := &OpenAIGatewayService{billingService: resolver.billingService, resolver: resolver}

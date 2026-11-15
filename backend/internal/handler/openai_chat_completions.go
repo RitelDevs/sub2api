@@ -308,6 +308,14 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		forwardStart := time.Now()
 
 		forwardBody := openAIModelMappedBody(body, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
+		if err := h.gatewayService.CheckDeepSeekTokenRequestPricing(c.Request.Context(), apiKey, account,
+			reqModel, forwardModel, clientRequestedUsageFields(c, channelMapping, reqModel, ""), pricingAt); err != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "model_pricing_unavailable", "Model pricing is unavailable", streamStarted)
+			return
+		}
 		writerSizeBeforeForward := c.Writer.Size()
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {

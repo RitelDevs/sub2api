@@ -203,9 +203,10 @@ type UsageTokens struct {
 
 // CostBreakdown 费用明细
 type CostBreakdown struct {
-	modelBillingMultiplier    float64 // Customer-only model surcharge; zero means 1x.
-	InputCost                 float64 // 文本输入费用（不含图片输入，图片输入单独记入 ImageInputCost）
-	ImageInputCost            float64 // 图片输入 token 费用（如 gpt-image-2 图片编辑）
+	customerCacheCosts        []CustomerCacheCostDetail // Display-only evidence from this exact calculation.
+	modelBillingMultiplier    float64                   // Customer-only model surcharge; zero means 1x.
+	InputCost                 float64                   // 文本输入费用（不含图片输入，图片输入单独记入 ImageInputCost）
+	ImageInputCost            float64                   // 图片输入 token 费用（如 gpt-image-2 图片编辑）
 	OutputCost                float64
 	ImageOutputCost           float64
 	CacheCreationCost         float64
@@ -228,6 +229,9 @@ func applyCostBreakdownMultiplier(cost *CostBreakdown, multiplier float64) {
 	cost.CacheReadCost *= multiplier
 	cost.TotalCost *= multiplier
 	cost.ActualCost *= multiplier
+	for i := range cost.customerCacheCosts {
+		cost.customerCacheCosts[i].UnitPrice *= multiplier
+	}
 }
 
 func isClaudeFable51Model(model string) bool {
@@ -1869,6 +1873,7 @@ func (s *BillingService) computeTokenBreakdown(
 		bd.CacheCreationCost + bd.CacheReadCost
 	bd.ActualCost = bd.TotalCost * rateMultiplier
 	bd.LongContextBillingApplied = baselineCost != nil && bd.ActualCost > baselineCost.ActualCost
+	bd.customerCacheCosts = resolvedCustomerCacheCosts(cacheCreationPricing, tokens, cacheCreationPrice, cacheCreationMultiplier, cacheReadPrice, tierMultiplier)
 
 	return bd
 }

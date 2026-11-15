@@ -279,6 +279,9 @@ func (h *OpenAIGatewayHandler) alphaSearch(c *gin.Context, bridge *deepSeekTools
 			transformAccount = account
 			return h.gatewayService.ForwardAlphaSearch(rpmAdmission.forwardContext(asPricingCtx, account), c, account, forwardBody)
 		}()
+		if service.IsUpstreamModerationDenied(err) {
+			return
+		}
 		if h.handleOpenAIRPMForwardError(c, err, streamStarted, false) {
 			return
 		}

@@ -109,6 +109,7 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			sqlmock.AnyArg(), // free_fast_applied
 			sqlmock.AnyArg(), // queue_timing
 			sql.NullString{}, // platform
+			nil,              // customer_cost_details
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(99), createdAt))
 
@@ -210,6 +211,7 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 			sqlmock.AnyArg(), // free_fast_applied
 			sqlmock.AnyArg(), // queue_timing
 			sql.NullString{}, // platform
+			nil,              // customer_cost_details
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(100), createdAt))
 
@@ -939,6 +941,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullBool{},   // free_fast_applied: historical unknown
 			sql.NullString{}, // queue_timing
 			sql.NullString{}, // platform
+			sql.NullString{}, // customer_cost_details
 		}})
 		require.NoError(t, err)
 		require.Equal(t, 2, log.ImageCount)
@@ -1025,6 +1028,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullBool{},   // free_fast_applied: historical unknown
 			sql.NullString{}, // queue_timing
 			sql.NullString{}, // platform
+			sql.NullString{}, // customer_cost_details
 		}})
 		require.NoError(t, err)
 		require.NotNil(t, log.ServiceTier)
@@ -1094,6 +1098,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullBool{},   // free_fast_applied: historical unknown
 			sql.NullString{}, // queue_timing
 			sql.NullString{}, // platform
+			sql.NullString{}, // customer_cost_details
 		}})
 		require.NoError(t, err)
 		require.NotNil(t, log.ServiceTier)
@@ -1102,6 +1107,8 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 		require.True(t, log.Stream)
 		require.False(t, log.OpenAIWSMode)
 		require.True(t, log.NativeCompactionV2)
+		require.Nil(t, log.FreeFastApplied)
+		require.Nil(t, log.CustomerCostDetails)
 	})
 
 	t.Run("service_tier_is_scanned", func(t *testing.T) {
@@ -1124,7 +1131,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			0, 0.0, // image_input_tokens, image_input_cost
 			0.1, 0.2, 0.3, 0.4, 1.0, 0.9,
 			1.0,
-			sql.NullFloat64{},
+			sql.NullFloat64{Valid: true, Float64: 0.25},
 			int16(service.BillingTypeBalance),
 			int16(service.RequestTypeSync),
 			false,
@@ -1150,26 +1157,39 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},
 			false,
 			false,
-			sql.NullInt64{},   // channel_id
-			sql.NullString{},  // model_mapping_chain
-			sql.NullString{},  // billing_tier
-			sql.NullString{},  // billing_mode
-			sql.NullFloat64{}, // account_stats_cost
-			sql.NullString{},  // upstream_request_id
-			sql.NullString{},  // session_id
-			false,             // native_compaction_v2
-			0,                 // cache_creation_30m_tokens
-			0,                 // cache_creation_12h_tokens
+			sql.NullInt64{},  // channel_id
+			sql.NullString{}, // model_mapping_chain
+			sql.NullString{}, // billing_tier
+			sql.NullString{}, // billing_mode
+			sql.NullFloat64{Valid: true, Float64: 0.7}, // account_stats_cost
+			sql.NullString{}, // upstream_request_id
+			sql.NullString{}, // session_id
+			false,            // native_compaction_v2
+			0,                // cache_creation_30m_tokens
+			0,                // cache_creation_12h_tokens
 			now,
 			sql.NullBool{Valid: true, Bool: true}, // free_fast_applied
 			sql.NullString{},                      // queue_timing
 			sql.NullString{},                      // platform
+			sql.NullString{Valid: true, String: `{"version":1,"free_fast":true,"input_cost":0.05,"output_cost":0.1,"cache_creation_cost":0.15,"cache_read_cost":0.2,"total_cost":0.5,"actual_cost":0.45,"multiplier":0.9}`}, // customer_cost_details
 		}})
 		require.NoError(t, err)
 		require.NotNil(t, log.ServiceTier)
 		require.Equal(t, "priority", *log.ServiceTier)
 		require.NotNil(t, log.FreeFastApplied)
 		require.True(t, *log.FreeFastApplied)
+		require.Equal(t, &service.CustomerCostDetails{
+			Version: 1, FreeFast: true, InputCost: 0.05, OutputCost: 0.1,
+			CacheCreationCost: 0.15, CacheReadCost: 0.2,
+			TotalCost: 0.5, ActualCost: 0.45, Multiplier: 0.9,
+		}, log.CustomerCostDetails)
+		// Display evidence must not replace the native fee or account-cost columns.
+		require.Equal(t, 1.0, log.TotalCost)
+		require.Equal(t, 0.9, log.ActualCost)
+		require.NotNil(t, log.AccountStatsCost)
+		require.Equal(t, 0.7, *log.AccountStatsCost)
+		require.NotNil(t, log.AccountRateMultiplier)
+		require.Equal(t, 0.25, *log.AccountRateMultiplier)
 	})
 
 }

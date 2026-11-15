@@ -13,6 +13,7 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
+	"github.com/Wei-Shaw/sub2api/internal/coupon"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/payment/provider"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -59,6 +60,11 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if req.PaymentType == "squarespace" && !cfg.BalanceRetailPricingEnabled {
 		return nil, infraerrors.Forbidden("RETAIL_PRICING_DISABLED", "Squarespace requires a signed uniform retail quote")
 	}
+	// A signed retail quote does not bind a coupon or its benefits. Keep its
+	// frozen cash and credit amounts intact instead of entering coupon reservation.
+	if req.CouponID != 0 && (req.CouponID < 0 || req.OrderType != payment.OrderTypeBalance || cfg.BalanceRetailPricingEnabled) {
+		return nil, coupon.ErrInvalid
+	}
 	plan, err := s.validateOrderInput(ctx, req, cfg)
 	if err != nil {
 		return nil, err
@@ -102,6 +108,20 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 		limitAmount = quote.PayBase
 		bonusAmount = quote.Bonus
 		orderAmount = quote.Credited
+	}
+	if req.CouponID != 0 {
+		c, e := coupon.ReadOwned(ctx, s.entClient, req.CouponID, req.UserID, false)
+		if e != nil {
+			return nil, e
+		}
+		q, e := couponRechargeQuote(c, cfg, req.Amount, methodCurrency)
+		if e != nil {
+			return nil, e
+		}
+		req.couponQuote = q
+		limitAmount = q.PayBase
+		bonusAmount = q.BonusAmount
+		orderAmount = q.Credited
 	}
 	payAmountStr, payAmount, err := calculateCreateOrderPayAmountForOrderType(limitAmount, feeRate, methodCurrency, req.OrderType, cfg.SubscriptionUSDToCNYRate)
 	if err != nil {
@@ -150,6 +170,9 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 			return nil, err
 		}
 	}
+	if req.CouponID > 0 && selectedCurrency != req.couponQuote.Currency {
+		return nil, coupon.ErrInvalid
+	}
 	if err := validateSelectedCreateOrderAmountCurrency(payAmountStr, sel); err != nil {
 		return nil, err
 	}
@@ -166,6 +189,12 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	}
 	resp, err := s.invokeProvider(ctx, order, req, cfg, limitAmount, payAmountStr, payAmount, plan, sel)
 	if err != nil {
+		if req.CouponID > 0 {
+			if releaseErr := s.releaseFailedOrderCoupon(ctx, order.ID); releaseErr != nil {
+				return nil, releaseErr
+			}
+			return nil, err
+		}
 		_, _ = s.entClient.PaymentOrder.UpdateOneID(order.ID).
 			SetStatus(OrderStatusFailed).
 			Save(ctx)
@@ -256,6 +285,18 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 			exp = miniExpiry
 		}
 	}
+	if req.CouponID > 0 {
+		if providerSnapshot == nil {
+			providerSnapshot = map[string]any{}
+		}
+		providerSnapshot["recharge_coupon_id"] = req.CouponID
+		providerSnapshot["currency"] = req.couponQuote.Currency
+		providerSnapshot["coupon_name"] = req.couponQuote.Name
+		providerSnapshot["coupon_discount"] = req.couponQuote.DiscountAmount
+		providerSnapshot["coupon_bonus"] = req.couponQuote.CouponBonus
+		providerSnapshot["coupon_multiplier"] = cfg.BalanceRechargeMultiplier
+	}
+
 	selectedInstanceID := ""
 	selectedProviderKey := ""
 	if sel != nil {
@@ -301,6 +342,9 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 	order, err := b.Save(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("create order: %w", err)
+	}
+	if err := s.reserveOrderCoupon(ctx, tx, req, order, cfg); err != nil {
+		return nil, err
 	}
 	code := fmt.Sprintf("PAY-%d-%d", order.ID, time.Now().UnixNano()%100000)
 	order, err = tx.PaymentOrder.UpdateOneID(order.ID).SetRechargeCode(code).Save(ctx)
@@ -948,6 +992,9 @@ func buildWeChatPaymentOAuthStartURL(req CreateOrderRequest, scope string) (stri
 	q.Set("payment_type", strings.TrimSpace(req.PaymentType))
 	if req.Amount > 0 {
 		q.Set("amount", strconv.FormatFloat(req.Amount, 'f', -1, 64))
+		if req.CouponID > 0 {
+			q.Set("coupon_id", strconv.FormatInt(req.CouponID, 10))
+		}
 	}
 	if orderType := strings.TrimSpace(req.OrderType); orderType != "" {
 		q.Set("order_type", orderType)

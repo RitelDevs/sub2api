@@ -225,6 +225,7 @@ func (h *PaymentHandler) GetLimits(c *gin.Context) {
 // CreateOrderRequest is the request body for creating a payment order.
 type CreateOrderRequest struct {
 	QuoteToken        string  `json:"quote_token"`
+	CouponID          int64   `json:"coupon_id,omitempty"`
 	PaymentSubtype    string  `json:"payment_subtype,omitempty"`
 	Amount            float64 `json:"amount"`
 	PaymentType       string  `json:"payment_type" binding:"required"`
@@ -295,6 +296,7 @@ func (h *PaymentHandler) CreateOrder(c *gin.Context) {
 	}
 	result, err := h.paymentService.CreateOrder(c.Request.Context(), service.CreateOrderRequest{
 		QuoteToken:      req.QuoteToken,
+		CouponID:        req.CouponID,
 		UserID:          subject.UserID,
 		Amount:          req.Amount,
 		PaymentType:     req.PaymentType,
@@ -338,6 +340,10 @@ func applyWeChatPaymentResumeClaims(req *CreateOrderRequest, claims *service.WeC
 			return infraerrors.BadRequest("INVALID_WECHAT_PAYMENT_RESUME_TOKEN", "wechat payment resume token payment type mismatch")
 		}
 	}
+	if claims.CouponID < 0 || (req.CouponID != 0 && req.CouponID != claims.CouponID) {
+		return infraerrors.BadRequest("INVALID_WECHAT_PAYMENT_RESUME_TOKEN", "coupon selection does not match signed payment context")
+	}
+	req.CouponID = claims.CouponID
 	req.PaymentType = paymentType
 	req.OpenID = openid
 
@@ -679,34 +685,35 @@ func isMobile(c *gin.Context) bool {
 }
 
 type PaymentOrderResult struct {
-	RefundReconciliationPending bool                 `json:"refund_reconciliation_pending"`
-	ID                          int64                `json:"id"`
-	UserID                      int64                `json:"user_id"`
-	Amount                      float64              `json:"amount"`
-	PayAmount                   float64              `json:"pay_amount"`
-	RetailQuote                 *service.RetailQuote `json:"retail_quote,omitempty"`
-	PaymentClaimMode            string               `json:"payment_claim_mode,omitempty"`
-	PayURL                      string               `json:"pay_url,omitempty"`
-	FeeRate                     float64              `json:"fee_rate"`
-	BonusAmount                 float64              `json:"bonus_amount"`
-	Currency                    string               `json:"currency"`
-	PaymentType                 string               `json:"payment_type"`
-	OutTradeNo                  string               `json:"out_trade_no"`
-	Status                      string               `json:"status"`
-	OrderType                   string               `json:"order_type"`
-	CreatedAt                   time.Time            `json:"created_at"`
-	ExpiresAt                   time.Time            `json:"expires_at"`
-	PaidAt                      *time.Time           `json:"paid_at,omitempty"`
-	CompletedAt                 *time.Time           `json:"completed_at,omitempty"`
-	RefundAmount                float64              `json:"refund_amount"`
-	RefundReason                *string              `json:"refund_reason,omitempty"`
-	RefundRequestedAt           *time.Time           `json:"refund_requested_at,omitempty"`
-	RefundRequestedBy           *string              `json:"refund_requested_by,omitempty"`
-	RefundRequestReason         *string              `json:"refund_request_reason,omitempty"`
-	PlanID                      *int64               `json:"plan_id,omitempty"`
-	ProviderInstanceID          *string              `json:"provider_instance_id,omitempty"`
-	RenewalMode                 string               `json:"renewal_mode,omitempty"`
-	PaymentSubtype              string               `json:"payment_subtype,omitempty"`
+	RefundReconciliationPending bool                          `json:"refund_reconciliation_pending"`
+	ID                          int64                         `json:"id"`
+	UserID                      int64                         `json:"user_id"`
+	Amount                      float64                       `json:"amount"`
+	PayAmount                   float64                       `json:"pay_amount"`
+	RetailQuote                 *service.RetailQuote          `json:"retail_quote,omitempty"`
+	PaymentClaimMode            string                        `json:"payment_claim_mode,omitempty"`
+	PayURL                      string                        `json:"pay_url,omitempty"`
+	FeeRate                     float64                       `json:"fee_rate"`
+	BonusAmount                 float64                       `json:"bonus_amount"`
+	Currency                    string                        `json:"currency"`
+	PaymentType                 string                        `json:"payment_type"`
+	OutTradeNo                  string                        `json:"out_trade_no"`
+	Status                      string                        `json:"status"`
+	OrderType                   string                        `json:"order_type"`
+	CreatedAt                   time.Time                     `json:"created_at"`
+	ExpiresAt                   time.Time                     `json:"expires_at"`
+	PaidAt                      *time.Time                    `json:"paid_at,omitempty"`
+	CompletedAt                 *time.Time                    `json:"completed_at,omitempty"`
+	RefundAmount                float64                       `json:"refund_amount"`
+	RefundReason                *string                       `json:"refund_reason,omitempty"`
+	RefundRequestedAt           *time.Time                    `json:"refund_requested_at,omitempty"`
+	RefundRequestedBy           *string                       `json:"refund_requested_by,omitempty"`
+	RefundRequestReason         *string                       `json:"refund_request_reason,omitempty"`
+	PlanID                      *int64                        `json:"plan_id,omitempty"`
+	ProviderInstanceID          *string                       `json:"provider_instance_id,omitempty"`
+	RenewalMode                 string                        `json:"renewal_mode,omitempty"`
+	PaymentSubtype              string                        `json:"payment_subtype,omitempty"`
+	Coupon                      *service.PaymentCouponSummary `json:"coupon,omitempty"`
 }
 
 func sanitizePaymentOrdersForResponse(orders []*dbent.PaymentOrder) []PaymentOrderResult {
@@ -752,6 +759,7 @@ func sanitizePaymentOrderForResponse(order *dbent.PaymentOrder) *PaymentOrderRes
 		RenewalMode:                 order.SubscriptionRenewalMode,
 		ProviderInstanceID:          order.ProviderInstanceID,
 		PaymentSubtype:              service.PaymentOrderSubtype(order),
+		Coupon:                      service.PaymentOrderCoupon(order),
 	}
 }
 

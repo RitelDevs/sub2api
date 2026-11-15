@@ -1,4 +1,10 @@
 export default {
+  "checkAuthorization": "檢查授權狀態",
+  "authorizationChecking": "正在確認帳戶是否已保存…",
+  "authorizationUnconfirmed": "尚未確認本次授權是否保存。請稍後檢查狀態，不要重複提交同一個回調。若仍無法確認，請重新生成授權鏈接。",
+  "authorizationSaved": "授權憑據已保存。模型是否可用請另行查看模型列表。",
+  "authorizationWaiting": "等待登入和回調提交。",
+
   "refreshUncertain": "刷新未能安全完成，推理已暫停。可用連接可恢復已保存的替換憑據；已停用連接須重新授權或解綁。不會重試舊 refresh token。",
   "recoverRefresh": "恢復已保存的刷新",
   "bpsResponsesOnly": "BPS 連接僅支持 Responses，暫不提供 Chat Completions 和 Messages 橋接。",

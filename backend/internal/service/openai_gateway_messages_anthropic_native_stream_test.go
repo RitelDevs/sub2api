@@ -149,7 +149,11 @@ func TestNativeAnthropicStreamMissingTerminalMarksCurrentAccountAndPreservesUsag
 			require.ErrorContains(t, err, "missing terminal event")
 			var failover *UpstreamFailoverError
 			require.False(t, errors.As(err, &failover), "already written streams must not be replayed")
-			require.Equal(t, payload, rec.Body.String())
+			expected := payload
+			if suffix == "event: message_stop\n" {
+				expected = strings.TrimSuffix(payload, suffix)
+			}
+			require.Equal(t, expected, rec.Body.String(), "incomplete events must not be exposed")
 			require.NotContains(t, rec.Body.String(), `"type":"message_stop"`)
 			require.Equal(t, http.StatusOK, rec.Code)
 			require.Equal(t, 15, result.Usage.InputTokens)
@@ -386,4 +390,31 @@ func TestNativeAnthropicStreamUnvalidatedTimeoutCanFailover(t *testing.T) {
 	require.False(t, c.Writer.Written())
 	require.Empty(t, rec.Body.String())
 	require.Equal(t, "stream_timeout", nativeStreamFixEvents(t, c)[0].Reason)
+}
+
+func TestNativeAnthropicStreamIncompleteToolEventIsNotExposed(t *testing.T) {
+	start := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10}}}\n\n"
+	partialTool := "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tool_synthetic\",\"name\":\"apply_patch\",\"input\":{}}}\n"
+	for _, started := range []bool{false, true} {
+		t.Run(map[bool]string{false: "first_event", true: "after_message_start"}[started], func(t *testing.T) {
+			c, rec, account, body := nativeStreamFixContext(t)
+			prefix := ""
+			if started {
+				prefix = start
+			}
+			svc := nativeStreamFixService("text/event-stream", prefix+partialTool)
+			result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
+			require.Error(t, err)
+			var failover *UpstreamFailoverError
+			require.Equal(t, !started, errors.As(err, &failover))
+			require.Equal(t, started, c.Writer.Written())
+			require.Equal(t, prefix, rec.Body.String())
+			require.NotContains(t, rec.Body.String(), "tool_use")
+			if started {
+				require.Equal(t, 10, result.Usage.InputTokens)
+			} else {
+				require.Empty(t, rec.Header().Get("Content-Type"))
+			}
+		})
+	}
 }

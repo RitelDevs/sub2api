@@ -98,6 +98,7 @@
               />
               <StripeSubtypeSelector v-if="selectedMethod === 'stripe' && Object.keys(stripeSubMethods).length" v-model="selectedSubtype" :methods="stripeSubMethods" />
             </div>
+            <RechargeCouponPicker v-if="!retailPricingEnabled" :amount="validAmount" :method="selectedMethod" :currency="selectedCurrency" :disabled="submitting" :initial-id="Number(route.query.coupon) || undefined" @change="onCouponChange" />
             <div v-if="retailPricingEnabled && validAmount > 0" class="open-section purchase-summary space-y-4">
               <p v-if="quoteLoading" class="text-sm text-gray-500">{{ t('paymentRetail.loading') }}</p>
               <template v-else-if="retailQuote">
@@ -112,14 +113,14 @@
               <p v-else-if="quoteFailed" class="text-sm text-amber-600">{{ t('paymentRetail.unavailable') }}</p>
               <button v-if="quoteExpired || quoteFailed" data-test="refresh-retail-quote" class="btn btn-secondary" :disabled="quoteLoading" @click="refreshRetailQuote">{{ t('paymentRetail.refresh') }}</button>
             </div>
-            <div v-else-if="validAmount > 0" class="open-section purchase-summary">
+            <div v-else-if="validAmount > 0 && (!selectedCouponId || couponQuote)" class="open-section purchase-summary">
               <div class="space-y-2 text-sm">
                 <div class="flex justify-between">
                   <span class="text-gray-500 dark:text-gray-400">{{ t('payment.paymentAmount') }}</span>
                   <span :class="discountAmount > 0 ? 'text-gray-400 line-through dark:text-gray-500' : 'text-gray-900 dark:text-white'">{{ formatSelectedPaymentAmount(validAmount) }}</span>
                 </div>
                 <div v-if="discountAmount > 0" class="flex justify-between" data-testid="recharge-discount-row">
-                  <span class="text-gray-500 dark:text-gray-400">{{ t('payment.rechargeBonus.discountLabelWithPercent', { percent: formatRechargeBonusNumber(bonusQuote.percent) }) }}</span>
+                  <span class="text-gray-500 dark:text-gray-400">{{ selectedCouponId ? t('coupon.discount') : t('payment.rechargeBonus.discountLabelWithPercent', { percent: formatRechargeBonusNumber(bonusQuote.percent) }) }}</span>
                   <span class="font-medium text-red-600 dark:text-red-400">-{{ formatSelectedPaymentAmount(discountAmount) }}</span>
                 </div>
                 <div v-if="hasFee" class="flex justify-between">
@@ -374,6 +375,8 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import BillingNavigation from '@/components/user/BillingNavigation.vue'
 import LotteryRechargeNotice from '@/components/lottery/LotteryRechargeNotice.vue'
+import RechargeCouponPicker from '@/components/payment/RechargeCouponPicker.vue'
+import type { CouponQuote } from '@/api/coupons'
 import AmountInput from '@/components/payment/AmountInput.vue'
 import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
 import StripeSubtypeSelector from '@/components/payment/StripeSubtypeSelector.vue'
@@ -861,11 +864,14 @@ const bonusQuote = computed(() => quoteRechargeBonus(rechargeBonusTiers.value, v
   mode: rechargeBonusMode.value,
   currencyDigits: currencyFractionDigits(selectedCurrency.value),
 }))
-const payBaseAmount = computed(() => bonusQuote.value.payBase)
+const selectedCouponId = ref(0), couponPending = ref(false), couponQuote = ref<CouponQuote | null>(null)
+function onCouponChange(id: number, quote: CouponQuote | null, pending: boolean) { selectedCouponId.value=id;couponQuote.value=quote;couponPending.value=pending }
+watch(retailPricingEnabled, enabled => { if (enabled) onCouponChange(0, null, false) })
+const payBaseAmount = computed(() => couponQuote.value?.pay_base ?? bonusQuote.value.payBase)
 const discountAmount = computed(() => roundPaymentAmount(validAmount.value - payBaseAmount.value, selectedCurrency.value))
-const creditedAmount = computed(() => bonusQuote.value.credited)
-const showBonusRow = computed(() => bonusQuote.value.mode !== 'discount' && bonusQuote.value.bonus > 0)
-const showCreditedBalance = computed(() => balanceRechargeMultiplier.value !== 1 || bonusQuote.value.percent > 0)
+const creditedAmount = computed(() => couponQuote.value?.credited ?? bonusQuote.value.credited)
+const showBonusRow = computed(() => !selectedCouponId.value && bonusQuote.value.mode !== 'discount' && bonusQuote.value.bonus > 0)
+const showCreditedBalance = computed(() => !!selectedCouponId.value || balanceRechargeMultiplier.value !== 1 || bonusQuote.value.percent > 0)
 
 const methodOptions = computed<PaymentMethodOption[]>(() =>
   enabledMethods.value.map((type) => {
@@ -934,7 +940,7 @@ const stripeSubtypeReady = computed(() => selectedMethod.value !== 'stripe'
 const canSubmit = computed(() => retailPricingEnabled.value
   ? !!retailQuote.value && quoteConfirmed.value && !quoteExpired.value && !quoteLoading.value && !amountError.value
     && amountFitsMethod(retailQuote.value.pay_amount, selectedMethod.value) && selectedLimit.value?.available !== false
-  : validAmount.value > 0
+  : (!selectedCouponId.value || (!couponPending.value && couponQuote.value !== null)) && validAmount.value > 0
     && hasPaymentAmountPrecision(validAmount.value, selectedCurrency.value)
     && stripeSubtypeReady.value
     && amountFitsMethod(payBaseAmount.value, selectedMethod.value)
@@ -1164,6 +1170,7 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       forceQRCode: !!(checkout.value.alipay_force_qrcode && normalizeVisibleMethod(requestType) === 'alipay'),
       mobilePrecreateDeepLink: checkout.value.alipay_mobile_precreate_deep_link === true,
     })
+    if (orderType === 'balance' && !retailPricingEnabled.value && selectedCouponId.value) payload.coupon_id = selectedCouponId.value
     if (options.openid) {
       payload.openid = options.openid
     }
@@ -1404,6 +1411,7 @@ async function attemptMobileQrFallback(err: unknown, context: MobileQrFallbackCo
       isMobile: false,
       isWechatBrowser: false,
     })
+    if (context.orderType === 'balance' && selectedCouponId.value) payload.coupon_id = selectedCouponId.value
     const result = await paymentStore.createOrder(payload) as CreateOrderResult & { resume_token?: string }
     const stripeMethod = visibleMethod === 'wxpay' ? 'wechat_pay' : 'alipay'
     const stripeRouteUrl = result.client_secret

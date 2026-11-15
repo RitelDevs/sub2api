@@ -176,6 +176,7 @@ export function provideConsoleNav() {
         { path: '/admin/lottery', label: t('lottery.adminTitle'), icon: GiftIcon, hideInSimpleMode: true },
         { path: '/admin/auto-config', label: t('autoConfig.title'), icon: AccountOpsIcon },
         { path: '/admin/priority-scheduling', label: t('priorityScheduling.title'), icon: AccountOpsIcon },
+        { path: '/admin/qqbot/overview', label: t('qqbot.title'), icon: AccountOpsIcon, featureFlag: () => authStore.isAdmin },
         { path: '/admin/channel-operations', label: t('channelOps.title'), icon: ChannelIcon },
         { path: '/admin/profit-operations', label: t('profitOps.title'), icon: PriceTagIcon },
         { path: '/admin/account-quality', label: t('qualityOps.title'), icon: QualityOpsIcon },

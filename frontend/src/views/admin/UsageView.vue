@@ -107,7 +107,13 @@
             :filters="breakdownFilters"
             :enable-breakdown="!props.observerMode && !filters.platform"
           />
-          <TokenUsageTrend :trend-data="trendData" :loading="chartsLoading" />
+          <TokenUsageTrend
+            :trend-data="trendData"
+            :loading="chartsLoading"
+            show-rate
+            :rate-context="trendRateContext"
+            :notice-user-id="props.observerMode ? undefined : authStore.user?.id"
+          />
         </div>
       </div>
       <div v-if="usagePage === 'records' || activeTab === 'ranking'" class="open-section">
@@ -226,7 +232,7 @@ import ColumnSettings from '@/components/common/ColumnSettings.vue'
 import { formatReasoningEffort } from '@/utils/format'
 import { formatUsageCacheRate, showUsageCacheRate } from '@/utils/usageCacheRate'
 import { resolveUsageRequestType, requestTypeToLegacyStream } from '@/utils/usageRequestType'
-import { resolveUsageStatsWindow, type UsageRateWindow } from '@/utils/usageRate'
+import { resolveUsageStatsWindow, type UsageRateWindow, type UsageTrendRateContext } from '@/utils/usageRate'
 import AppLayout from '@/components/layout/AppLayout.vue'; import InfiniteListSentinel from '@/components/common/InfiniteListSentinel.vue'; import { useInfiniteList } from '@/composables/useInfiniteList'; import Select from '@/components/common/Select.vue'; import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import UsageStatsCards from '@/components/admin/usage/UsageStatsCards.vue'; import UsageFilters from '@/components/admin/usage/UsageFilters.vue'
 import UsageTable from '@/components/admin/usage/UsageTable.vue'; import UsageExportProgress from '@/components/admin/usage/UsageExportProgress.vue'
@@ -260,7 +266,14 @@ const pageCopy = computed(() => consoleUiMessages(locale?.value ?? 'en').adminUs
 const tableToolbarTarget = ref<HTMLElement | null>(null)
 const usageStats = ref<AdminUsageStatsResponse | null>(null); const exporting = ref(false)
 const usageStatsWindow = ref<UsageRateWindow | null>(null)
-const trendData = ref<TrendDataPoint[]>([]); const requestedModelStats = ref<ModelStat[]>([]); const upstreamModelStats = ref<ModelStat[]>([]); const mappingModelStats = ref<ModelStat[]>([]); const groupStats = ref<GroupStat[]>([]); const chartsLoading = ref(false); const modelStatsLoading = ref(false); const granularity = ref<'day' | 'hour'>('hour')
+const trendData = ref<TrendDataPoint[]>([]); const trendRateRequest = ref<Pick<UsageTrendRateContext, 'window' | 'granularity'> | null>(null); const requestedModelStats = ref<ModelStat[]>([]); const upstreamModelStats = ref<ModelStat[]>([]); const mappingModelStats = ref<ModelStat[]>([]); const groupStats = ref<GroupStat[]>([]); const chartsLoading = ref(false); const modelStatsLoading = ref(false); const granularity = ref<'day' | 'hour'>('hour')
+// Bucket labels are in the server zone. Public settings can load after the trend,
+// so read them live; until then the tooltip shows the rates as unknown.
+const trendRateContext = computed<UsageTrendRateContext | null>(() => trendRateRequest.value && {
+  ...trendRateRequest.value,
+  serverTimezone: appStore.cachedPublicSettings?.server_timezone ?? null,
+  serverUTCOffset: appStore.cachedPublicSettings?.server_utc_offset ?? null,
+})
 const modelDistributionMetric = ref<DistributionMetric>('tokens')
 const modelDistributionSource = ref<ModelDistributionSource>('requested')
 const loadedModelSources = reactive<Record<ModelDistributionSource, boolean>>({
@@ -558,10 +571,14 @@ const loadChartData = async () => {
   try {
     const requestType = filters.value.request_type
     const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filters.value.stream
+    const trendStart = filters.value.start_date || startDate.value
+    const trendEnd = filters.value.end_date || endDate.value
+    // Pair the trend with the range, granularity and time it was requested for (tooltip RPM/TPM).
+    const rateRequest = { window: { start: trendStart, end: trendEnd, now: Date.now() }, granularity: granularity.value }
     const snapshot = await (props.observerMode ? observerUsageAPI.getSnapshotV2 : adminAPI.dashboard.getSnapshotV2)({
       ...breakdownFilters.value,
-      start_date: filters.value.start_date || startDate.value,
-      end_date: filters.value.end_date || endDate.value,
+      start_date: trendStart,
+      end_date: trendEnd,
       granularity: granularity.value,
       user_id: filters.value.user_id,
       model: filters.value.model,
@@ -582,6 +599,7 @@ const loadChartData = async () => {
     })
     if (seq !== chartReqSeq) return
     trendData.value = snapshot.trend || []
+    trendRateRequest.value = rateRequest
     groupStats.value = snapshot.groups || []
   } catch (error) {
     if (seq !== chartReqSeq) return

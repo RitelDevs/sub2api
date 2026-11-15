@@ -4,6 +4,7 @@ import { computed, nextTick, reactive } from 'vue'
 import AppSidebar from '../AppSidebar.vue'
 import type { CustomMenuItem } from '@/types'
 import type { ConsoleNavSource } from '@/navigation/useConsoleNavSource'
+import { DEFAULT_SMART_OPS_HIDDEN_MENU_ITEMS } from '@/constants/smartOpsMenu'
 
 const mocks = vi.hoisted(() => ({ getConfig: vi.fn(), fetchAdminSettings: vi.fn(), push: vi.fn() }))
 
@@ -466,5 +467,21 @@ describe('merged lottery navigation', () => {
     appState.cachedPublicSettings.lottery_enabled = false
     await nextTick()
     expect(wrapper!.find('a[href="/lottery"]').exists()).toBe(false)
+  })
+})
+
+describe('merged QQ community navigation', () => {
+  it('hides QQ by default, honors explicit visibility, and keeps it admin-only', async () => {
+    adminState.smartOpsHiddenMenuItems = [...DEFAULT_SMART_OPS_HIDDEN_MENU_ITEMS]
+    mountSidebar()
+    const hasQQ = () => tree('adminNavItems').some(item => item.children?.some(child => child.path === '/admin/qqbot/overview'))
+    expect(hasQQ()).toBe(false)
+    adminState.smartOpsHiddenMenuItems = []
+    await nextTick()
+    expect(hasQQ()).toBe(true)
+    expect(navigation!.sections.value.some(section => section.tabs.some(tab => tab.path === '/admin/qqbot/overview' || tab.children?.some(child => child.path === '/admin/qqbot/overview')))).toBe(true)
+    authState.user = { id: 52, role: 'observer' }
+    await nextTick()
+    expect(hasQQ()).toBe(false)
   })
 })

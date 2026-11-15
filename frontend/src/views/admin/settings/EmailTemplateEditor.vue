@@ -377,7 +377,6 @@ const eventDisplayKeys: Record<string, Record<keyof EventDisplayMeta, string>> =
     "timing": "consoleInline.sentByTheBackgroundJobWhenAn_c2d1cd",
     "categoryLabel": "consoleInline.subscription_38237b"
   },
-  "balance.forecast": { label: "admin.settings.balanceForecast.title", timing: "admin.settings.balanceForecast.description", categoryLabel: "consoleInline.billing_81f94d" },
   "balance.low": {
     "label": "consoleInline.lowBalanceAlert_f322aa",
     "timing": "consoleInline.sentWhenAUserSBalanceDrops_e62b2c",

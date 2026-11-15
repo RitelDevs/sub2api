@@ -356,6 +356,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	// service_tier for upstream accounting, but evaluate ActualCost once more at
 	// the Standard tier using the same channel, peak, and long-context policy.
 	freeFastApplied := false
+	var customerCostDetails *CustomerCostDetails
 	if groupBillsOpenAIFastAtStandard(apiKey, billingAccount, serviceTier) {
 		standardCost, standardErr := s.calculateOpenAIRecordUsageCost(
 			ctx,
@@ -380,6 +381,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		if standardErr == nil && cost != nil && standardCost != nil {
 			cost.ActualCost = standardCost.ActualCost
 			freeFastApplied = true
+			customerCostDetails = newFreeFastCustomerCostDetails(standardCost, multiplier*costModelBillingMultiplier(standardCost))
 		}
 	}
 
@@ -445,6 +447,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		s.excelOAuthReauth.recordConnectionUsage(ctx, account.ID, apiKey.ID, result.AuthConnectionID, requestID)
 	}
 	usageLog := &UsageLog{
+		CustomerCostDetails:      customerCostDetails,
 		Platform:                 account.Platform,
 		UserID:                   user.ID,
 		APIKeyID:                 apiKey.ID,
@@ -495,6 +498,10 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		factor := float64(1 + result.HeaderTimeoutRetries)
 		cost.TotalCost *= factor
 		cost.ActualCost *= factor
+		if customerCostDetails != nil {
+			customerCostDetails.Multiplier *= factor
+			customerCostDetails.ActualCost *= factor
+		}
 	}
 	if cost != nil {
 		usageLog.InputCost = cost.InputCost

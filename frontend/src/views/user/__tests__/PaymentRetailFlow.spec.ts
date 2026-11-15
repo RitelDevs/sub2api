@@ -4,6 +4,7 @@ import PaymentView from '../PaymentView.vue'
 import AmountInput from '@/components/payment/AmountInput.vue'
 import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'
+import RechargeCouponPicker from '@/components/payment/RechargeCouponPicker.vue'
 import type { PaymentQuoteResponse, RetailQuote } from '@/types/payment'
 
 const api = vi.hoisted(() => ({ quote: vi.fn(), checkout: vi.fn(), createOrder: vi.fn(), showError: vi.fn(), showWarning: vi.fn() }))
@@ -85,7 +86,9 @@ describe('server-priced retail checkout', () => {
   })
 
   it('uses server GBP totals and included cost, confirms before creation, and never auto-opens PayLink', async () => {
+    routeState.query = { coupon: '71' }
     const wrapper = await mountPage()
+    expect(wrapper.findComponent(RechargeCouponPicker).exists()).toBe(false)
     wrapper.findComponent(PaymentMethodSelector).vm.$emit('select', 'squarespace')
     await setAmount(wrapper, 10)
     expect(api.quote).toHaveBeenLastCalledWith({ amount: 10, payment_type: 'squarespace', order_type: 'balance' })
@@ -98,6 +101,7 @@ describe('server-priced retail checkout', () => {
     await wrapper.get('[data-test="create-recharge-order"]').trigger('click')
     await flushPromises()
     expect(api.createOrder).toHaveBeenCalledWith(expect.objectContaining({ amount: 10, payment_type: 'squarespace', quote_token: 'quote-1', order_type: 'balance' }))
+    expect(api.createOrder.mock.calls[0]![0]).not.toHaveProperty('coupon_id')
     expect(window.open).not.toHaveBeenCalled()
     expect(wrapper.findComponent(PaymentStatusPanel).props('retailQuote')).toEqual(expect.objectContaining({ credited_amount_usd: 10, pay_amount: 1.40, currency: 'GBP', checkout_reference: 'RYNEX-topup-test' }))
     wrapper.unmount()

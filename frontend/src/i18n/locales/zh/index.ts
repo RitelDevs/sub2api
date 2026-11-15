@@ -2,6 +2,9 @@ import consoleExperience from './consoleExperience'
 import consoleUi from './consoleUi'
 import consoleFields from './consoleFields'
 import consoleInline from './consoleInline'
+import coupon from './coupon'
+import qqbot from './qqbot'
+import matureProviders from './matureProviders'
 import autoCredit from './autoCredit'
 import accountPerformance from './accountPerformance'
 import apiKeyModelPolicy from './apiKeyModelPolicy'
@@ -52,6 +55,9 @@ export default {
   consoleUi,
   consoleFields,
   consoleInline,
+  coupon,
+  ...qqbot,
+  matureProviders,
   apiKeyModelPolicy,
   autoCredit,
  accountPerformance,

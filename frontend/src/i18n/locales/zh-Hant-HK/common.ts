@@ -12,16 +12,16 @@ export default {
     moveColumn: '移動{column}欄',
     columnKeyboard: '使用上下方向鍵移動此欄，Home 及 End 移至首尾。',
 
-    qwenPlatformHint: 'Qwen 使用 OpenAI 兼容接口，按獨立平台統計。已有 OpenAI 賬號和分組不會自動遷移。',
+    qwenPlatformHint: 'Qwen 使用 OpenAI 兼容接口，按獨立平台統計。已有 OpenAI 帳號和分組不會自動遷移。',
     qwenCache: {
       title: 'Qwen 緩存與會話',
-      enable: '開啓官方 Responses 會話緩存',
-      cacheHint: '啓用後使用 Responses 轉發並開啓上游會話緩存；客户端需通過 previous_response_id 續接。緩存寫入可能計費，命中以實際用量為準。關閉後沿用原協議設置。',
+      enable: '開啟官方 Responses 會話緩存',
+      cacheHint: '啟用後使用 Responses 轉發並開啟上游會話緩存；客戶端需通過 previous_response_id 續接。緩存寫入可能計費，命中以實際用量為準。關閉後沿用原協議設置。',
       strict: '嚴格保持會話粘性',
-      strictHint: '需要穩定的 session_id 或 prompt_cache_key。同一會話固定賬號；滿載等待，重試失敗返回錯誤，不切到其他渠道。綁定到期後可重新分配。',
+      strictHint: '需要穩定的 session_id 或 prompt_cache_key。同一會話固定帳號；滿載等待，重試失敗返回錯誤，不切到其他渠道。綁定到期後可重新分配。',
       tokenPlan: '使用 Token Plan 地址',
       payg: '使用官方按量付費地址',
-      endpointHint: '按鈕替換當前接入地址；API Key 必須與套餐地址配套。已有 OpenAI 賬號不會自動遷移。'
+      endpointHint: '按鈕替換當前接入地址；API Key 必須與套餐地址配套。已有 OpenAI 帳號不會自動遷移。'
     },
     loading: '載入中...',
     submitting: '提交中...',
@@ -87,8 +87,8 @@ export default {
     close: '關閉',
     toggleMenu: '切換菜單',
     userMenu: '用戶菜單',
-    userId: '用户 ID',
-    copyUserId: '複製用户 ID：{id}',
+    userId: '用戶 ID',
+    copyUserId: '複製用戶 ID：{id}',
     pageNotFound: '頁面不存在',
     enabled: '已啟用',
     disabled: '已禁用',

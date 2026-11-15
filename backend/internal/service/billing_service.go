@@ -525,6 +525,49 @@ func (s *BillingService) initFallbackPricing() {
 		SupportsCacheBreakdown: false,
 	}
 
+	// Known new model cards mirror the bundled official catalog. Tencent CNY
+	// cards use the catalog fixed 6.7841 CNY/USD rate; see source URLs and
+	// promotion boundaries in resources/model-pricing. Do not infer other SKUs.
+	s.fallbackPrices["gemini-4-carbon"] = &ModelPricing{
+		InputPricePerToken:     2e-06,
+		OutputPricePerToken:    1e-05,
+		CacheReadPricePerToken: 1.0000000000000001e-07,
+	}
+	s.fallbackPrices["gemini-4-hydrogen"] = &ModelPricing{
+		InputPricePerToken:     1.5e-06,
+		OutputPricePerToken:    7.5e-06,
+		CacheReadPricePerToken: 7.5e-08,
+	}
+	s.fallbackPrices["kimi-k3.1-pro"] = &ModelPricing{
+		InputPricePerToken:         2e-06,
+		OutputPricePerToken:        1e-05,
+		CacheReadPricePerToken:     2.0000000000000002e-07,
+		CacheCreationPricePerToken: 2e-6,
+		CacheCreation5mPrice:       2e-6,
+		CacheCreation1hPrice:       4e-6,
+		SupportsCacheBreakdown:     true,
+	}
+	s.fallbackPrices["hy3"] = &ModelPricing{
+		InputPricePerToken:     1.4740348756651584e-07,
+		OutputPricePerToken:    5.896139502660634e-07,
+		CacheReadPricePerToken: 3.685087189162896e-08,
+	}
+	s.fallbackPrices["hy4"] = &ModelPricing{
+		InputPricePerToken:     4.4221046269954743e-07,
+		OutputPricePerToken:    1.3266313880986424e-06,
+		CacheReadPricePerToken: 2.2110523134977372e-08,
+	}
+	s.fallbackPrices["hy4-preview"] = &ModelPricing{
+		InputPricePerToken:     8.844209253990949e-07,
+		OutputPricePerToken:    2.6532627761972847e-06,
+		CacheReadPricePerToken: 4.4221046269954745e-08,
+	}
+	s.fallbackPrices["mimo-v2.6-pro"] = &ModelPricing{
+		InputPricePerToken:     4.35e-07,
+		OutputPricePerToken:    8.7e-07,
+		CacheReadPricePerToken: 3.6e-09,
+	}
+
 	// Gemini 4 Argon (Google AI pricing: $2 input / $10 output / $0.10 cached
 	// input per MTok, promotional through 2026-11-30; official rates double to
 	// $4/$20/$0.20 from 2026-12-01). One rate covers every prompt length.
@@ -1065,6 +1108,11 @@ func (s *BillingService) initFallbackPricing() {
 // getFallbackPricing 根据模型系列获取回退价格
 func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	modelLower := normalizeAntigravityClaudeTierAlias(strings.ToLower(model))
+	// Exact new model IDs and known Gemini reasoning aliases share their own card.
+	switch normalized := normalizeModelNameForPricing(modelLower); normalized {
+	case "gemini-4-carbon", "gemini-4-hydrogen", "kimi-k3.1-pro", "hy3", "hy4", "hy4-preview", "mimo-v2.6-pro":
+		return s.fallbackPrices[normalized]
+	}
 	if modelLower == "jev-latest" {
 		return s.fallbackPrices["jev-latest"]
 	}

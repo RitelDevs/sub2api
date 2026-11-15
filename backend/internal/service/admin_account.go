@@ -472,6 +472,11 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 		Status:               StatusActive,
 		Schedulable:          input.InitialAdmissionPlan == nil,
 	}
+	// Zero is the explicit direct-access sentinel. Keep it through defaults,
+	// then persist no binding rather than a nonexistent proxy foreign key.
+	if account.ProxyID != nil && *account.ProxyID == 0 {
+		account.ProxyID = nil
+	}
 	prepareGatewayBorrowAccountQualityForCreate(account)
 	if input.ProbeEnabled != nil && *input.ProbeEnabled {
 		if !isUpstreamBillingProbeAccount(account) {

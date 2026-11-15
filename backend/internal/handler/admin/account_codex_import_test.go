@@ -1167,3 +1167,32 @@ func TestImportCodexSessionsAdmissionSourceOnlyInitializesNewAccounts(t *testing
 		}
 	}
 }
+
+// Omitted/null is the service's automatic-selection signal. Zero must remain an
+// explicit direct request, and positive IDs must keep their selected binding.
+func TestImportCodexSessionsPropagatesProxySelectionIntent(t *testing.T) {
+	for _, raw := range []string{
+		"{}", `{"proxy_id":null}`, `{"proxy_id":0}`, `{"proxy_id":77}`,
+	} {
+		t.Run(raw, func(t *testing.T) {
+			var req CodexSessionImportRequest
+			if err := json.Unmarshal([]byte(raw), &req); err != nil {
+				t.Fatal(err)
+			}
+			svc := newCodexImportMemoryAdminService(nil)
+			handler := NewAccountHandler(svc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+			result, err := handler.importCodexSessions(context.Background(), req, []codexImportEntry{{Index: 1, Value: buildCodexRefreshImportValue(t, "workspace-1", "user-1", "refresh-1")}})
+			if err != nil || result.Created != 1 || result.Failed != 0 {
+				t.Fatalf("import = %+v, %v", result, err)
+			}
+			got := svc.createdAccounts[0].ProxyID
+			if req.ProxyID == nil {
+				if got != nil {
+					t.Fatalf("omitted proxy became %d", *got)
+				}
+			} else if got == nil || *got != *req.ProxyID {
+				t.Fatalf("explicit proxy intent lost: got %v, want %d", got, *req.ProxyID)
+			}
+		})
+	}
+}

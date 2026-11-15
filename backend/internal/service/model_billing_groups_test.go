@@ -148,9 +148,11 @@ func TestModelBillingGroupGenericSearchAndPerRequest(t *testing.T) {
 			key.Group = &Group{ID: groupID}
 		}
 		svc.settingService = nil
-		base := svc.calculateRecordUsageCost(t.Context(), result, key, result.Model, .2, .2, time.Time{})
+		base, pricingErr1 := svc.calculateRecordUsageCost(t.Context(), result, key, result.Model, .2, .2, time.Time{})
+		require.NoError(t, pricingErr1)
 		svc.settingService = modelBillingSettings(t, ModelBillingConfig{Enabled: true, Rules: []ModelBillingRule{{Model: "claude-sonnet-4-5*", Multiplier: 10, GroupIDs: []int64{5}}}})
-		cost := svc.calculateRecordUsageCost(t.Context(), result, key, result.Model, .2, .2, time.Time{})
+		cost, pricingErr2 := svc.calculateRecordUsageCost(t.Context(), result, key, result.Model, .2, .2, time.Time{})
+		require.NoError(t, pricingErr2)
 		search := svc.billingService.CalculateSearchCost(2, nil, .2)
 		multiplier := 1.0
 		if groupID == 5 {

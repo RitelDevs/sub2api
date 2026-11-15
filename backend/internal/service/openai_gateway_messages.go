@@ -34,6 +34,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+
 	admittedCtx, admissionErr := s.beginPriorityLatencyTurn(ctx, c, account, gjson.GetBytes(body, "model").String())
 	if admissionErr != nil {
 		return nil, admissionErr
@@ -71,6 +72,10 @@ func (s *OpenAIGatewayService) forwardAsAnthropic(
 		MarkResponseCommitted(c)
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "code": "basispoints_requires_responses", "message": "This group requires Basispoints for this model; use /v1/responses"}})
 		return nil, denyOpenAITurn("basispoints_required_use_responses")
+	}
+
+	if err := CheckUpstreamModeration(ctx, c, account); err != nil {
+		return nil, err
 	}
 	// 工具 Schema 清洗必须先于所有分流：下游每条路径（原生 Anthropic 直通、
 	// Chat Completions 转换、Responses 转换）都会把 tools 原样带给上游，而

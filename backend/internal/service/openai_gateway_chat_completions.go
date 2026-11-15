@@ -62,6 +62,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+
 	admittedCtx, admissionErr := s.beginPriorityLatencyTurn(ctx, c, account, gjson.GetBytes(body, "model").String())
 	if admissionErr != nil {
 		return nil, admissionErr
@@ -112,6 +113,10 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		MarkResponseCommitted(c)
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "code": "basispoints_requires_responses", "message": "This group requires Basispoints for this model; use /v1/responses"}})
 		return nil, denyOpenAITurn("basispoints_required_use_responses")
+	}
+
+	if err := CheckUpstreamModeration(ctx, c, account); err != nil {
+		return nil, err
 	}
 	rememberOpenCodeInboundBody(c, body)
 	beginUpstreamResponseModelObservation(c)

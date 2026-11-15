@@ -365,9 +365,9 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 	clientDisconnected := false
 	sawTerminalEvent := false
 	protocolReady := false
-	var pendingLines []string
-	pendingBytes := 0
+	var pendingLines, pendingData, preludeLines []string
 	pendingEventName := ""
+	pendingBytes, preludeBytes := 0, 0
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -449,26 +449,6 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 		keepaliveTimer.Reset(keepaliveInterval)
 	}
 	inPartialEvent := false
-	writeLine := func(line string) {
-		if !clientDisconnected {
-			restored := string(reverseToolNamesIfPresent(c, []byte(line)))
-			if _, err := io.WriteString(w, restored); err != nil {
-				clientDisconnected = true
-				logger.LegacyPrintf("service.gateway", "[CN Anthropic 直通] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
-			} else if _, err := io.WriteString(w, "\n"); err != nil {
-				clientDisconnected = true
-				logger.LegacyPrintf("service.gateway", "[CN Anthropic 直通] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
-			} else if line == "" {
-				// 按 SSE 事件边界刷出，减少每行 flush 带来的 syscall 开销。
-				flusher.Flush()
-				lastDataAt = time.Now()
-				resetKeepaliveTimer()
-				inPartialEvent = false
-			} else {
-				inPartialEvent = true
-			}
-		}
-	}
 	fail := func(code, message string, allowFailover bool) (*OpenAIForwardResult, error) {
 		result := s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected,
 			originalModel, billingModel, upstreamModel, reasoningEffort, startTime)
@@ -517,43 +497,103 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 
 			line := ev.line
 			if !protocolReady {
-				pendingBytes += len(line) + 1
-				if pendingBytes > 64*1024 {
+				preludeBytes += len(line) + 1
+				if preludeBytes > 64*1024 {
 					return fail("invalid_stream_response", "native Anthropic upstream SSE prelude exceeded limit", true)
 				}
-				ready, valid := nativeAnthropicStreamPreludeLine(line, &pendingEventName)
-				if !valid {
-					return fail("invalid_stream_response", "native Anthropic upstream returned an invalid SSE protocol", true)
+				// Validate framing now, but identify the protocol only from a
+				// complete event. Partial JSON/tool events must never commit output.
+				if _, dataLine := extractAnthropicSSEDataLine(line); !dataLine {
+					eventName := pendingEventName
+					if _, valid := nativeAnthropicStreamPreludeLine(line, &eventName); !valid {
+						return fail("invalid_stream_response", "native Anthropic upstream returned an invalid SSE protocol", true)
+					}
 				}
-				if !ready {
-					pendingLines = append(pendingLines, line)
-					continue
-				}
-				protocolReady = true
 			}
 			if data, ok := extractAnthropicSSEDataLine(line); ok {
 				trimmed := strings.TrimSpace(data)
 				observer.ObserveAnthropic([]byte(trimmed))
-				eventType := gjson.Get(trimmed, "type").String()
-				if eventType == "error" {
-					return fail("stream_failed", "native Anthropic upstream returned a stream error", false)
-				}
-				if eventType == "message_stop" {
-					sawTerminalEvent = true
-				}
-				if firstTokenMs == nil && trimmed != "" && trimmed != "[DONE]" {
+				if protocolReady && firstTokenMs == nil && trimmed != "" && trimmed != "[DONE]" {
 					ms := int(time.Since(startTime).Milliseconds())
 					firstTokenMs = &ms
 				}
 				parseSSEUsagePassthrough(data, usage)
+				pendingData = append(pendingData, data)
+			} else if eventName, ok := extractOpenAISSEEventLine(line); ok {
+				pendingEventName = eventName
+			}
+			// Relay only complete SSE events. Neither an event name nor valid
+			// JSON without its delimiter establishes completion.
+			pendingLines = append(pendingLines, line)
+			pendingBytes += len(line) + 1
+			if pendingBytes > maxLineSize {
+				return fail("stream_read_error", "native Anthropic upstream SSE event exceeded size limit", !protocolReady)
+			}
+			inPartialEvent = line != ""
+			if line != "" {
+				continue
+			}
+			payload := strings.Join(pendingData, "\n")
+			if !protocolReady {
+				ready := false
+				if len(pendingData) > 0 {
+					var valid bool
+					ready, valid = nativeAnthropicStreamPreludeLine("data: "+payload, &pendingEventName)
+					if !valid {
+						return fail("invalid_stream_response", "native Anthropic upstream returned an invalid SSE protocol", true)
+					}
+				}
+				if !ready {
+					preludeLines = append(preludeLines, pendingLines...)
+					pendingLines, pendingData, pendingEventName, pendingBytes = nil, nil, "", 0
+					continue
+				}
+				protocolReady = true
+				if firstTokenMs == nil {
+					ms := int(time.Since(startTime).Milliseconds())
+					firstTokenMs = &ms
+				}
+			}
+			eventType := gjson.Get(payload, "type").String()
+			validTerminal := gjson.Valid(payload) && eventType == "message_stop" && (pendingEventName == "" || pendingEventName == "message_stop")
+			if (pendingEventName == "message_stop" || eventType == "message_stop") && !validTerminal {
+				// Keep invalid terminal-shaped frames away from the client so
+				// it can still receive the eventual transport failure.
+				pendingLines, pendingData, pendingEventName, pendingBytes = nil, nil, "", 0
+				continue
+			}
+			if gjson.Valid(payload) {
+				if validTerminal {
+					sawTerminalEvent = true
+				}
+				if !sawTerminalEvent && gjson.Get(payload, "error").IsObject() && (eventType == "error" || pendingEventName == "error") {
+					// Preserve the local generic-error privacy path; structured
+					// semantic rejections retain their code and terminate once.
+					if gjson.Get(payload, "error.type").String() == "" && gjson.Get(payload, "error.code").String() == "" {
+						return fail("stream_failed", "native Anthropic upstream returned a stream error", false)
+					}
+					writeHeaders()
+					c.Writer.WriteHeaderNow()
+					semanticErr := writeNativeAnthropicSemanticFailure(c, []byte(payload), originalModel)
+					return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, reasoningEffort, startTime), semanticErr
+				}
 			}
 
-			writeHeaders()
-			for _, pending := range pendingLines {
-				writeLine(pending)
+			if !clientDisconnected {
+				writeHeaders()
+				lines := append(preludeLines, pendingLines...)
+				restored := string(reverseToolNamesIfPresent(c, []byte(strings.Join(lines, "\n")+"\n")))
+				if _, err := io.WriteString(w, restored); err != nil {
+					clientDisconnected = true
+					logger.LegacyPrintf("service.gateway", "[CN Anthropic 直通] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
+				} else {
+					flusher.Flush()
+					lastDataAt = time.Now()
+					resetKeepaliveTimer()
+				}
 			}
-			pendingLines = nil
-			writeLine(line)
+			preludeLines = nil
+			pendingLines, pendingData, pendingEventName, pendingBytes = nil, nil, "", 0
 
 		case <-intervalCh:
 			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))

@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-var qqNumber = regexp.MustCompile(`^[1-9][0-9]{4,19}$`)
+var qqNotificationNumberPattern = regexp.MustCompile(`^[1-9][0-9]{4,19}$`)
 var qqMessageID = regexp.MustCompile(`^-?[0-9]{1,20}$`)
 var qqCode = regexp.MustCompile(`^[A-F0-9]{16}$`)
 var ErrQQRequest = errors.New("QQ request unavailable, expired or conflicting")
@@ -39,7 +39,7 @@ func NewQQNotificationService(db *sql.DB) *QQNotificationService {
 	return &QQNotificationService{db: db, endpoint: strings.TrimRight(os.Getenv("QQ_ONEBOT_URL"), "/"), token: os.Getenv("QQ_ONEBOT_TOKEN"), secret: os.Getenv("QQ_WEBHOOK_SECRET"), bot: os.Getenv("QQ_BOT_ID"), client: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 func (s *QQNotificationService) Enabled() bool {
-	if s == nil || s.db == nil || len(s.secret) < 32 || s.token == "" || !qqNumber.MatchString(s.bot) {
+	if s == nil || s.db == nil || len(s.secret) < 32 || s.token == "" || !qqNotificationNumberPattern.MatchString(s.bot) {
 		return false
 	}
 	u, e := url.Parse(s.endpoint)
@@ -240,7 +240,7 @@ func (s *QQNotificationService) Access(ctx context.Context, body []byte) (bool, 
 }
 
 func (s *QQNotificationService) validEvent(ev QQEvent) bool {
-	return ev.SelfID.String() == s.bot && qqNumber.MatchString(ev.UserID.String()) && ev.UserID.String() != s.bot && ev.PostType == "message" && ev.MessageType == "private" && ev.SubType == "friend" && qqMessageID.MatchString(ev.MessageID.String()) && time.Since(time.Unix(ev.Time, 0)).Abs() <= 5*time.Minute
+	return ev.SelfID.String() == s.bot && qqNotificationNumberPattern.MatchString(ev.UserID.String()) && ev.UserID.String() != s.bot && ev.PostType == "message" && ev.MessageType == "private" && ev.SubType == "friend" && qqMessageID.MatchString(ev.MessageID.String()) && time.Since(time.Unix(ev.Time, 0)).Abs() <= 5*time.Minute
 }
 
 // Only complete keywords bypass chat. Other natural language remains an AI turn.

@@ -294,6 +294,7 @@
           <template #cell-actions="{ row }">
             <div class="keys-row-actions">
               <button class="keys-use-button" data-testid="connect-key-row" :disabled="row.status !== 'active' || busyKeyIds.has(row.id)" :title="kw.use" :aria-label="kw.use" @click.stop="openConnection(row)"><Icon name="link" size="sm" /><span>{{ kw.use }}</span></button>
+              <button type="button" :disabled="publicSettingsLoading || busyKeyIds.has(row.id)" data-testid="magpie-import-button" :title="t('keys.magpieImport.preview')" :aria-label="t('keys.importToMagpie')" @click.stop="importToMagpie(row)"><Icon name="externalLink" size="sm" /><span class="sr-only">{{ t('keys.importToMagpie') }}</span></button>
               <button :disabled="busyKeyIds.has(row.id)" :title="t('common.edit')" :aria-label="t('common.edit')" @click.stop="editKey(row)"><Icon name="edit" size="sm" /><span class="sr-only">{{ t('common.edit') }}</span></button>
               <button :title="kc.requests" :aria-label="kc.requests" @click.stop="viewKeyRequests(row)"><Icon name="document" size="sm" /><span class="sr-only">{{ kc.requests }}</span></button>
               <button v-if="(row.rate_limit_5h > 0 || row.rate_limit_1d > 0 || row.rate_limit_7d > 0) && (row.usage_5h > 0 || row.usage_1d > 0 || row.usage_7d > 0)" data-testid="reset-key-rate-limit" :data-key-id="row.id" :disabled="busyKeyIds.has(row.id) || resetRateLimitUsageAction.busy.value || loading" :title="t('keys.resetRateLimitUsage')" :aria-label="t('keys.resetRateLimitUsage')" @click.stop="confirmResetRateLimitFromTable(row)"><Icon name="refresh" size="sm" /><span class="sr-only">{{ t('keys.resetRateLimitUsage') }}</span></button>
@@ -1146,6 +1147,7 @@ import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import { platformBadgeLightClass } from '@/utils/platformColors'
 import { KEY_GROUP_PROVIDERS, KEY_GROUP_PROVIDER_ICONS, getKeyGroupProvider, type KeyGroupProvider } from '@/utils/keyGroupProviders'
 import { isCodexQuickConfigPlatform } from '@/utils/codexQuickConfig'
+import { buildMagpieImportLink } from '@/utils/magpieImport'
 
 // Helper to format date for datetime-local input
 const formatDateTimeLocal = (isoDate: string): string => {
@@ -1394,6 +1396,7 @@ const copiedKeyId = ref<number | null>(null)
 let copiedKeyTimer: ReturnType<typeof setTimeout> | undefined
 const groupSelectorKeyId = ref<number | null>(null)
 const publicSettings = ref<PublicSettings | null>(null)
+const publicSettingsLoading = ref(true)
 const dropdownRef = ref<HTMLElement | null>(null)
 const dropdownPosition = ref<FloatingPanelPosition | null>(null)
 const groupButtonRefs = ref<Map<number, HTMLElement>>(new Map())
@@ -1670,6 +1673,8 @@ const loadPublicSettings = async () => {
     publicSettings.value = await authAPI.getPublicSettings()
   } catch (error) {
     console.error('Failed to load public settings:', error)
+  } finally {
+    publicSettingsLoading.value = false
   }
 }
 
@@ -2109,6 +2114,33 @@ const confirmResetRateLimitFromTable = (row: ApiKey) => {
 }
 
 // Reset rate limit usage for an API key
+const importToMagpie = (row: ApiKey) => {
+  const settings = publicSettings.value
+  if (!settings) {
+    appStore.showError(t('keys.magpieImport.settingsUnavailable'))
+    return
+  }
+  const result = buildMagpieImportLink({
+    dashboardOrigin: window.location.origin,
+    baseUrl: settings.api_base_url,
+    siteName: settings.site_name,
+    row
+  })
+  if ('error' in result) {
+    appStore.showError(t(`keys.magpieImport.${result.error}`))
+    return
+  }
+
+  // Launch from the click itself. Browsers cannot confirm whether the app opened.
+  try {
+    window.open(result.url, '_self')
+  } catch {
+    appStore.showError(t('keys.magpieImport.openHelp'))
+    return
+  }
+  appStore.showInfo(t('keys.magpieImport.openHelp'), 6500)
+}
+
 function resetRateLimitUsage() {
   return resetRateLimitUsageAction.run(async (isCurrent) => {
     const targetId = selectedKey.value?.id

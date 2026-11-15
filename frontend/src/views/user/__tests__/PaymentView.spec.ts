@@ -7,6 +7,7 @@ import AmountInput from '@/components/payment/AmountInput.vue'
 import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
 import StripeSubtypeSelector from '@/components/payment/StripeSubtypeSelector.vue'
 import LotteryRechargeNotice from '@/components/lottery/LotteryRechargeNotice.vue'
+import RechargeCouponPicker from '@/components/payment/RechargeCouponPicker.vue'
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
@@ -1025,6 +1026,31 @@ describe('PaymentView provider and method fees', () => {
     await flushPromises()
     return wrapper
   }
+
+  it('waits for the coupon quote and preserves the coupon on mobile QR fallback', async () => {
+    const wrapper = await mountRecharge({ wxpay: { ...baseMethod, currency: 'CNY', fee_rate: 0, fee_rate_min: 0, fee_rate_max: 0 } })
+    const picker = wrapper.findComponent(RechargeCouponPicker)
+    picker.vm.$emit('change', 71, null, true)
+    await flushPromises()
+    const submit = wrapper.get('[data-test="create-recharge-order"]')
+    expect(submit.attributes('disabled')).toBeDefined()
+    expect(createOrder).not.toHaveBeenCalled()
+
+    picker.vm.$emit('change', 71, { pay_base: 90, credited: 100 }, false)
+    await flushPromises()
+    expect(submit.attributes('disabled')).toBeUndefined()
+    expect(submit.text()).toContain(formatPaymentAmount(90, 'CNY'))
+    createOrder.mockRejectedValueOnce({ reason: 'WECHAT_H5_NOT_AUTHORIZED' }).mockResolvedValueOnce({
+      order_id: 779, amount: 100, pay_amount: 90, currency: 'CNY', fee_rate: 0,
+      expires_at: '2099-01-01T00:10:00.000Z', payment_type: 'wxpay',
+      qr_code: 'weixin://wxpay/bizpayurl?pr=coupon-fallback', out_trade_no: 'sub2_qr_779',
+    })
+    await submit.trigger('click')
+    await flushPromises()
+    expect(createOrder).toHaveBeenNthCalledWith(1, expect.objectContaining({ amount: 100, coupon_id: 71, is_mobile: true }))
+    expect(createOrder).toHaveBeenNthCalledWith(2, expect.objectContaining({ amount: 100, coupon_id: 71, is_mobile: false }))
+    expect(window.localStorage.getItem(PAYMENT_RECOVERY_STORAGE_KEY)).toContain('coupon-fallback')
+  })
 
   it('changes the fee with the selected method and keeps explicit zero free', async () => {
     const wrapper = await mountRecharge({

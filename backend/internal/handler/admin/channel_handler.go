@@ -1,9 +1,12 @@
 package admin
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
@@ -17,9 +20,13 @@ import (
 
 // ChannelHandler handles admin channel management
 type ChannelHandler struct {
-	channelService *service.ChannelService
-	billingService *service.BillingService
-	pricingService *service.PricingService
+	providerCancel    context.CancelFunc
+	providerWG        sync.WaitGroup
+	providerEncryptor service.SecretEncryptor
+	providerClient    *http.Client
+	channelService    *service.ChannelService
+	billingService    *service.BillingService
+	pricingService    *service.PricingService
 }
 
 // NewChannelHandler creates a new admin channel handler

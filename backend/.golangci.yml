@@ -36,6 +36,10 @@ linters:
           list-mode: original
           files:
             - "**/internal/handler/**"
+            # Transport recovery fixtures intentionally assemble real repositories.
+            - "!**/internal/handler/openai_409_ws_audit_test.go"
+            - "!**/internal/handler/openai_issue842_boundaries_test.go"
+            - "!**/internal/handler/openai_issue842_oauth_repair_test.go"
           deny:
             - pkg: github.com/Wei-Shaw/sub2api/internal/repository
               desc: "handler must not import repository"

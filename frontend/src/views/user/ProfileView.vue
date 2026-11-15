@@ -32,6 +32,7 @@
         </div>
       </div>
 
+      <ProfileQQBotCard />
       <SecurityRecords />
       <ProfilePasswordForm v-if="!centralAccountEnabled" />
 
@@ -50,6 +51,7 @@ import { useI18n } from 'vue-i18n'
 import { Icon } from '@/components/icons'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import ProfileInfoCard from '@/components/user/profile/ProfileInfoCard.vue'
+import ProfileQQBotCard from '@/components/user/profile/ProfileQQBotCard.vue'
 import SecurityRecords from '@/features/security-penalties/SecurityRecords.vue'
 import ProfilePasswordForm from '@/components/user/profile/ProfilePasswordForm.vue'
 import ProfileTotpCard from '@/components/user/profile/ProfileTotpCard.vue'

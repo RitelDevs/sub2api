@@ -1414,7 +1414,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 	if err := agentRecovery.beginSocket(latest, pendingAgentSource, firstClientMessage, wsURL, headers, "passthrough"); err != nil {
 		cancelFirstWrite()
-		return openAIWSAgentRecoveryClose(err)
+		return openAIWSUnsentAgentTurn(err, pendingAgentSource, gjson.GetBytes(firstClientMessage, "model").String(), 1)
 	}
 	firstWriteErr := relayUpstreamFrameConn.WriteFrame(firstWriteCtx, coderws.MessageText, firstClientMessage)
 	cancelFirstWrite()
@@ -1478,7 +1478,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					return err
 				}
 				if err := agentRecovery.beginSocket(latest, pendingAgentSource, payload, wsURL, headers, "passthrough"); err != nil {
-					return openAIWSAgentRecoveryClose(err)
+					return openAIWSUnsentAgentTurn(err, pendingAgentSource, usageMeta.requestModelForFrame(pendingAgentSource), max(2, int(completedTurns.Load())+1))
 				}
 				return nil
 			},
@@ -1630,7 +1630,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(payload)
 				isPreOutputRateLimit := eventType == "error" && !wroteDownstream && isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw)
 				if (eventType == "error" || eventType == "response.failed") && !failureAccountSideEffectsApplied && !isPreOutputRateLimit {
-					failureAccountSideEffectsApplied = s.handleOpenAIWSFailureAccountSideEffects(ctx, account, *activePolicyModel.Load(), handshakeHeaders, payload)
+					failureAccountSideEffectsApplied = s.handleOpenAIWSFailureAccountSideEffects(openAIWSForwardStreamPhaseContext(ctx, wroteDownstream, payload), account, *activePolicyModel.Load(), handshakeHeaders, payload)
 				}
 				if eventType != "error" {
 					return nil
@@ -1844,6 +1844,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 }
 
 func openAIWSPassthroughRelayClientClose(exit openaiwsv2.RelayExit, completedTurns int) (coderws.StatusCode, string, bool) {
+	var recovery *OpenAIAgentRecoveryError
+	if errors.As(exit.Err, &recovery) {
+		return 0, "", false // Handler persists the outcome and writes the safe error before closing.
+	}
 	if _, _, _, unsent := OpenAIWSUnsentTurnPayload(exit.Err); unsent {
 		return 0, "", false // Handler owns bounded fresh admission on the same client.
 	}

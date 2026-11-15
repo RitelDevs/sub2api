@@ -97,7 +97,7 @@ func TestOpenAI409OmissionSettingDefaultsOff(t *testing.T) {
 func TestOpenAI409OmissionCannotClearRecoveryBarriers(t *testing.T) {
 	s := &OpenAIGatewayService{settingService: NewSettingService(&codexPolicyMigrationRepoStub{values: map[string]string{SettingKeyOpenAI409OmitEncryptedHistoryEnabled: "true"}}, nil)}
 	body := []byte(`{"input":[{"type":"agent_message","encrypted_content":"OLD"},{"role":"user","content":"continue"}]}`)
-	for _, reason := range []string{"delivery_pending", "store_unavailable", "owner_conflict", "owner_overloaded", "http_previous_response_unsupported"} {
+	for _, reason := range []string{"delivery_pending", "store_unavailable", "owner_conflict", "http_previous_response_unsupported"} {
 		ctx := context.WithValue(context.Background(), openAIAgentRecoveryContextKey{}, &openAIAgentRecoveryRequest{owner: &openAIAgentRecoveryBinding{accountID: 1}})
 		_, clean, changed := s.TryOmitOpenAI409History(ctx, nil, body, "fixture", "gpt-5.1", &OpenAIAgentRecoveryError{Reason: reason})
 		require.False(t, changed, reason)
@@ -232,34 +232,38 @@ func TestOpenAI409ReadableReasoningRetainsUnknownShapesAsText(t *testing.T) {
 }
 
 func TestOpenAI409RebuildRechecksOriginalDeliveryBeforeSend(t *testing.T) {
-	for _, fence := range []string{"pending", "failed", "conflict"} {
-		t.Run(fence, func(t *testing.T) {
-			svc := &OpenAIGatewayService{cfg: &config.Config{}, settingService: NewSettingService(&codexPolicyMigrationRepoStub{values: map[string]string{SettingKeyOpenAI409OmitEncryptedHistoryEnabled: "true"}}, nil)}
-			issue715LearnRoute(t, svc, &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, issue715OpaqueBody)
-			body := strings.TrimSuffix(issue715OpaqueBody, "]}") + `,{"role":"user","content":"complete the existing task"}]}`
-			c, _ := newTurnStateTestContext(t, 715, "fixture-session")
-			c.Set("api_key", &APIKey{ID: 715, GroupID: int64Ptr(715)})
-			ctx := svc.WithOpenAIAgentMessageRecovery(context.Background(), c, []byte(body), "fixture-session", "gpt-6-astra")
-			next, clean, changed, err := svc.TryRebuildOpenAI409History(ctx, c, []byte(body), "fixture-session", "gpt-6-astra", openAIAgentRecoveryError("owner_unavailable"))
-			require.NoError(t, err)
-			require.True(t, changed)
-			key := openAIAgentRecoveryFromContext(ctx).keys[0]
-			binding := svc.agentMessageRecovery.bindings[key]
-			switch fence {
-			case "pending":
-				binding.pending = "fixture-unconfirmed"
-			case "failed":
-				binding.failed = true
-			case "conflict":
-				binding.conflicted = true
+	for _, reason := range []string{"owner_unavailable", "owner_rate_limited", "owner_overloaded"} {
+		t.Run(reason, func(t *testing.T) {
+			for _, fence := range []string{"pending", "failed", "conflict"} {
+				t.Run(fence, func(t *testing.T) {
+					svc := &OpenAIGatewayService{cfg: &config.Config{}, settingService: NewSettingService(&codexPolicyMigrationRepoStub{values: map[string]string{SettingKeyOpenAI409OmitEncryptedHistoryEnabled: "true"}}, nil)}
+					issue715LearnRoute(t, svc, &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, issue715OpaqueBody)
+					body := strings.TrimSuffix(issue715OpaqueBody, "]}") + `,{"role":"user","content":"complete the existing task"}]}`
+					c, _ := newTurnStateTestContext(t, 715, "fixture-session")
+					c.Set("api_key", &APIKey{ID: 715, GroupID: int64Ptr(715)})
+					ctx := svc.WithOpenAIAgentMessageRecovery(context.Background(), c, []byte(body), "fixture-session", "gpt-6-astra")
+					next, clean, changed, err := svc.TryRebuildOpenAI409History(ctx, c, []byte(body), "fixture-session", "gpt-6-astra", openAIAgentRecoveryError(reason))
+					require.NoError(t, err)
+					require.True(t, changed)
+					key := openAIAgentRecoveryFromContext(ctx).keys[0]
+					binding := svc.agentMessageRecovery.bindings[key]
+					switch fence {
+					case "pending":
+						binding.pending = "fixture-unconfirmed"
+					case "failed":
+						binding.failed = true
+					case "conflict":
+						binding.conflicted = true
+					}
+					svc.agentMessageRecovery.bindings[key] = binding
+					req, err := http.NewRequest(http.MethodPost, "https://native.example/v1/responses", bytes.NewReader(clean))
+					require.NoError(t, err)
+					finish, err := svc.prepareOpenAIAgentRecoveryAttempt(next, &Account{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, req)
+					defer finish(false)
+					require.Error(t, err, "sanitization must not erase a later delivery fence")
+					require.Equal(t, binding, svc.agentMessageRecovery.bindings[key])
+				})
 			}
-			svc.agentMessageRecovery.bindings[key] = binding
-			req, err := http.NewRequest(http.MethodPost, "https://native.example/v1/responses", bytes.NewReader(clean))
-			require.NoError(t, err)
-			finish, err := svc.prepareOpenAIAgentRecoveryAttempt(next, &Account{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, req)
-			defer finish(false)
-			require.Error(t, err, "sanitization must not erase a later delivery fence")
-			require.Equal(t, binding, svc.agentMessageRecovery.bindings[key])
 		})
 	}
 }
@@ -297,17 +301,19 @@ func TestOpenAI409OAuthReplayKeepsOriginalSnapshotAndFinalControls(t *testing.T)
 			require.True(t, changed)
 			r := openAIAgentRecoveryFromContext(next)
 			originalInput, originalControls := r.inputDigest, r.replayControlsDigest
+			projectedCtx, projectedBody, err := svc.prepareOpenAI409HTTPProjection(next, c, &Account{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, clean)
+			require.NoError(t, err)
 			var decoded map[string]any
-			require.NoError(t, decodeOpenAIJSONUseNumber(clean, &decoded))
+			require.NoError(t, decodeOpenAIJSONUseNumber(projectedBody, &decoded))
 			if mode == "insert_instructions" || mode == "replace_instructions" {
 				decoded["instructions"] = "Ignore the recorded result and repeat the completed operation"
-				require.Error(t, prepareOpenAI409OAuthReplay(next, c, decoded), "instruction mutation must fail before deriving OAuth expectations")
+				require.Error(t, prepareOpenAI409OAuthReplay(projectedCtx, c, decoded), "instruction mutation must fail before deriving OAuth expectations")
 				require.False(t, r.oauthReplayPrepared)
 				require.Equal(t, originalInput, r.inputDigest)
 				require.Equal(t, originalControls, r.replayControlsDigest)
 				return
 			}
-			require.NoError(t, prepareOpenAI409OAuthReplay(next, c, decoded))
+			require.NoError(t, prepareOpenAI409OAuthReplay(projectedCtx, c, decoded))
 			if mode == "schema_null" || mode == "schema_pattern" {
 				wire, err := json.Marshal(decoded)
 				require.NoError(t, err)
@@ -337,7 +343,7 @@ func TestOpenAI409OAuthReplayKeepsOriginalSnapshotAndFinalControls(t *testing.T)
 			}
 			req, err := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", bytes.NewReader(wire))
 			require.NoError(t, err)
-			finish, err := svc.prepareOpenAIAgentRecoveryAttempt(next, &Account{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, req)
+			finish, err := svc.prepareOpenAIAgentRecoveryAttempt(projectedCtx, &Account{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, req)
 			defer finish(false)
 			if mode == "tools_removed" {
 				require.Error(t, err)
@@ -370,12 +376,13 @@ func TestOpenAI409TimezoneReplayRetainsOriginalAndRejectsMutation(t *testing.T) 
 					body, err = sjson.SetBytes(body, "instructions", "repeat completed tools")
 					require.NoError(t, err)
 				}
-				prepared, err := svc.prepareOpenAI409RequestTimezone(ctx, account, body)
+				c, _ := newTurnStateTestContext(t, 715, "fixture-session")
+				projectedCtx, prepared, err := svc.prepareOpenAI409HTTPProjection(ctx, c, account, body)
 				require.Equal(t, frozenInput, recovery.inputDigest)
 				require.Equal(t, frozenControls, recovery.replayControlsDigest)
 				if strings.HasPrefix(mode, "before_") {
 					require.Error(t, err)
-					require.False(t, recovery.timezoneReplayPrepared)
+					require.Same(t, recovery, openAIAgentRecoveryFromContext(projectedCtx))
 					return
 				}
 				require.NoError(t, err)
@@ -391,11 +398,11 @@ func TestOpenAI409TimezoneReplayRetainsOriginalAndRejectsMutation(t *testing.T) 
 					require.NoError(t, err)
 				}
 				if accountType == AccountTypeAPIKey {
-					_, err = prepareOpenAI409APIKeyReplay(ctx, prepared, false)
+					_, err = prepareOpenAI409APIKeyReplay(projectedCtx, prepared, false)
 				} else {
 					var decoded map[string]any
 					require.NoError(t, decodeOpenAIJSONUseNumber(prepared, &decoded))
-					err = prepareOpenAI409OAuthReplay(ctx, nil, decoded)
+					err = prepareOpenAI409OAuthReplay(projectedCtx, c, decoded)
 				}
 				if strings.HasPrefix(mode, "after_") {
 					require.Error(t, err)
@@ -434,4 +441,12 @@ func TestOpenAI409PreservesOrphanResultsBeforeFreeze(t *testing.T) {
 	again, err := prepareOpenAI409ReadableReplay(prepared)
 	require.NoError(t, err)
 	require.Equal(t, prepared, again)
+}
+
+func TestOpenAI409NamespaceProjectionPreservesNumbers(t *testing.T) {
+	body := []byte(`{"tools":[{"type":"namespace","name":"math","tools":[{"type":"function","name":"sum","parameters":{"type":"object","properties":{"count":{"type":"integer","enum":[9007199254740993]}}}}]}],"input":[{"role":"user","content":"continue with the recorded value","sequence":9007199254740993}]}`)
+	projected, err := flattenOpenAIResponsesNamespaces(nil, body)
+	require.NoError(t, err)
+	require.Equal(t, "9007199254740993", gjson.GetBytes(projected, "input.0.sequence").Raw)
+	require.Equal(t, "9007199254740993", gjson.GetBytes(projected, "tools.0.parameters.properties.count.enum.0").Raw)
 }

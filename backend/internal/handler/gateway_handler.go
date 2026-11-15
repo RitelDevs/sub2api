@@ -521,6 +521,21 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// 账号槽位/等待计数需要在超时或断开时安全回收
 			accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
 
+			pricingModel := reqModel
+			if account.Platform == service.PlatformAntigravity {
+				pricingModel = h.antigravityGatewayService.GeminiRequestPricingModel(account, reqModel, body)
+			} else if account.Type == service.AccountTypeAPIKey || account.Type == service.AccountTypeServiceAccount {
+				pricingModel = account.GetMappedModel(reqModel)
+			}
+			if err := h.gatewayService.CheckGeminiTokenRequestPricing(c.Request.Context(), apiKey, reqModel, pricingModel,
+				"generateContent", body, clientRequestedUsageFields(c, channelMapping, reqModel, pricingModel), pricingAt); err != nil {
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "model_pricing_unavailable", "Model pricing is unavailable", streamStarted)
+				return
+			}
+
 			// 转发请求 - 根据账号平台分流
 			var result *service.ForwardResult
 			requestCtx := c.Request.Context()
@@ -546,6 +561,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			if accountReleaseFunc != nil {
 				accountReleaseFunc()
+			}
+			if service.IsUpstreamModerationDenied(err) {
+				return
 			}
 			if err != nil {
 				var failoverErr *service.UpstreamFailoverError
@@ -941,6 +959,37 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			attemptBody := attemptParsedReq.Body.Bytes()
 
+			if account.Platform == service.PlatformAntigravity || account.Platform == service.PlatformGemini {
+				pricingModel := attemptParsedReq.Model
+				if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
+					var mappingErr error
+					pricingModel, mappingErr = h.antigravityGatewayService.MessagesRequestPricingModel(account, attemptParsedReq.Model, attemptBody)
+					if mappingErr != nil {
+						if queueRelease != nil {
+							queueRelease()
+						}
+						if accountReleaseFunc != nil {
+							accountReleaseFunc()
+						}
+						h.handleStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body", streamStarted)
+						return
+					}
+				} else if account.Type == service.AccountTypeAPIKey || account.Type == service.AccountTypeServiceAccount {
+					pricingModel = account.GetMappedModel(attemptParsedReq.Model)
+				}
+				if err := h.gatewayService.CheckGeminiTokenRequestPricing(c.Request.Context(), apiKey, attemptParsedReq.Model, pricingModel,
+					"generateContent", attemptBody, clientRequestedUsageFields(c, channelMapping, reqModel, pricingModel), pricingAt); err != nil {
+					if queueRelease != nil {
+						queueRelease()
+					}
+					if accountReleaseFunc != nil {
+						accountReleaseFunc()
+					}
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "model_pricing_unavailable", "Model pricing is unavailable", streamStarted)
+					return
+				}
+			}
+
 			// 转发请求 - 根据账号平台分流
 			c.Set("parsed_request", attemptParsedReq)
 			var result *service.ForwardResult
@@ -968,6 +1017,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 			if accountReleaseFunc != nil {
 				accountReleaseFunc()
+			}
+			if service.IsUpstreamModerationDenied(err) {
+				return
 			}
 
 			// 提交 usage 记录。成功路径与"流中断但 Forward 已观测到 usage 的部分结果"

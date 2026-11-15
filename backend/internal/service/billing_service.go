@@ -203,9 +203,10 @@ type UsageTokens struct {
 
 // CostBreakdown 费用明细
 type CostBreakdown struct {
-	modelBillingMultiplier    float64 // Customer-only model surcharge; zero means 1x.
-	InputCost                 float64 // 文本输入费用（不含图片输入，图片输入单独记入 ImageInputCost）
-	ImageInputCost            float64 // 图片输入 token 费用（如 gpt-image-2 图片编辑）
+	customerCacheCosts        []CustomerCacheCostDetail // Display-only evidence from this exact calculation.
+	modelBillingMultiplier    float64                   // Customer-only model surcharge; zero means 1x.
+	InputCost                 float64                   // 文本输入费用（不含图片输入，图片输入单独记入 ImageInputCost）
+	ImageInputCost            float64                   // 图片输入 token 费用（如 gpt-image-2 图片编辑）
 	OutputCost                float64
 	ImageOutputCost           float64
 	CacheCreationCost         float64
@@ -228,6 +229,9 @@ func applyCostBreakdownMultiplier(cost *CostBreakdown, multiplier float64) {
 	cost.CacheReadCost *= multiplier
 	cost.TotalCost *= multiplier
 	cost.ActualCost *= multiplier
+	for i := range cost.customerCacheCosts {
+		cost.customerCacheCosts[i].UnitPrice *= multiplier
+	}
 }
 
 func isClaudeFable51Model(model string) bool {
@@ -523,6 +527,54 @@ func (s *BillingService) initFallbackPricing() {
 		OutputPricePerToken:    3.75e-6,
 		CacheReadPricePerToken: 0.075e-6,
 		SupportsCacheBreakdown: false,
+	}
+
+	// Known new model cards mirror the bundled official catalog. Tencent CNY
+	// cards use the catalog fixed 6.7841 CNY/USD rate; see source URLs and
+	// promotion boundaries in resources/model-pricing. Do not infer other SKUs.
+	s.fallbackPrices["gemini-4-carbon"] = &ModelPricing{
+		InputPricePerToken:     2e-06,
+		OutputPricePerToken:    1e-05,
+		CacheReadPricePerToken: 1.0000000000000001e-07,
+	}
+	s.fallbackPrices["gemini-4-hydrogen"] = &ModelPricing{
+		InputPricePerToken:     1.5e-06,
+		OutputPricePerToken:    7.5e-06,
+		CacheReadPricePerToken: 7.5e-08,
+	}
+	s.fallbackPrices["kimi-k3.1-pro"] = &ModelPricing{
+		InputPricePerToken:         2e-06,
+		OutputPricePerToken:        1e-05,
+		CacheReadPricePerToken:     2.0000000000000002e-07,
+		CacheCreationPricePerToken: 2e-6,
+		CacheCreation5mPrice:       2e-6,
+		CacheCreation1hPrice:       4e-6,
+		SupportsCacheBreakdown:     true,
+	}
+	s.fallbackPrices["hy3"] = &ModelPricing{
+		InputPricePerToken:     1.4740348756651584e-07,
+		OutputPricePerToken:    5.896139502660634e-07,
+		CacheReadPricePerToken: 3.685087189162896e-08,
+	}
+	s.fallbackPrices["hy4"] = &ModelPricing{
+		InputPricePerToken:     4.4221046269954743e-07,
+		OutputPricePerToken:    1.3266313880986424e-06,
+		CacheReadPricePerToken: 2.2110523134977372e-08,
+	}
+	s.fallbackPrices["hy4-preview"] = &ModelPricing{
+		InputPricePerToken:     8.844209253990949e-07,
+		OutputPricePerToken:    2.6532627761972847e-06,
+		CacheReadPricePerToken: 4.4221046269954745e-08,
+	}
+	s.fallbackPrices["mimo-v2.6-flash"] = &ModelPricing{
+		InputPricePerToken:     .14e-6,
+		OutputPricePerToken:    .28e-6,
+		CacheReadPricePerToken: .0028e-6,
+	}
+	s.fallbackPrices["mimo-v2.6-pro"] = &ModelPricing{
+		InputPricePerToken:     4.35e-07,
+		OutputPricePerToken:    8.7e-07,
+		CacheReadPricePerToken: 3.6e-09,
 	}
 
 	// Gemini 4 Argon (Google AI pricing: $2 input / $10 output / $0.10 cached
@@ -1065,6 +1117,11 @@ func (s *BillingService) initFallbackPricing() {
 // getFallbackPricing 根据模型系列获取回退价格
 func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	modelLower := normalizeAntigravityClaudeTierAlias(strings.ToLower(model))
+	// Exact new model IDs and known Gemini reasoning aliases share their own card.
+	switch normalized := normalizeModelNameForPricing(modelLower); normalized {
+	case "gemini-4-carbon", "gemini-4-hydrogen", "kimi-k3.1-pro", "hy3", "hy4", "hy4-preview", "mimo-v2.6-pro", "mimo-v2.6-flash":
+		return s.fallbackPrices[normalized]
+	}
 	if modelLower == "jev-latest" {
 		return s.fallbackPrices["jev-latest"]
 	}
@@ -1816,6 +1873,7 @@ func (s *BillingService) computeTokenBreakdown(
 		bd.CacheCreationCost + bd.CacheReadCost
 	bd.ActualCost = bd.TotalCost * rateMultiplier
 	bd.LongContextBillingApplied = baselineCost != nil && bd.ActualCost > baselineCost.ActualCost
+	bd.customerCacheCosts = resolvedCustomerCacheCosts(cacheCreationPricing, tokens, cacheCreationPrice, cacheCreationMultiplier, cacheReadPrice, tierMultiplier)
 
 	return bd
 }

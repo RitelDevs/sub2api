@@ -730,6 +730,23 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		// 账号槽位/等待计数需要在超时或断开时安全回收
 		accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
 
+		upstreamPricingModel := modelName
+		if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
+			upstreamPricingModel = h.antigravityGatewayService.GeminiRequestPricingModel(account, modelName, body)
+		} else if account.Type == service.AccountTypeAPIKey || account.Type == service.AccountTypeServiceAccount {
+			upstreamPricingModel = account.GetMappedModel(modelName)
+		}
+		if err := h.gatewayService.CheckGeminiTokenRequestPricing(c.Request.Context(), apiKey,
+			modelName, upstreamPricingModel, action, body,
+			clientRequestedUsageFields(c, channelMapping, reqModel, upstreamPricingModel), pricingAt); err != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			reqLog.Warn("gemini.token_pricing_unavailable", zap.Int64("account_id", account.ID), zap.Error(err))
+			googleErrorWithType(c, http.StatusServiceUnavailable, "api_error", "model_pricing_unavailable", "Model pricing is unavailable")
+			return
+		}
+
 		// 5) forward (根据平台分流)
 		var result *service.ForwardResult
 		requestCtx := c.Request.Context()
@@ -754,6 +771,9 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		}
 		if accountReleaseFunc != nil {
 			accountReleaseFunc()
+		}
+		if service.IsUpstreamModerationDenied(err) {
+			return
 		}
 		if err != nil {
 			var failoverErr *service.UpstreamFailoverError

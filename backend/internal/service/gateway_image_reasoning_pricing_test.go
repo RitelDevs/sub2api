@@ -118,9 +118,11 @@ func TestCalculateRecordUsageCost_MediaReasoningPricing(t *testing.T) {
 				var cost *CostBreakdown
 				if media == "gateway_audio" {
 					svc := &GatewayService{billingService: resolver.billingService, resolver: resolver}
-					cost = svc.calculateRecordUsageCost(context.Background(), &ForwardResult{
+					var pricingErr1 error
+					cost, pricingErr1 = svc.calculateRecordUsageCost(context.Background(), &ForwardResult{
 						ReasoningEffort: &effort, AudioUsage: &AudioUsage{Mode: "tts", DurationOrUnits: 2},
 					}, apiKey, model, 0.5, 0.5, time.Time{})
+					require.NoError(t, pricingErr1)
 				} else {
 					svc := &OpenAIGatewayService{billingService: resolver.billingService, resolver: resolver}
 					result := &OpenAIForwardResult{ReasoningEffort: &effort}

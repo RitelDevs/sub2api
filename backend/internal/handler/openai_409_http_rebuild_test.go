@@ -265,6 +265,33 @@ func TestOpenAI409HTTPTaskRebuild(t *testing.T) {
 	}
 }
 
+func TestOpenAI409HTTPRebuildOwnerCooldown(t *testing.T) {
+	for _, accountType := range []string{service.AccountTypeAPIKey, service.AccountTypeOAuth} {
+		for _, stream := range []bool{false, true} {
+			for _, cooldown := range []string{"rate_limited", "overloaded"} {
+				t.Run(fmt.Sprintf("%s/stream=%t/%s", accountType, stream, cooldown), func(t *testing.T) {
+					runHTTPRebuildFixture(t, accountType, stream, "intent", "completed", cooldown, "")
+				})
+			}
+		}
+	}
+}
+
+func TestOpenAI409HTTPProjectionAndPassthrough(t *testing.T) {
+	for _, accountType := range []string{service.AccountTypeAPIKey, service.AccountTypeOAuth} {
+		for _, stream := range []bool{false, true} {
+			for _, shape := range []string{"message_namespace", "internal_metadata", "tool_schema_null", "passthrough"} {
+				if shape == "passthrough" && accountType != service.AccountTypeAPIKey {
+					continue
+				}
+				t.Run(fmt.Sprintf("%s/stream=%t/%s", accountType, stream, shape), func(t *testing.T) {
+					runHTTPRebuildFixture(t, accountType, stream, shape, "completed", "", "")
+				})
+			}
+		}
+	}
+}
+
 // A known cooldown is handled before any new upstream generation. Reuse the
 // real HTTP/OAuth, Redis and coding-tool fixture to verify A -> B -> B without
 // resubmitting the completed patch or clearing the original owner.
@@ -345,6 +372,118 @@ func TestOpenAI429HTTPNativeInputCompatibility(t *testing.T) {
 			})
 		}
 	}
+}
+
+// IDs are normalized before the readable replay is frozen. These controls
+// isolate ID removal from later native compatibility changes.
+func TestOpenAI429HTTPInputIDCompatibility(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, shape := range []string{"message_id", "non_pair_call_id", "tool_call_id"} {
+			t.Run(fmt.Sprintf("oauth/stream=%t/%s", stream, shape), func(t *testing.T) {
+				runHTTPRebuildFixture(t, service.AccountTypeOAuth, stream, "rate_limited/input_ids/"+shape, "completed", "", "")
+			})
+		}
+	}
+}
+
+// Direct message/result namespaces are native envelope fields, while the
+// function call namespace is required for replay. The calls-only control
+// distinguishes their removal from an unrelated tool declaration change.
+func TestOpenAI429HTTPInputNamespaceCompatibility(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, shape := range []string{"message", "tool_output", "tool_call_only"} {
+			t.Run(fmt.Sprintf("oauth/stream=%t/%s", stream, shape), func(t *testing.T) {
+				runHTTPRebuildFixture(t, service.AccountTypeOAuth, stream, "rate_limited/input_namespace/"+shape, "completed", "", "")
+			})
+		}
+	}
+}
+
+func httpRebuildNativeInputHistory(t *testing.T, history []string, pointer string) []string {
+	t.Helper()
+	history = append([]string(nil), history...)
+	for i, raw := range history {
+		item := gjson.Parse(raw)
+		field, value := "", ""
+		switch {
+		case item.Get("role").String() == "user":
+			switch pointer {
+			case "input_ids/message_id":
+				field, value = "id", "item_invalid_message"
+			case "input_ids/non_pair_call_id":
+				// Share the real call_id: removing a non-pair field must not
+				// delete the actual completed call or its result.
+				field, value = "call_id", "call_patch_once"
+			case "input_namespace/message":
+				field, value = "namespace", "functions"
+			}
+		case item.Get("type").String() == "function_call" && pointer == "input_ids/tool_call_id":
+			field, value = "id", "item_invalid_tool_call"
+		case item.Get("type").String() == "function_call_output" && pointer == "input_namespace/tool_output":
+			field, value = "namespace", "functions"
+		}
+		if field != "" {
+			var err error
+			history[i], err = sjson.Set(raw, field, value)
+			require.NoError(t, err)
+		}
+	}
+	return history
+}
+
+// This oracle observes the actual loopback provider body. It does not call a
+// production sanitizer or accept a subset of the original tool arguments.
+func httpRebuildNativeInputWire(t *testing.T, body []byte, pointer string, turn int) bool {
+	t.Helper()
+	valid := true
+	tasks := 0
+	var calls, results []any
+	for _, item := range gjson.GetBytes(body, "input").Array() {
+		switch item.Get("type").String() {
+		case "message":
+			valid = assert.False(t, item.Get("namespace").Exists(), "message namespace must not reach the native provider") && valid
+			if item.Get("role").String() != "user" {
+				continue
+			}
+			content := item.Get("content")
+			texts := []string{content.String()}
+			if content.IsArray() {
+				texts = nil
+				for _, part := range content.Array() {
+					if part.Get("type").String() == "input_text" {
+						texts = append(texts, part.Get("text").String())
+					}
+				}
+			}
+			for _, text := range texts {
+				if text == httpRebuildTask {
+					tasks++
+					valid = assert.False(t, item.Get("id").Exists(), "invalid message item ID must be removed") && valid
+					valid = assert.False(t, item.Get("call_id").Exists(), "message must not retain a non-pair call_id") && valid
+				}
+			}
+		case "function_call":
+			calls = append(calls, item.Value())
+		case "function_call_output":
+			results = append(results, item.Value())
+		}
+	}
+	valid = assert.Equal(t, 1, tasks, "the exact readable task must reach B once") && valid
+	valid = assert.Equal(t, 1, strings.Count(gjson.GetBytes(body, "instructions").String(), httpRebuildSystem), "the original system guidance must survive once") && valid
+	wantCalls := []any{gjson.Parse(httpRebuildCall("apply_patch", "call_patch_once", map[string]any{"path": "sum.go", "source": httpRebuildSource})).Value()}
+	wantResults := []any{map[string]any{"type": "function_call_output", "call_id": "call_patch_once", "output": httpRebuildPatch}}
+	if turn == 3 {
+		wantCalls = append(wantCalls, gjson.Parse(httpRebuildCall("run_tests", "call_verify_once", map[string]any{"path": "sum.go"})).Value())
+		wantResults = append(wantResults, map[string]any{"type": "function_call_output", "call_id": "call_verify_once", "output": httpRebuildCheck})
+	}
+	if strings.HasPrefix(pointer, "input_namespace/") {
+		for _, call := range wantCalls {
+			call.(map[string]any)["namespace"] = "functions"
+		}
+	}
+	valid = assert.Equal(t, wantCalls, calls, "call IDs, raw argument strings, names and native call namespaces must stay exact") && valid
+	valid = assert.Equal(t, wantResults, results, "completed outputs and their call IDs must stay exact, without result namespaces or duplicates") && valid
+	return valid
 }
 
 // Screenshot-shaped reasoning must survive as reference input, never as an
@@ -617,17 +756,51 @@ func httpRebuildOwnerKey(t *testing.T, h *OpenAIGatewayHandler, agent string) st
 	return "openai_agent_owner:v1:" + hex.EncodeToString(key[:])
 }
 
-func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointer, outcome, boundary, mutation string) {
+type httpRebuildFixtureOptions struct {
+	extraAccounts  []service.Account
+	afterFirst     func([]service.Account)
+	refuseCode     string
+	physicalBody   func(*testing.T, []byte, int) []byte
+	headers        func(*http.Request)
+	toolsAvailable func([]byte) bool
+	request        func(map[string]any, bool)
+	provider       func(*testing.T, []byte, http.Header, int)
+	accounts       func([]service.Account)
+	gateway        func(*OpenAIGatewayHandler, []service.Account, service.HTTPUpstream, service.GatewayCache, *service.SettingService, service.UsageLogRepository)
+	settings       service.SettingRepository
+	apiKey         func(*service.APIKey)
+}
+
+func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointer, outcome, boundary, mutation string, options ...httpRebuildFixtureOptions) {
 	t.Helper()
 	rateLimited := strings.HasPrefix(pointer, "rate_limited/")
 	pointer = strings.TrimPrefix(pointer, "rate_limited/")
+	var option httpRebuildFixtureOptions
+	if len(options) > 0 {
+		option = options[0]
+	}
+	authenticated := boundary == "issue854_auth"
+	if authenticated {
+		boundary = ""
+	}
 	noOpaque := strings.HasSuffix(pointer, "_no_opaque")
 	pointer = strings.TrimSuffix(pointer, "_no_opaque")
 	mixed := strings.HasPrefix(boundary, "mixed/")
+	ownerCooldown := boundary == "rate_limited" || boundary == "overloaded"
 	clients := issue805Redis(t)
 	observer := clients()
 	patchCall := httpRebuildCall("apply_patch", "call_patch_once", map[string]any{"path": "sum.go", "source": httpRebuildSource})
 	checkCall := httpRebuildCall("run_tests", "call_verify_once", map[string]any{"path": "sum.go"})
+	if strings.HasPrefix(pointer, "input_namespace/") {
+		// The native provider emits these; both subsequent requests must
+		// preserve their namespace while stripping message/result metadata.
+		var err error
+		patchCall, err = sjson.Set(patchCall, "namespace", "functions")
+		require.NoError(t, err)
+		checkCall, err = sjson.Set(checkCall, "namespace", "functions")
+		require.NoError(t, err)
+	}
+	checkNativeInput := strings.HasPrefix(pointer, "input_ids/") || strings.HasPrefix(pointer, "input_namespace/")
 	var mu sync.Mutex
 	var providerBodies [][]byte
 	var providerHeaders []http.Header
@@ -643,6 +816,9 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 		providerHeaders = append(providerHeaders, r.Header.Clone())
 		n := len(providerBodies)
 		mu.Unlock()
+		if option.provider != nil {
+			option.provider(t, body, r.Header, n)
+		}
 		if pointer == "timezone" {
 			expectedZone := "America/Los_Angeles"
 			if n > 1 {
@@ -697,7 +873,11 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 				return
 			}
 		}
-		if (!noToolsFinal && !httpRebuildToolsAvailable(toolOracleBody)) || (noToolsFinal && (gjson.GetBytes(body, "tools").Exists() || gjson.GetBytes(body, "parallel_tool_calls").Exists())) {
+		toolsAvailable := httpRebuildToolsAvailable
+		if option.toolsAvailable != nil {
+			toolsAvailable = option.toolsAvailable
+		}
+		if (!noToolsFinal && !toolsAvailable(toolOracleBody)) || (noToolsFinal && (gjson.GetBytes(body, "tools").Exists() || gjson.GetBytes(body, "parallel_tool_calls").Exists())) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = io.WriteString(w, `{"error":{"type":"invalid_request_error","message":"fixture rejected missing or changed tool declarations"}}`)
@@ -718,6 +898,9 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 				!strings.Contains(string(body), "fixture-opaque-A") &&
 				!strings.Contains(string(body), "resp_rebuild_A") && !strings.Contains(string(body), "conv_rebuild_A") &&
 				httpRebuildToolPair(body, "apply_patch", httpRebuildPatch)
+			if checkNativeInput {
+				valid = httpRebuildNativeInputWire(t, body, pointer, n) && valid
+			}
 			if pointer == "input_metadata" {
 				valid = valid && strings.Contains(readable, "Continue using the completed tool results.")
 				if accountType == service.AccountTypeOAuth {
@@ -749,6 +932,12 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 					r.Header.Get("ChatGPT-Account-ID") == "fixture-chatgpt-B" &&
 					gjson.GetBytes(body, "stream").Bool() && gjson.GetBytes(body, "store").Type == gjson.False &&
 					gjson.GetBytes(body, `input.#(role==system)`).Type == gjson.Null
+			}
+			if pointer == "message_namespace" {
+				valid = valid && !gjson.GetBytes(body, "input.0.namespace").Exists()
+			}
+			if pointer == "internal_metadata" && accountType == service.AccountTypeOAuth {
+				valid = valid && !gjson.GetBytes(body, "input.0.internal_chat_message_metadata_passthrough").Exists()
 			}
 			if n == 3 {
 				valid = valid && httpRebuildToolPair(body, "run_tests", httpRebuildCheck)
@@ -808,6 +997,13 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 	for i, label := range []string{"A", "B"} {
 		accounts[i].Credentials = map[string]any{"base_url": provider.URL, "api_key": "fixture-rebuild-" + label, "access_token": "fixture-rebuild-" + label, "chatgpt_account_id": "fixture-chatgpt-" + label}
 	}
+	if pointer == "passthrough" {
+		accounts[1].Extra = map[string]any{"openai_passthrough": true, "openai_responses_mode": "force_responses"}
+	}
+	accounts = append(accounts, option.extraAccounts...)
+	if option.accounts != nil {
+		option.accounts(accounts)
+	}
 	var settingsRepo service.SettingRepository = &omit409SettingsRepo{enabled: boundary != "strict"}
 	if pointer == "timezone" {
 		settingsRepo = &httpRebuildTimezoneSettings{omit409SettingsRepo{enabled: true}}
@@ -819,21 +1015,40 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 			require.NoError(t, service.ValidateOpenAIRequestTimezoneExtra(accounts[i].Platform, accounts[i].Extra))
 		}
 	}
+	if option.settings != nil {
+		settingsRepo = option.settings
+	}
 	settings := service.NewSettingService(settingsRepo, cfg)
 	usage := &readable409UsageRepo{}
 	h := newOpenAIResponsesFailoverTestHandlerWithUsage(t, transport, repository.NewGatewayCache(clients()), settings, usage, accounts...)
 	h.cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	if option.gateway != nil {
+		option.gateway(h, accounts, transport, repository.NewGatewayCache(clients()), settings, usage)
+	}
 	template, _ := newIssue715Context(t, "{}")
+	if option.apiKey != nil {
+		option.apiKey(template.Keys[string(middleware.ContextKeyAPIKey)].(*service.APIKey))
+	}
 	done := make(chan struct{}, 1)
 	var sessions []string
 	pendingBeforeWrite := false
 	var observeErr error
 	router := gin.New()
+	if authenticated {
+		key := template.Keys[string(middleware.ContextKeyAPIKey)].(*service.APIKey)
+		key.Key, key.Status, key.UserID = "fixture-issue854-http", service.StatusActive, key.User.ID
+		key.User.Status = service.StatusActive
+		key.Group.Status, key.Group.Hydrated = service.StatusActive, true
+		h.apiKeyService = service.NewAPIKeyService(&wsRevalidationKeyRepoStub{current: key}, nil, nil, nil, nil, nil, cfg)
+		router.Use(gin.HandlerFunc(middleware.NewAPIKeyAuthMiddleware(h.apiKeyService, nil, cfg)))
+	}
 	router.POST("/v1/responses", func(c *gin.Context) {
 		defer func() { done <- struct{}{} }()
 		sessions = append(sessions, c.GetHeader("session_id"))
-		for key, value := range template.Keys {
-			c.Set(key, value)
+		if !authenticated {
+			for key, value := range template.Keys {
+				c.Set(key, value)
+			}
 		}
 		if c.GetHeader("X-Fixture-Foreign-User") == "true" {
 			c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 101})
@@ -878,6 +1093,9 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 			}
 			body["tools"] = append(httpRebuildToolDefinitions(), webSearch)
 		}
+		if previous.Exists() && checkNativeInput {
+			history = httpRebuildNativeInputHistory(t, history, pointer)
+		}
 		if previous.Exists() && pointer == "reasoning_display" {
 			reasoning := httpRebuildJSON(map[string]any{
 				"type": "reasoning", "encrypted_content": "fixture-reasoning-encrypted-display",
@@ -907,12 +1125,44 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 			delete(body, "tools")
 			body["parallel_tool_calls"] = true
 		}
+		if previous.Exists() {
+			history = append([]string(nil), history...)
+			if pointer == "passthrough" && previous.Get("id").String() == "resp_rebuild_B" {
+				filtered := history[:0]
+				for _, item := range history {
+					if item != httpRebuildAgentA {
+						filtered = append(filtered, item)
+					}
+				}
+				history = filtered // only B's established opaque owner remains
+			}
+			var field string
+			switch pointer {
+			case "message_namespace":
+				field = "namespace"
+			case "internal_metadata":
+				field = "internal_chat_message_metadata_passthrough"
+			}
+			if field != "" {
+				updated, err := sjson.Set(history[0], field, "fixture-output-metadata")
+				require.NoError(t, err)
+				history[0] = updated
+			}
+			if pointer == "tool_schema_null" {
+				declarations := httpRebuildToolDefinitions()
+				declarations[0].(map[string]any)["parameters"].(map[string]any)["type"] = nil
+				body["tools"] = declarations
+			}
+		}
 		body["input"] = json.RawMessage("[" + strings.Join(history, ",") + "]")
 		if previous.Exists() && (pointer == "previous" || boundary == "pointer_only") {
 			body["previous_response_id"] = previous.Get("id").String()
 		}
 		if previous.Exists() && pointer == "conversation" {
 			body["conversation"] = map[string]any{"id": previous.Get("conversation.id").String()}
+		}
+		if option.request != nil {
+			option.request(body, previous.Exists())
 		}
 		req, err := http.NewRequest(http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(httpRebuildJSON(body)))
 		require.NoError(t, err)
@@ -921,6 +1171,12 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 		if strings.HasPrefix(pointer, "web_search_") {
 			req.Header.Set("User-Agent", "codex_cli_rs/0.99.0")
 			req.Header.Set("originator", "codex_cli_rs")
+		}
+		if authenticated {
+			req.Header.Set("Authorization", "Bearer fixture-issue854-http")
+		}
+		if option.headers != nil {
+			option.headers(req)
 		}
 		if boundary == "foreign_user" && previous.Exists() {
 			req.Header.Set("X-Fixture-Foreign-User", "true")
@@ -984,13 +1240,26 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 	} else {
 		accounts[0].Schedulable = false
 	}
+	if option.afterFirst != nil {
+		option.afterFirst(accounts)
+	}
+	cooldownUntil := time.Now().Add(7 * 24 * time.Hour)
+	if ownerCooldown {
+		accounts[0].Schedulable = true
+		if boundary == "rate_limited" {
+			accounts[0].RateLimitResetAt = &cooldownUntil
+		} else {
+			accounts[0].OverloadUntil = &cooldownUntil
+		}
+	}
 	disabled, err := (openAIImagesFailoverAccountRepo{accounts: accounts}).GetByID(context.Background(), 1)
 	require.NoError(t, err)
+	require.False(t, disabled.IsSchedulable())
 	if rateLimited {
 		require.True(t, disabled.Schedulable, "temporary quota exhaustion must not disable A")
 		require.True(t, disabled.RateLimitResetAt.After(time.Now()))
 	} else {
-		require.False(t, disabled.Schedulable)
+		require.Equal(t, ownerCooldown, disabled.Schedulable)
 	}
 	switch boundary {
 	case "pointer_only":
@@ -1010,7 +1279,16 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 		accounts[1].Schedulable = false
 	}
 	status, answer = request(history, first)
-	if boundary != "" && !mixed {
+	if option.refuseCode != "" {
+		require.Contains(t, answer, option.refuseCode)
+		require.GreaterOrEqual(t, status, 400)
+		require.Len(t, transport.snapshot(), 1, "unsupported routes must not generate")
+		require.Equal(t, ownersA, issue805Owners(t, observer))
+		require.Equal(t, 1, tools.patches)
+		require.Zero(t, tools.verifications)
+		return
+	}
+	if boundary != "" && !mixed && !ownerCooldown {
 		if boundary == "strict" {
 			if rateLimited {
 				require.Equal(t, http.StatusTooManyRequests, status, answer)
@@ -1140,6 +1418,9 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 	status, answer = request(history, second)
 	require.Equal(t, http.StatusOK, status, "automatic next tool turn must finish: %s", answer)
 	final := issue758CompletedResponse(t, answer, stream)
+	if checkNativeInput {
+		require.Equal(t, "coding-task-complete: Sum(2,3)=5; patch and verification each executed once", final.Get("output.0.content.0.text").String())
+	}
 	if pointer == "reasoning_display" {
 		httpRebuildReasoningDisplayOutput(t, final)
 		assert.Equal(t, "coding-task-complete: Sum(2,3)=5; patch and verification each executed once", final.Get("output.0.content.0.text").String(), "legitimate final assistant answer must remain intact")
@@ -1153,7 +1434,13 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 		require.True(t, accounts[0].Schedulable, "recovery must not permanently disable A")
 		require.Equal(t, disabled.RateLimitResetAt, accounts[0].RateLimitResetAt, "recovery must not clear the original cooldown")
 	} else {
-		require.False(t, accounts[0].Schedulable)
+		require.Equal(t, ownerCooldown, accounts[0].Schedulable, "continuation must not change the owner's scheduling flag")
+	}
+	if boundary == "rate_limited" {
+		require.Equal(t, cooldownUntil, *accounts[0].RateLimitResetAt)
+	}
+	if boundary == "overloaded" {
+		require.Equal(t, cooldownUntil, *accounts[0].OverloadUntil)
 	}
 	wires = transport.snapshot()
 	require.Len(t, wires, 3, "one A generation and exactly two B generations")
@@ -1174,7 +1461,11 @@ func runHTTPRebuildFixture(t *testing.T, accountType string, stream bool, pointe
 	defer mu.Unlock()
 	require.Len(t, providerBodies, 3)
 	for i, wire := range wires {
-		require.JSONEq(t, string(wire.body), string(providerBodies[i]), "provider must receive the final builder payload unchanged")
+		expected := wire.body
+		if option.physicalBody != nil {
+			expected = option.physicalBody(t, expected, i)
+		}
+		require.JSONEq(t, string(expected), string(providerBodies[i]), "provider must receive exactly the declared physical projection")
 		require.Equal(t, wire.header.Get("Authorization"), providerHeaders[i].Get("Authorization"))
 	}
 }

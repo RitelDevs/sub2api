@@ -1,4 +1,18 @@
 export default {
+  "providerBalanceSource": "供應商平台餘額",
+  "providerRefreshDisabled": "供應商定時重新整理未開啟，請在渠道運維中設定。",
+  "manageProviderBalance": "查看／重新整理供應商餘額",
+  "linkProvider": "關聯供應商餘額",
+  "providerBalanceHint": "選擇渠道運維中的供應商後，整組共用該平台的餘額；從供應商導入的 Key 自動歸組。提醒閾值與收件人在帳戶運維中配置。",
+  "memberBalanceSource": "使用組內首個帳戶餘額",
+  "loadProviders": "載入供應商",
+  "providersUnavailable": "供應商目錄讀取失敗，請重試。",
+
+  "oauthLifecycle": "帳戶用途",
+  "oauthTemporary": "速拋／臨時號",
+  "oauthLongTerm": "長期號",
+  "sharedBalanceHint": "共用渠道餘額，以首個帳戶為採集來源；同一次事件只通知一次。",
+
   "directEditHint": "直接編輯每組規則；勾選多組可批量修改",
   "manageGroups": "管理分組",
   "failureSettingsSummary": "請求失敗提醒與重複間隔",
@@ -25,7 +39,7 @@ export default {
   "enabledHint": "啟用已選擇的失敗提醒和帳戶閾值規則。",
   "recipient": "收件電郵",
   "emailRequired": "請輸入收件電郵。",
-  "recipientHint": "帳戶提醒會發送到此電郵。",
+  "recipientHint": "最多 10 個電郵地址，以換行、逗號或分號分隔。重複地址只發送一次；同一渠道的一次提醒會分別發送給各位收件人。",
   "alertTypes": "請求失敗提醒",
   "balance_low": "餘額不足",
   "balanceHint": "上游請求明確返回餘額或信用餘額不足。",

@@ -308,6 +308,14 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		forwardStart := time.Now()
 
 		forwardBody := openAIModelMappedBody(body, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
+		if err := h.gatewayService.CheckDeepSeekTokenRequestPricing(c.Request.Context(), apiKey, account,
+			reqModel, forwardModel, clientRequestedUsageFields(c, channelMapping, reqModel, ""), pricingAt); err != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "model_pricing_unavailable", "Model pricing is unavailable", streamStarted)
+			return
+		}
 		writerSizeBeforeForward := c.Writer.Size()
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {
@@ -317,6 +325,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			}()
 			return h.gatewayService.ForwardAsChatCompletions(rpmAdmission.forwardContext(c.Request.Context(), account), c, account, forwardBody, promptCacheKey, "")
 		}()
+		if service.IsUpstreamModerationDenied(err) {
+			return
+		}
 		if retryOpenAIInitialAdmission(c, err, result, body, account.ID, failedAccountIDs, &switchCount, maxAccountSwitches) {
 			lastAdmissionErr = err
 			reqLog.Info("openai_chat_completions.admission_reselecting", zap.Int64("account_id", account.ID), zap.Int("switch_count", switchCount))

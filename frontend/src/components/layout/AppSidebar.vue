@@ -101,6 +101,8 @@ const tabNotices: Record<string, string> = {
   '/admin/ai-ops': NEW_FEATURE_NOTICES.aiOpsCodex,
   '/admin/auto-config': NEW_FEATURE_NOTICES.oauthInitialModelSelection,
   '/admin/account-quality': NEW_FEATURE_NOTICES.qualityRetestRest,
+  '/admin/channel-operations': NEW_FEATURE_NOTICES.matureProviders,
+  '/admin/qqbot/overview': NEW_FEATURE_NOTICES.qqCommunity,
 }
 
 function tabNoticeIds(tab: ConsoleTab): string[] {

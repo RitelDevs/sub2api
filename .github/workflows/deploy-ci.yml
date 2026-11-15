@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main, production]
-    paths: ['deploy/**', '.github/release-tools/**', '.github/workflows/deploy-ci.yml']
+    paths: ['deploy/**', '.github/release-tools/**', '.github/workflows/release.yml', '.goreleaser*.yaml', 'Dockerfile*', 'Makefile', '.github/workflows/deploy-ci.yml']
   pull_request:
-    paths: ['deploy/**', '.github/release-tools/**', '.github/workflows/deploy-ci.yml']
+    paths: ['deploy/**', '.github/release-tools/**', '.github/workflows/release.yml', '.goreleaser*.yaml', 'Dockerfile*', 'Makefile', '.github/workflows/deploy-ci.yml']
 
 permissions:
   contents: read

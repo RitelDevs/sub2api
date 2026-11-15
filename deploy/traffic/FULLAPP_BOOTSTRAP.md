@@ -8,7 +8,7 @@
 
 生产已经有 `CONFIG_FILE` 明确配置文件路径、`SKIP_SETUP` 和 gateway 角色，因此本轮无需修改应用运行策略。测试补齐下面的安全初始化夹具，而不是调用生产地址或用假 HTTP server冒充完整应用：
 
-- 复用现有隔离 CI 的 PostgreSQL `18.1-alpine3.23` 和 Redis `8.4-alpine` 版本。每轮创建唯一容器名和独占 Docker `--internal` 网络，两应用只连接该网络；镜像在启动前拉取，记录实际 image ID，版本标签不声称不可变 digest。
+- 复用现有隔离 CI 的 PostgreSQL `18.1-alpine3.23` 和 Redis `8.4-alpine` 版本。工作流统一拉取三种 fixture 镜像一次；直接运行脚本时也须先准备这些镜像。每轮仍创建唯一容器名和独占 Docker `--internal` 网络，两应用只连接该网络，并记录实际 image ID，版本标签不声称不可变 digest。
 - 在临时目录生成共享测试 JWT/TOTP、独占 DB 密码及最小 JSON 格式 YAML 配置，权限 0600。不读取已有 config.yaml、环境文件、密钥、数据库或客户记录；不给容器 GitHub token、宿主环境或 Docker socket。
 - 为两个真实应用提供各自全新目录、本地合成 `gpt-6.1-sol` 零定价文件、关闭远程定价 URL/hash。空数据库没有模型账号、用户或 API Key，不存在真实模型出口；网络层还阻断应用的外部网络。不会借本地代理连接生产。
 - 两个实际二进制容器使用宿主测试 UID/GID、只读根文件系统、移除全部 capability、禁止提权、有限 tmpfs 和进程数；每应用 memory/swap 同为 512MiB。PG 384MiB、Redis 96MiB、Caddy 256MiB，也禁止额外 swap。这些是容器硬限制，不能与 Go 的软内存提示混淆。编译只在远端 runner 单槽执行，未声称编译进程峰值低于 1GiB。

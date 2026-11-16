@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"go.uber.org/zap"
 	"net/http"
 
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
@@ -28,8 +30,14 @@ func RejectRequestBodyMemoryOverload(c *gin.Context, err error) bool {
 	if !errors.Is(err, pkghttputil.ErrRequestBodyMemoryBudget) {
 		return false
 	}
+	snapshot := pkghttputil.RequestBodyMemorySnapshot(c.Request.Context())
+	logger.L().Warn("gateway request memory admission rejected",
+		zap.Int64("budget_bytes", snapshot.LimitBytes),
+		zap.Int64("used_bytes", snapshot.UsedBytes),
+		zap.Int64("peak_bytes", snapshot.PeakBytes),
+		zap.Uint64("rejections", snapshot.Rejected))
 	c.Header("Retry-After", "1")
-	groupModelAllowlistErrorWriter(c)(c, http.StatusServiceUnavailable, "Request body buffering capacity is exhausted; retry later")
+	groupModelAllowlistErrorWriter(c)(c, http.StatusServiceUnavailable, "Request memory capacity is exhausted; retry later")
 	c.Abort()
 	return true
 }

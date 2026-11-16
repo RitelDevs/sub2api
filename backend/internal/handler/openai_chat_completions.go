@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"net/http"
 	"strconv"
 	"strings"
@@ -62,6 +63,13 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		return
 	}
+	memoryCtx, releaseMemory, memoryErr := pkghttputil.WithRequestBodyProcessing(c.Request.Context(), body, service.OpenAINativeProcessingCopies)
+	if middleware2.RejectRequestBodyReadError(c, memoryErr) {
+		return
+	}
+	defer releaseMemory()
+	c.Request = c.Request.WithContext(memoryCtx)
+
 	if len(body) == 0 {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return
@@ -325,6 +333,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			}()
 			return h.gatewayService.ForwardAsChatCompletions(rpmAdmission.forwardContext(c.Request.Context(), account), c, account, forwardBody, promptCacheKey, "")
 		}()
+		if h.rejectOpenAIProcessingMemory(c, result, err, streamStarted, false) {
+			return
+		}
 		if service.IsUpstreamModerationDenied(err) {
 			return
 		}

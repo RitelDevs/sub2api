@@ -65,11 +65,19 @@ func decodeOpenAIWSHTTPBridgeLoweredTools(raw json.RawMessage) []any {
 }
 
 func openAIWSHTTPBridgeRawField(body []byte, name string) (json.RawMessage, bool) {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(body, &fields); err != nil {
+	if !gjson.ValidBytes(body) {
 		return nil, false
 	}
-	raw, present := fields[name]
+	// Keep last duplicate-key semantics without copying every unrelated field.
+	var raw string
+	present := false
+	gjson.Parse(openAIWSPayloadStringView(body)).ForEach(func(key, value gjson.Result) bool {
+		if key.String() == name {
+			raw = value.Raw
+			present = true
+		}
+		return true
+	})
 	return append(json.RawMessage(nil), raw...), present
 }
 
@@ -251,8 +259,10 @@ func prepareOpenAIWSHTTPBridgeBody(account *Account, payload []byte) ([]byte, er
 }
 
 func prepareOpenAIWSHTTPBridgeSessionBody(account *Account, payload []byte, preservePrevious bool) ([]byte, error) {
-	var body map[string]any
-	if err := decodeOpenAIJSONUseNumber(payload, &body); err != nil {
+	// Keep large input/history opaque. Decoding map[string]any expands every
+	// history object just to delete a few top-level fields.
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &body); err != nil {
 		return nil, err
 	}
 	if body == nil {
@@ -263,8 +273,30 @@ func prepareOpenAIWSHTTPBridgeSessionBody(account *Account, payload []byte, pres
 	if !preservePrevious {
 		delete(body, "previous_response_id")
 	}
-	deleteOpenAIResponsesNoneReasoningEffortFromObject(account, body)
-	body["stream"] = true
+	if !shouldPreserveOpenAIResponsesNoneReasoningEffort(account) {
+		if effort := gjson.ParseBytes(body["reasoning_effort"]); effort.Type == gjson.String && strings.EqualFold(strings.TrimSpace(effort.String()), "none") {
+			delete(body, "reasoning_effort")
+		}
+		if raw := body["reasoning"]; gjson.ParseBytes(raw).IsObject() {
+			var reasoning map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &reasoning); err != nil {
+				return nil, err
+			}
+			if effort := gjson.ParseBytes(reasoning["effort"]); effort.Type == gjson.String && strings.EqualFold(strings.TrimSpace(effort.String()), "none") {
+				delete(reasoning, "effort")
+			}
+			if len(reasoning) == 0 {
+				delete(body, "reasoning")
+			} else {
+				encoded, err := json.Marshal(reasoning)
+				if err != nil {
+					return nil, err
+				}
+				body["reasoning"] = encoded
+			}
+		}
+	}
+	body["stream"] = json.RawMessage("true")
 	return json.Marshal(body)
 }
 

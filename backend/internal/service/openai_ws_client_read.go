@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
@@ -71,7 +72,7 @@ func readOpenAIWSClientMessageWithTimeoutStart(
 
 	readDone := make(chan openAIWSClientReadResult, 1)
 	go func() {
-		messageType, payload, err := conn.Read(context.Background())
+		messageType, payload, err := readOpenAIWSBudgetedFrame(controlCtx, conn)
 		readDone <- openAIWSClientReadResult{messageType: messageType, payload: payload, err: err, receivedAt: requesttiming.Now(controlCtx)}
 	}()
 
@@ -113,6 +114,11 @@ func readOpenAIWSClientMessageWithTimeoutStart(
 	for {
 		select {
 		case result := <-readDone:
+			if errors.Is(result.err, pkghttputil.ErrRequestBodyMemoryBudget) {
+				_ = conn.Close(coderws.StatusTryAgainLater, "request memory capacity exhausted")
+				_ = conn.CloseNow()
+				return 0, nil, openAIWSMemoryError(result.err)
+			}
 			if result.err == nil {
 				if arrival, ok := controlCtx.Value(openAIWSFrameArrivalKey{}).(*time.Time); ok {
 					*arrival = result.receivedAt

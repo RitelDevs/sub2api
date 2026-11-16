@@ -546,3 +546,11 @@ func hasJSONControlBytes(body []byte) bool {
 	}
 	return false
 }
+
+// ReadBodyWithMemoryBudget meters bounded chunks before allocation. The caller
+// supplies the protocol's size-limited reader (e.g. websocket.Conn.Reader) and
+// owns the reservation scope. It deliberately performs no HTTP request capture.
+func ReadBodyWithMemoryBudget(ctx context.Context, reader io.Reader) ([]byte, error) {
+	result, err := readRequestBodyChunksWithBudget(ctx, reader, requestBodyReadInitCap, -1, nil)
+	return result.data, err
+}

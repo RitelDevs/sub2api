@@ -1,0 +1,4 @@
+ok  	github.com/Wei-Shaw/sub2api/internal/pkg/httputil	0.103s
+ok  	github.com/Wei-Shaw/sub2api/internal/config	0.060s
+ok  	github.com/Wei-Shaw/sub2api/internal/service	7.172s
+ok  	github.com/Wei-Shaw/sub2api/internal/handler	1.193s

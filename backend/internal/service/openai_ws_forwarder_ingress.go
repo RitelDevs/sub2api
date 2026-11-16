@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"net/http"
 	"net/url"
 	"strings"
@@ -26,6 +27,7 @@ const openAIWSUsageDrainTimeout = 1200 * time.Millisecond
 var errOpenAIWSUsageDrainExpired = errors.New("websocket client usage drain expired")
 
 type openAIWSClientRead struct {
+	release     func()
 	receivedAt  time.Time
 	messageType coderws.MessageType
 	payload     []byte
@@ -47,8 +49,9 @@ type openAIWSIngressReader struct {
 
 	// waitFrames preserves non-control client frames consumed while one turn
 	// waits for key admission. read() drains them first.
-	waitMu     sync.Mutex
-	waitFrames []openAIWSClientRead
+	waitMu        sync.Mutex
+	waitFrames    []openAIWSClientRead
+	activeRelease func()
 	// waitFrameMode is set per upstream attempt before its relay starts. The
 	// first key wait runs before any account (and therefore ingress mode) is
 	// chosen, so it stays unknown there: only a cancel for the pending turn is
@@ -175,6 +178,7 @@ func (r *openAIWSIngressReader) popWaitFrame() (openAIWSClientRead, bool) {
 		return openAIWSClientRead{}, false
 	}
 	frame := r.waitFrames[0]
+	r.waitFrames[0] = openAIWSClientRead{}
 	r.waitFrames = r.waitFrames[1:]
 	return frame, true
 }
@@ -346,12 +350,18 @@ func WaitOpenAIWSKeyAdmission(
 		case frame := <-frames:
 			switch openAIWSAdmissionWaitFrame(waitFrameMode, frame) {
 			case openAIWSAdmissionFrameCancel:
+				if frame.release != nil {
+					frame.release()
+				}
 				return settleCancel(NewOpenAIWSClientCloseError(
 					coderws.StatusNormalClosure,
 					"pending response canceled while waiting for API key concurrency slot",
 					nil,
 				))
 			case openAIWSAdmissionFrameOverlap:
+				if frame.release != nil {
+					frame.release()
+				}
 				return settleCancel(NewOpenAIWSClientCloseError(
 					coderws.StatusPolicyViolation,
 					"overlapping response.create is not supported",
@@ -359,6 +369,9 @@ func WaitOpenAIWSKeyAdmission(
 				))
 			default:
 				if !reader.preserveWaitFrame(frame) {
+					if frame.release != nil {
+						frame.release()
+					}
 					// Bounded backlog: stop consuming; overflow policy then ends
 					// the connection instead of growing another queue.
 					frames = nil
@@ -408,14 +421,22 @@ func openAIWSGetIngressReader(c *gin.Context, conn *coderws.Conn) *openAIWSIngre
 	go func() {
 		defer close(r.done)
 		for {
-			kind, payload, err := conn.Read(context.Background())
+			frameCtx, releaseFrame := pkghttputil.WithRequestBodyMemoryScope(clockCtx)
+			kind, payload, err := readOpenAIWSBudgetedFrame(frameCtx, conn)
 			if err != nil {
+				releaseFrame()
 				r.err = err
+				if errors.Is(err, pkghttputil.ErrRequestBodyMemoryBudget) {
+					r.err = openAIWSMemoryError(err)
+					_ = conn.Close(coderws.StatusTryAgainLater, "request memory capacity exhausted")
+					_ = conn.CloseNow()
+				}
 				return
 			}
 			select {
-			case r.frames <- openAIWSClientRead{messageType: kind, payload: payload, receivedAt: requesttiming.Now(clockCtx)}:
+			case r.frames <- openAIWSClientRead{messageType: kind, payload: payload, receivedAt: requesttiming.Now(clockCtx), release: releaseFrame}:
 			default:
+				releaseFrame()
 				// Blocking on this queue would stop reading close frames while
 				// upstream/audit work is stalled. Bound the backlog and send an
 				// explicit policy close; Close owns the handshake read here.
@@ -467,8 +488,7 @@ func (r *openAIWSIngressReader) read(ctx context.Context) (coderws.MessageType, 
 	for {
 		// Frames preserved during a key wait keep their original order.
 		if frame, ok := r.popWaitFrame(); ok {
-			r.lastReadAt.Store(&frame.receivedAt)
-			return frame.messageType, frame.payload, nil
+			return r.takeFrame(frame)
 		}
 		select {
 		case <-r.done:
@@ -481,8 +501,7 @@ func (r *openAIWSIngressReader) read(ctx context.Context) (coderws.MessageType, 
 		case <-r.done:
 			return 0, nil, r.err
 		case frame := <-r.frames:
-			r.lastReadAt.Store(&frame.receivedAt)
-			return frame.messageType, frame.payload, nil
+			return r.takeFrame(frame)
 		}
 	}
 }
@@ -573,6 +592,15 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	firstClientMessage []byte,
 	hooks *OpenAIWSIngressHooks,
 ) (returnErr error) {
+	memoryCtx, releaseMemory, memoryErr := beginOpenAIRequestMemory(ctx, firstClientMessage, false)
+	if memoryErr != nil {
+		return openAIWSMemoryError(memoryErr)
+	}
+	defer releaseMemory()
+	ctx = memoryCtx
+	// Original first payload/normalization can remain referenced by seed state.
+	retainedMemoryBytes := int64(len(firstClientMessage)) * 2
+	replayMemory := &openAIWSReplayMemory{}
 	ctx = s.withRequestTimezoneEgress(ctx, account)
 	if hooks != nil && hooks.ObserveOperationSource != nil {
 		ctx = context.WithValue(ctx, openAIWSOperationSourceKey{}, hooks.ObserveOperationSource)
@@ -882,6 +910,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	parseClientPayload := func(turn int, raw []byte) (openAIWSClientPayload, error) {
+		if err := ensureOpenAIWSProcessingMemory(ctx, raw, retainedMemoryBytes); err != nil {
+			return openAIWSClientPayload{}, err
+		}
 		clientPayloadRaw := append([]byte(nil), raw...)
 		prepared, prepareErr := agentRecovery.prepareReadable(account, raw)
 		if prepareErr != nil {
@@ -1244,6 +1275,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if hooks != nil && hooks.TurnStarted != nil {
 			hooks.TurnStarted(nextTurn, turnArrivedAt)
 		}
+		if err := ensureOpenAIWSProcessingMemory(ctx, payload, retainedMemoryBytes); err != nil {
+			return nil, err
+		}
 		return payload, nil
 	}
 
@@ -1440,6 +1474,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				needsBridgeReplay,
 			)
 			if needsBridgeReplay && turnReplayInputExists {
+				if err := ensureOpenAIWSReplayProcessingMemory(ctx, currentBridgePayload.payloadRaw, turnReplayInput, retainedMemoryBytes); err != nil {
+					return err
+				}
 				updatedPayload, setInputErr := setOpenAIWSPayloadInputSequence(
 					currentBridgePayload.payloadRaw,
 					turnReplayInput,
@@ -1521,6 +1558,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 				var failoverErr *UpstreamFailoverError
 				if turn > 1 && errors.As(bridgeErr, &failoverErr) && failoverErr != nil {
+					if err := ensureOpenAIWSReplayProcessingMemory(ctx, currentBridgePayload.accountIdentitySourceRaw, turnAccountFailoverInput, retainedMemoryBytes); err != nil {
+						return err
+					}
 					retryPayload, retrySafe, retryPayloadErr := buildOpenAIWSCurrentTurnRetryPayload(
 						currentBridgePayload.accountIdentitySourceRaw,
 						turnAccountFailoverInput,
@@ -1569,6 +1609,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if responseID != "" && stateStore != nil {
 				ttl := s.openAIWSResponseStickyTTL()
 				logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, stateStore.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl))
+			}
+			retainedMemoryBytes = int64(len(firstClientMessage))*2 + replayMemory.measure([][]json.RawMessage{bridgeReplayInput, bridgeAccountFailoverInput}, currentBridgePayload.payloadRaw)
+			if err := resizeOpenAIWSProcessingMemory(ctx, currentBridgePayload.payloadRaw, retainedMemoryBytes); err != nil {
+				return err
 			}
 			nextClientMessage, readErr := readClientMessage(turn + 1)
 			if readErr != nil {
@@ -2657,6 +2701,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			currentTurnReplayInput = nextReplayInput
 			currentTurnReplayInputExists = nextReplayInputExists
 		}
+		if currentTurnReplayInputExists {
+			if err := ensureOpenAIWSReplayProcessingMemory(ctx, currentPayload, currentTurnReplayInput, retainedMemoryBytes); err != nil {
+				return err
+			}
+		}
 		replayHasFunctionCallOutput := currentTurnReplayInputExists &&
 			openAIWSRawItemsHasFunctionCallOutput(currentTurnReplayInput)
 		hasFunctionCallOutput = hasFunctionCallOutput || replayHasFunctionCallOutput
@@ -3083,6 +3132,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			preferredConnID = connID
 		}
 
+		retainedMemoryBytes = int64(len(firstClientMessage))*2 + replayMemory.measure([][]json.RawMessage{lastTurnReplayInput}, currentPayload) + int64(len(lastTurnPayload))
+		if err := resizeOpenAIWSProcessingMemory(ctx, currentPayload, retainedMemoryBytes); err != nil {
+			return err
+		}
 		nextClientMessage, readErr := readClientMessage(turn + 1)
 		if readErr != nil {
 			if isOpenAIWSSessionPreempted(ctx) {

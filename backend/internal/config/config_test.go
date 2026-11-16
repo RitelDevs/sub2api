@@ -32,8 +32,10 @@ func stubMemoryLimit(t *testing.T, limit uint64) {
 }
 
 func TestAutoRequestBodyMemoryBudget(t *testing.T) {
+	require.Equal(t, int64(300<<20), autoRequestBodyMemoryBudget(1200<<20))
+	require.Equal(t, int64(1), autoRequestBodyMemoryBudget(1))
 	require.Equal(t, int64(1<<30), autoRequestBodyMemoryBudget(0))
-	require.Equal(t, int64(1<<30), autoRequestBodyMemoryBudget(2<<30))
+	require.Equal(t, int64(512<<20), autoRequestBodyMemoryBudget(2<<30))
 	require.Equal(t, int64(2<<30), autoRequestBodyMemoryBudget(8<<30))
 	require.Equal(t, int64(32<<30), autoRequestBodyMemoryBudget(128<<30))
 	require.Equal(t, int64(math.MaxUint64/4), autoRequestBodyMemoryBudget(math.MaxUint64))

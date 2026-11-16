@@ -11,12 +11,14 @@ import (
 var ErrRequestBodyMemoryBudget = errors.New("request body memory budget exhausted")
 
 // BodyMemoryBudget bounds buffered ingress allocations across requests. It
-// counts chunks, their contiguous copy, decoded output and the decoder window;
-// it is not a bound on the application's total heap or protocol conversion.
+// counts ingress buffers and explicit processing/WS reservations. Processing
+// reservations are estimates; this is not a bound on the application's total heap.
 type BodyMemoryBudget struct {
-	mu    sync.Mutex
-	limit int64
-	used  int64
+	mu       sync.Mutex
+	limit    int64
+	used     int64
+	peak     int64
+	rejected uint64
 }
 
 func NewBodyMemoryBudget(limit int64) *BodyMemoryBudget {
@@ -150,9 +152,11 @@ func reserveBodyMemory(ctx context.Context, n int64) error {
 	r.budget.mu.Lock()
 	defer r.budget.mu.Unlock()
 	if n > r.budget.limit-r.budget.used {
+		r.budget.rejected++
 		return ErrRequestBodyMemoryBudget
 	}
 	r.budget.used += n
+	r.budget.peak = max(r.budget.peak, r.budget.used)
 	r.bytes += n
 	return nil
 }
@@ -182,4 +186,29 @@ func releaseRequestBodyMemory(ctx context.Context, n int64) {
 	r.budget.used -= n
 	r.budget.mu.Unlock()
 	r.bytes -= n
+}
+
+// BodyMemoryBudgetSnapshot is payload-free and shares the budget's existing lock.
+type BodyMemoryBudgetSnapshot struct {
+	LimitBytes int64
+	UsedBytes  int64
+	PeakBytes  int64
+	Rejected   uint64
+}
+
+func (b *BodyMemoryBudget) Snapshot() BodyMemoryBudgetSnapshot {
+	if b == nil {
+		return BodyMemoryBudgetSnapshot{}
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return BodyMemoryBudgetSnapshot{b.limit, b.used, b.peak, b.rejected}
+}
+
+func RequestBodyMemorySnapshot(ctx context.Context) BodyMemoryBudgetSnapshot {
+	r, _ := ctx.Value(bodyMemoryReservationKey{}).(*bodyMemoryReservation)
+	if r == nil {
+		return BodyMemoryBudgetSnapshot{}
+	}
+	return r.budget.Snapshot()
 }

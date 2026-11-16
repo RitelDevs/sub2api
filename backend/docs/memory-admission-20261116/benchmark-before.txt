@@ -1,0 +1,19 @@
+2026/11/16 12:30:28 Timezone initialized: UTC (UTC offset: +00:00)
+goos: linux
+goarch: amd64
+pkg: github.com/Wei-Shaw/sub2api/internal/service
+cpu: Intel(R) Core(TM) i9-14900HX
+BenchmarkOpenAIRequestMemory/bridge/text/32MiB-20         	       1	 260033140 ns/op	 129.04 MB/s	         4.501 peak-extra/input	167793048 B/op	     134 allocs/op
+BenchmarkOpenAIRequestMemory/responses_chat/text/32MiB-20 	       1	 973555173 ns/op	  34.47 MB/s	        10.00 peak-extra/input	838953648 B/op	     669 allocs/op
+BenchmarkOpenAIRequestMemory/bridge/image/32MiB-20        	       1	 187874712 ns/op	 178.60 MB/s	         4.501 peak-extra/input	167791848 B/op	     121 allocs/op
+BenchmarkOpenAIRequestMemory/responses_chat/image/32MiB-20         	       1	1095440300 ns/op	  30.63 MB/s	        10.00 peak-extra/input	838918656 B/op	     268 allocs/op
+BenchmarkOpenAIRequestMemory/bridge/dense/32MiB-20                 	       1	2764035936 ns/op	  12.14 MB/s	        16.66 peak-extra/input	743548368 B/op	 9034117 allocs/op
+BenchmarkOpenAIRequestMemory/responses_chat/dense/32MiB-20         	       1	7421521488 ns/op	   4.52 MB/s	        18.27 peak-extra/input	2235184968 B/op	27532415 allocs/op
+BenchmarkOpenAIRequestMemory/bridge/text/64MiB-20                  	       1	 482614211 ns/op	 139.05 MB/s	         4.500 peak-extra/input	335564424 B/op	     125 allocs/op
+BenchmarkOpenAIRequestMemory/responses_chat/text/64MiB-20          	       1	1908700605 ns/op	  35.16 MB/s	        10.00 peak-extra/input	1677767616 B/op	     162 allocs/op
+BenchmarkOpenAIRequestMemory/bridge/image/64MiB-20                 	       1	 379915875 ns/op	 176.64 MB/s	         4.500 peak-extra/input	335563976 B/op	     121 allocs/op
+BenchmarkOpenAIRequestMemory/responses_chat/image/64MiB-20         	       1	1968633319 ns/op	  34.09 MB/s	        10.00 peak-extra/input	1677768288 B/op	     167 allocs/op
+BenchmarkOpenAIRequestMemory/bridge/dense/64MiB-20                 	       1	5181482978 ns/op	  12.95 MB/s	        16.99 peak-extra/input	1477277456 B/op	18067997 allocs/op
+BenchmarkOpenAIRequestMemory/responses_chat/dense/64MiB-20         	       1	14371242507 ns/op	   4.67 MB/s	        17.99 peak-extra/input	4501370880 B/op	55064273 allocs/op
+PASS
+ok  	github.com/Wei-Shaw/sub2api/internal/service	37.549s

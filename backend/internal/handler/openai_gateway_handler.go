@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"io"
 	"net/http"
@@ -749,6 +750,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
+	memoryCtx, releaseMemory, memoryErr := pkghttputil.WithRequestBodyProcessing(c.Request.Context(), body, service.OpenAINativeProcessingCopies)
+	if middleware2.RejectRequestBodyReadError(c, memoryErr) {
+		return
+	}
+	defer releaseMemory()
+	c.Request = c.Request.WithContext(memoryCtx)
+
 	if len(body) == 0 {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return
@@ -1312,6 +1320,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			}()
 			return h.gatewayService.Forward(rpmAdmission.forwardContext(c.Request.Context(), account), c, account, attemptBody)
 		}()
+		if h.rejectOpenAIProcessingMemory(c, result, err, streamStarted, false) {
+			return
+		}
 		if service.IsUpstreamModerationDenied(err) {
 			return
 		}
@@ -1755,6 +1766,13 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		return
 	}
+	memoryCtx, releaseMemory, memoryErr := pkghttputil.WithRequestBodyProcessing(c.Request.Context(), body, service.OpenAINativeProcessingCopies)
+	if middleware2.RejectRequestBodyReadError(c, memoryErr) {
+		return
+	}
+	defer releaseMemory()
+	c.Request = c.Request.WithContext(memoryCtx)
+
 	if len(body) == 0 {
 		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return
@@ -2025,6 +2043,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			}()
 			return h.gatewayService.ForwardAsAnthropic(rpmAdmission.forwardContext(c.Request.Context(), account), c, account, forwardBody, promptCacheKey, defaultMappedModel)
 		}()
+		if h.rejectOpenAIProcessingMemory(c, result, err, streamStarted, true) {
+			return
+		}
 		if service.IsUpstreamModerationDenied(err) {
 			return
 		}
@@ -3246,6 +3267,14 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 		return
 	}
+	memoryCtx, releaseMemory, memoryErr := pkghttputil.WithRequestBodyProcessing(ctx, firstMessage, service.OpenAINativeProcessingCopies)
+	if memoryErr != nil {
+		closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "request memory capacity exhausted")
+		return
+	}
+	defer releaseMemory()
+	ctx = memoryCtx
+	c.Request = c.Request.WithContext(ctx)
 	firstTurnStartedAt := requesttiming.Now(ctx)
 	if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "unsupported websocket message type")
@@ -3283,6 +3312,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	// client that leaves during admission is observed instead of blocking the
 	// wait until its timeout. The ingress service reuses this same reader.
 	service.EnsureOpenAIWSIngressReader(c, wsConn)
+	defer service.CloseOpenAIWSIngressReader(c)
 	// 分组级模型白名单：首帧校验客户端模型，不通过则关闭连接并标记运维原因。
 	// 必须在合成路由解析和上游模型映射之前执行。
 	// 与 HTTP 准入一致：帧内重复 model 键/大小写变体可能被上游按末值绑定，

@@ -533,11 +533,14 @@ const (
 )
 
 // autoRequestBodyMemoryBudget sizes the unconfigured ingress budget to a
-// quarter of the process memory limit. It never goes below the historical
-// 1 GiB default, so small instances keep their previous behavior.
+// quarter of the process memory limit. Only an unknown limit uses the legacy
+// fallback; a floor larger than a small instance defeats memory admission.
 func autoRequestBodyMemoryBudget(memoryLimitBytes uint64) int64 {
 	// uint64 / 4 always fits in int64.
-	return max(int64(memoryLimitBytes/requestBodyMemoryBudgetDivisor), defaultRequestBodyMemoryBudgetBytes)
+	if memoryLimitBytes == 0 {
+		return defaultRequestBodyMemoryBudgetBytes
+	}
+	return max(int64(memoryLimitBytes/requestBodyMemoryBudgetDivisor), 1)
 }
 
 func hasExplicitConfigOrEnv(configKey, envKey string) bool {
@@ -1294,8 +1297,9 @@ type GatewayConfig struct {
 	OpenAIHighEffortFirstOutputTimeoutSeconds int `mapstructure:"openai_high_effort_first_output_timeout_seconds"`
 	// 请求体最大字节数，用于网关请求体大小限制
 	MaxBodySize int64 `mapstructure:"max_body_size"`
-	// RequestBodyMemoryBudgetBytes bounds buffered ingress allocations per instance; 0 disables it.
-	// When unset in config and env it defaults to 1/4 of the memory limit (at least 1 GiB).
+	// RequestBodyMemoryBudgetBytes bounds ingress buffers and admitted processing/WS
+	// reservations per instance; 0 disables it. Unset defaults to 1/4 of the
+	// effective memory limit; an unknown limit falls back to 1 GiB.
 	RequestBodyMemoryBudgetBytes int64 `mapstructure:"request_body_memory_budget_bytes"`
 	// TextMaxBodySize limits endpoints that cannot carry inline image/video payloads.
 	TextMaxBodySize int64 `mapstructure:"text_max_body_size"`

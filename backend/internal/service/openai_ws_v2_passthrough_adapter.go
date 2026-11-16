@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/requestcapture"
 	"io"
 	"net/http"
@@ -618,8 +619,7 @@ func (c *openAIWSClientFrameConn) ReadFrame(ctx context.Context) (coderws.Messag
 			// Frames preserved while a key wait held this consumer keep their
 			// original order ahead of anything still in the channel.
 			if frame, ok := c.reader.popWaitFrame(); ok {
-				c.reader.lastReadAt.Store(&frame.receivedAt)
-				return frame.messageType, frame.payload, nil
+				return c.reader.takeFrame(frame)
 			}
 			if timeout == nil && c.waitingForNextTurn.Load() && c.interTurnIdleTimeout > 0 {
 				timer = time.NewTimer(c.interTurnIdleTimeout)
@@ -636,8 +636,7 @@ func (c *openAIWSClientFrameConn) ReadFrame(ctx context.Context) (coderws.Messag
 				}
 				return 0, nil, c.reader.err
 			case frame := <-c.reader.frames:
-				c.reader.lastReadAt.Store(&frame.receivedAt)
-				return frame.messageType, frame.payload, nil
+				return c.reader.takeFrame(frame)
 			case <-c.interTurnStarted:
 			case <-timeout:
 				if c.waitingForNextTurn.Load() {
@@ -1097,6 +1096,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		// capturedSessionModel 的读写都发生在该 goroutine 内，因此无需
 		// 加锁/原子化。
 		filter: func(msgType coderws.MessageType, payload []byte) (out []byte, blocked *OpenAIFastBlockedError, filterErr error) {
+			if err := ensureOpenAIWSProcessingMemory(ctx, payload, int64(len(firstClientMessage))*2); err != nil {
+				return nil, nil, err
+			}
 			clientPayload := append([]byte(nil), payload...)
 			if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
 				return payload, nil, nil
@@ -1106,6 +1108,14 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			responseCreateAt := time.Time{}
 			responseFrameAt := time.Time{}
 			acceptedTurn := false
+			defer func() {
+				if acceptedTurn && filterErr == nil && blocked == nil {
+					if err := resizeOpenAIWSProcessingMemory(ctx, out, int64(len(firstClientMessage))*2); err != nil {
+						out = nil
+						filterErr = err
+					}
+				}
+			}()
 			if isResponseCreate {
 				if hooks != nil && hooks.TurnStarted != nil {
 					if received := clientFrameConn.reader.lastReadAt.Load(); received != nil {
@@ -1427,9 +1437,17 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 	upstreamFirstMessageSent = true
 
+	// Written by the sole client reader, consumed after RunEntry joins it.
+	// Preserve the local 1013 while classifying input closure for the existing
+	// bounded usage drain of an already submitted upstream turn.
+	var memoryCloseErr error
 	readNextClientFrame := func(readCtx context.Context, conn openaiwsv2.FrameConn) (coderws.MessageType, []byte, error) {
 		for {
 			msgType, payload, readErr := conn.ReadFrame(readCtx)
+			if errors.Is(readErr, pkghttputil.ErrRequestBodyMemoryBudget) {
+				memoryCloseErr = readErr
+				return msgType, nil, errors.Join(io.EOF, readErr)
+			}
 			if readErr != nil {
 				return msgType, payload, readErr
 			}
@@ -1748,6 +1766,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 
 	turnCount := int(completedTurns.Load())
+	if memoryCloseErr != nil {
+		if turn := activeTurn.Swap(0); turn != 0 && hooks != nil && hooks.AfterTurn != nil {
+			hooks.AfterTurn(int(turn), unfinishedResult, memoryCloseErr)
+		}
+		return memoryCloseErr
+	}
 	if relayExit == nil {
 		logOpenAIWSV2Passthrough(
 			"relay_completed account_id=%d request_id=%s terminal_event=%s duration_ms=%d c2u_frames=%d u2c_frames=%d dropped_frames=%d turns=%d",

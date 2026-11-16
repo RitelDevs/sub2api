@@ -151,6 +151,9 @@ func (h *OpenAIGatewayHandler) runDeepSeekRecovery(c *gin.Context, in deepSeekRe
 			}
 			return res, cause
 		}()
+		if h.rejectOpenAIProcessingMemory(c, result, forwardErr, c.Writer.Written(), in.protocol == "messages") {
+			return
+		}
 		if mark := attempt.Outcome().CyberPolicy; mark != nil && !policyRecorded {
 			policyRecorded = true
 			service.MarkOpsCyberPolicy(child, *mark)

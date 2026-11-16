@@ -1,4 +1,6 @@
-import type { ApiKey } from '@/types'
+import type { ApiKey, GroupPlatform } from '@/types'
+import type { CcsImportApp } from '@/types/ccswitch'
+import { selectCcSwitchModel, type CcSwitchImportContext } from './ccsModelSelection'
 
 type ImportKey = Pick<ApiKey, 'id' | 'name' | 'key' | 'group_id' | 'group_ids' | 'group'>
 type Endpoint = 'chat' | 'responses' | 'anthropic' | 'gemini'
@@ -108,5 +110,60 @@ export function buildMagpieImportLink(input: {
     ...endpoints,
     key
   })
-  return { url: `magpie://import?${query}` }
+  return { url: `https://usemagpie.ai/import#${query}` }
+}
+
+interface MagpieImportInput {
+  baseUrl: string
+  apiKey: string
+  dashboardOrigin?: string
+  keyId: number
+  keyName: string
+  platform: GroupPlatform
+  app: CcsImportApp
+  context: CcSwitchImportContext
+}
+
+/** Native provider import; credentials stay in the official HTTPS bridge fragment.
+ * Roles, reasoning, context and service tier are not Magpie import parameters.
+ */
+export function buildMagpieImportUrl(input: MagpieImportInput): string {
+  const { platform, context } = input
+  if (platform === 'typesafe') throw new Error('No conversation provider for this group')
+  if (!Number.isSafeInteger(input.keyId) || input.keyId <= 0) throw new Error('Missing key identity')
+  const key = input.apiKey.trim()
+  if (!key || new TextEncoder().encode(key).length > 4096 || [...key].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) {
+    throw new Error('Invalid API key')
+  }
+  const normalizedRoot = normalizeRoot(input.baseUrl)
+  if (!normalizedRoot?.startsWith('https://')) throw new Error('Import requires an HTTPS API base URL')
+  const base = new URL(normalizedRoot)
+  const { model, options, family } = selectCcSwitchModel(platform, input.app, context)
+  if (!model || !options.length) throw new Error('No authorized compatible models')
+  const models = [model, ...options.filter(id => id !== model)]
+  if (models.length > 200 || models.some(id => [...id].some(char => char === ',' || char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127))) {
+    throw new Error('Model list cannot be represented by Magpie')
+  }
+  let root = normalizedRoot
+  const instanceRoot = root
+  if (platform === 'antigravity' && !root.endsWith('/antigravity')) root += '/antigravity'
+  let protocol: 'chat' | 'responses' | 'anthropic' | 'gemini'
+  if (platform === 'anthropic' || platform === 'antigravity' && family === 'anthropic') protocol = 'anthropic'
+  else if (family === 'gemini') protocol = platform === 'openai' ? 'chat' : 'gemini'
+  else if (family === 'anthropic' && platform === 'composite') protocol = 'anthropic'
+  else protocol = family === 'openai' ? 'responses' : 'chat'
+  const endpoint = protocol === 'anthropic' ? root : `${root}/${protocol === 'gemini' ? 'v1beta' : 'v1'}`
+  // The receiver permits 80 UTF-8 bytes. A stable per-key ID avoids replacing
+  // another key; reimporting this key is confirmed by Magpie's own dialog.
+  let name = ''
+  for (const character of `Ritel.SI API · ${input.keyName.trim()}`) {
+    if (new TextEncoder().encode(name + character).length > 80) break
+    name += character
+  }
+  const query = new URLSearchParams({
+    name, id: `sub2api-${instanceId(input.dashboardOrigin || base.origin, instanceRoot)}-${input.keyId}`, key,
+    [protocol]: endpoint, models: models.join(','), website: base.origin,
+    balance: `${root.replace(/\/antigravity$/, '')}/v1/usage`, balance_path: 'remaining'
+  })
+  return `https://usemagpie.ai/import#${query.toString()}`
 }

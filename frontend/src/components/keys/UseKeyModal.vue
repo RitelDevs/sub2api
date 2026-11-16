@@ -101,7 +101,7 @@
             <p v-if="activeApplication === 'claude-desktop'" class="text-sm text-amber-700 dark:text-amber-300" data-testid="desktop-model-limits">{{ kc.desktopModelLimits }}</p>
           </template>
         </section>
-        <div v-if="selectedCcsProfiles.length" class="space-y-3" data-testid="selected-application-import">
+        <div v-if="selectedCcsProfiles.length || showMagpieImport" class="space-y-3" data-testid="selected-application-import">
           <p v-if="activeApplication === 'codex'" class="text-sm text-gray-600 dark:text-gray-300">{{ kc.codexSharedConfig }}</p>
           <p v-if="activeApplication === 'codex'" class="text-sm text-gray-500 dark:text-gray-400" data-testid="codex-fast-notice">{{ kc.codexFastNotice }}</p>
           <div v-if="activeApplication === 'claude-desktop'" class="space-y-2 text-sm text-gray-600 dark:text-gray-300" data-testid="claude-desktop-import-guide">
@@ -111,7 +111,12 @@
             <button v-for="profile in selectedCcsProfiles" :key="profile.id" type="button" class="btn btn-primary" :disabled="!canImportApplication(profile)" :title="unavailableMessage(profile) || undefined" :data-testid="`connection-ccs-${profile.id}`" @click="importConnection(profile)">
               <Icon name="download" size="sm" class="mr-2" />{{ kc.oneClickImport }} · {{ profile.label }}
             </button>
+            <button v-if="showMagpieImport" type="button" class="btn btn-secondary" :disabled="!canImportMagpie" data-testid="connection-magpie" @click="importMagpie">
+              <Icon name="download" size="sm" class="mr-2" />{{ kc.magpieImport }}
+            </button>
           </div>
+          <p v-if="showMagpieImport" class="text-sm text-gray-500 dark:text-gray-400" data-testid="magpie-import-guide">{{ kc.magpieImportScope }} <a href="https://usemagpie.ai" target="_blank" rel="noopener noreferrer" class="link whitespace-nowrap">{{ kc.downloadMagpie }}</a></p>
+          <p v-if="magpieImportFailed" role="alert" class="text-sm text-red-600 dark:text-red-400" data-testid="magpie-import-error">{{ kc.magpieImportError }}</p>
 
           <div v-if="fullProviderConfig" class="space-y-2" data-testid="full-provider-config">
             <button type="button" class="btn btn-secondary" data-testid="copy-full-provider-config" @click="clipboardCopy(fullProviderConfig.content)">{{ kc.copyFullProviderConfig }}</button>
@@ -387,6 +392,7 @@ import type { ApiKey, GroupPlatform, PublicSettings } from '@/types'
 import { buildCcSwitchImportDeeplink, getCcSwitchApplicationProfiles, isCcSwitchOmpKeyReference, type CcSwitchApplicationProfile } from '@/utils/ccswitchImport'
 import { buildCcSwitchProviderConfig } from '@/utils/ccsProviderConfig'
 import { buildCodexImportConfig } from '@/utils/codexImportConfig'
+import { buildMagpieImportUrl } from '@/utils/magpieImport'
 import { parseCcSwitchModels, ccSwitchContextWindow, type CcSwitchImportContext, type CcsModelInfo } from '@/utils/ccsModelSelection'
 
 interface Props {
@@ -424,6 +430,25 @@ const kc = useKeyConnectionCopy()
 const { copyToClipboard: clipboardCopy } = useClipboard()
 
 const ccsImportFailed = ref(false)
+const magpieImportFailed = ref(false)
+const showMagpieImport = computed(() => !!props.keyRecord && !!props.platform && props.platform !== 'typesafe')
+const canImportMagpie = computed(() => props.show && showMagpieImport.value && !!props.apiKey && codexModelManifestState.value === 'ready' && !!modelOptions.value.length && !props.keyRecord?.group?.claude_code_only)
+function importMagpie() {
+  if (!canImportMagpie.value || !props.keyRecord || !props.platform) return
+  magpieImportFailed.value = false
+  try {
+    const url = buildMagpieImportUrl({
+      baseUrl: props.baseUrl || window.location.origin, apiKey: props.apiKey,
+      dashboardOrigin: window.location.origin, keyId: props.keyRecord.id, keyName: props.keyRecord.name,
+      platform: props.platform,
+      app: activeApplication.value === 'grok' ? 'grokbuild' : activeApplication.value as CcSwitchApplicationProfile['app'],
+      context: importContext.value
+    })
+    window.open(url, '_blank', 'noopener,noreferrer')
+  } catch {
+    magpieImportFailed.value = true
+  }
+}
 const selectedModels = ref<Record<string, string>>({})
 const availableModels = ref<CcsModelInfo[]>([])
 const activeApplication = computed(() => activeClientTab.value === 'codex-ws' ? 'codex' : activeClientTab.value)
@@ -519,7 +544,7 @@ function importConnection(profile: CcSwitchApplicationProfile) {
     ccsImportFailed.value = true
   }
 }
-watch(() => [props.show, props.keyRecord?.id], () => { ccsImportFailed.value = false; advancedOpen.value = false })
+watch(() => [props.show, props.keyRecord?.id], () => { ccsImportFailed.value = false; magpieImportFailed.value = false; advancedOpen.value = false })
 
 const copiedIndex = ref<number | null>(null)
 const activeTab = ref<string>('unix')
@@ -609,6 +634,7 @@ watch(activeClientTab, () => {
   activeTab.value = 'unix'
   advancedOpen.value = false
   ccsImportFailed.value = false
+  magpieImportFailed.value = false
 })
 
 // Icon components

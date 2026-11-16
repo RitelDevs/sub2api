@@ -59,6 +59,7 @@ func (h *OpenAIGatewayHandler) runDeepSeekRecovery(c *gin.Context, in deepSeekRe
 	var finalContext *gin.Context
 	policyRecorded := false
 	attempts := 0
+	allContextLimited := true
 	for attempts < deepSeekRecoveryMaxAttempts && parent.Err() == nil {
 		var selection *service.AccountSelectionResult
 		var err error
@@ -205,6 +206,7 @@ func (h *OpenAIGatewayHandler) runDeepSeekRecovery(c *gin.Context, in deepSeekRe
 		requesttiming.OperationAttemptFailed(c.Request.Context(), failureReason)
 		service.RecordDeepSeekRecoveryFailure(c, account, result, attempts, forwardErr, attempt.Outcome())
 		outcome := attempt.Outcome()
+		allContextLimited = allContextLimited && outcome.PublicErrorCode == "context_limit"
 		var upstreamFailure *service.UpstreamFailoverError
 		budgetEnded := outcome.ObservedFinishReason == "length" || outcome.ObservedFinishReason == "max_tokens" || outcome.ObservedFinishReason == "max_output_tokens"
 		if parent.Err() == nil && !sink.ClientGone() && !budgetEnded && outcome.CyberPolicy == nil &&
@@ -238,7 +240,11 @@ func (h *OpenAIGatewayHandler) runDeepSeekRecovery(c *gin.Context, in deepSeekRe
 			requesttiming.ObserveOperationSource(c.Request.Context(), requesttiming.OperationEvidence{Protocol: in.protocol, Terminal: "failed", FailureReason: "no_available_attempt", Complete: true})
 		}
 		service.MarkOpsStreamFailure(c, "api_error", "deepseek_recovery_exhausted", "DeepSeek recovery exhausted", http.StatusBadGateway)
-		commitObservationErr := sink.CommitFailure("DeepSeek 暂时无法完成回复，请稍后重试。")
+		publicCode := "upstream_unavailable"
+		if attempts > 0 && allContextLimited && !sink.BusinessStarted() && parent.Err() == nil {
+			publicCode = "context_limit"
+		}
+		commitObservationErr := sink.CommitFailureCode("DeepSeek 暂时无法完成回复，请稍后重试。", publicCode)
 		requesttiming.OperationDelivery(c.Request.Context(), "", true, commitObservationErr)
 	}
 	// Only an attempt that exposed a tool or whose downstream disconnected

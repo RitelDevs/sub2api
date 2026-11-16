@@ -881,6 +881,10 @@ func (w *deepSeekRecoveryStream) CommitSuccess() error {
 }
 
 func (w *deepSeekRecoveryStream) CommitFailure(message string) error {
+	return w.CommitFailureCode(message, "upstream_unavailable")
+}
+
+func (w *deepSeekRecoveryStream) CommitFailureCode(message, code string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.finalized {
@@ -893,11 +897,19 @@ func (w *deepSeekRecoveryStream) CommitFailure(message string) error {
 	if message == "" {
 		message = "DeepSeek 暂时无法完成回复，请稍后重试。"
 	}
-	obj := map[string]any{"error": map[string]any{"type": "upstream_error", "code": "upstream_error", "message": message}}
+	if code != "context_limit" || w.business {
+		code = "upstream_unavailable"
+	}
+	if code == "context_limit" {
+		message = "The conversation exceeds the available context."
+	}
+	publicError := map[string]any{"type": "upstream_error", "code": code, "recoverable": code == "context_limit", "message": message}
+	obj := map[string]any{"error": publicError}
 	event := ""
 	if w.protocol == "messages" {
 		event = "error"
-		obj = map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": message}}
+		publicError["type"] = "api_error"
+		obj = map[string]any{"type": "error", "error": publicError}
 	}
 	if w.stream && w.downstream.Written() {
 		return w.emitFrame(deepSeekRecoveryFrame{event: event, data: obj})

@@ -66,6 +66,7 @@ type deepSeekRecoveryStream struct {
 	skipLF, comment, hasData                    bool
 	prelude, terminal                           []deepSeekRecoveryFrame
 	preludeBytes, terminalBytes                 int
+	chatRoles                                   map[string]string
 	ccFinish, ccDone                            bool
 	ccToolFinish                                bool
 	messageStart                                map[string]any
@@ -107,6 +108,7 @@ func (w *deepSeekRecoveryStream) BeginAttempt() error {
 	w.line, w.data, w.event = nil, nil, ""
 	w.eventBytes, w.skipLF, w.comment, w.hasData = 0, false, false, false
 	w.prelude, w.terminal = nil, nil
+	w.chatRoles = make(map[string]string)
 	w.preludeBytes, w.terminalBytes = 0, 0
 	w.ccFinish, w.ccDone, w.ccToolFinish = false, false, false
 	w.messageStart, w.messageUsage = nil, nil
@@ -362,6 +364,24 @@ func deepSeekRecoveryContent(obj map[string]any) bool {
 	return false
 }
 
+func deepSeekRecoveryKnownChatEnvelope(obj, choice map[string]any) bool {
+	for key := range obj {
+		switch key {
+		case "id", "object", "created", "model", "choices", "usage":
+		default:
+			return false
+		}
+	}
+	for key := range choice {
+		switch key {
+		case "index", "delta", "finish_reason":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func (w *deepSeekRecoveryStream) chatFrame(obj map[string]any) error {
 	if w.ccDone {
 		return errors.New("deepseek recovery: data after DONE")
@@ -405,8 +425,40 @@ func (w *deepSeekRecoveryStream) chatFrame(obj map[string]any) error {
 			end["delta"] = map[string]any{}
 			ends = append(ends, end)
 		}
+		// Empty thinking tokens are keepalives, not metadata to retain until
+		// the first answer. Only collapse known envelope/choice fields: unknown
+		// extensions must retain the existing bounded forwarding semantics.
+		if !meaningful && deepSeekRecoveryKnownChatEnvelope(obj, choice) {
+			delta = deepSeekRecoveryCopy(delta)
+			for key, value := range delta {
+				switch key {
+				case "content", "reasoning_content", "reasoning", "text", "thinking", "signature", "data", "refusal":
+					if value == nil || value == "" {
+						delete(delta, key)
+					}
+				case "tool_calls", "function_call":
+					if !service.DeepSeekRecoveryToolPayloadPresent(key, value) {
+						delete(delta, key)
+					}
+				case "role":
+					if value == nil {
+						delete(delta, key)
+						continue
+					}
+					if role, ok := value.(string); ok {
+						index := fmt.Sprint(choice["index"])
+						if w.chatRoles[index] == role {
+							delete(delta, key)
+						} else {
+							w.chatRoles[index] = role
+						}
+					}
+				}
+			}
+		}
 		if len(delta) > 0 {
 			c := deepSeekRecoveryCopy(choice)
+			c["delta"] = delta
 			c["finish_reason"] = nil
 			live = append(live, c)
 			business = business || meaningful
@@ -786,6 +838,9 @@ func (w *deepSeekRecoveryStream) EndAttempt(upstreamErr error) error {
 				w.err = errors.New("deepseek recovery: upstream JSON error")
 			}
 		}
+	}
+	if w.err != nil && !w.clientGone && w.status >= 200 && w.status < 300 {
+		w.err = &service.DeepSeekRecoveryDeliveryError{Cause: w.err}
 	}
 	w.err = errors.Join(w.err, upstreamErr)
 	w.ended = true

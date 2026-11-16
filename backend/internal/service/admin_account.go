@@ -1678,6 +1678,17 @@ func (s *adminServiceImpl) SetAccountError(ctx context.Context, id int64, errorM
 }
 
 func (s *adminServiceImpl) SetAccountSchedulable(ctx context.Context, id int64, schedulable bool) (*Account, error) {
+	if schedulable {
+		account, err := s.accountRepo.GetByID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if account != nil && account.Platform == PlatformDeepseek && account.Extra["deepseek_balance_pause_reason"] != nil {
+			if err := s.accountRepo.UpdateExtra(ctx, id, map[string]any{"deepseek_balance_pause_reason": nil}); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if err := s.accountRepo.SetSchedulable(ctx, id, schedulable); err != nil {
 		return nil, err
 	}

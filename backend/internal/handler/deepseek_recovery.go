@@ -165,7 +165,7 @@ func (h *OpenAIGatewayHandler) runDeepSeekRecovery(c *gin.Context, in deepSeekRe
 		if observed.Terminal {
 			terminal = "completed"
 		}
-		requesttiming.ObserveOperationSource(c.Request.Context(), requesttiming.OperationEvidence{Protocol: in.protocol, Answer: observed.Answer, Reasoning: observed.Semantic && !observed.Answer && !observed.ToolCall && !observed.Refusal, ToolCall: observed.ToolCall, Refusal: observed.Refusal, FinishReason: observed.FinishReason, Terminal: terminal, Complete: observed.Terminal})
+		requesttiming.ObserveOperationSource(c.Request.Context(), requesttiming.OperationEvidence{Protocol: in.protocol, Answer: observed.Answer, Reasoning: observed.Semantic && !observed.Answer && !observed.ToolCall && !observed.Refusal, ToolCall: observed.ToolCall, Refusal: observed.Refusal, FinishReason: observed.ObservedFinishReason, Terminal: terminal, Complete: observed.Terminal})
 		lastErr, lastResult, lastAccount, finalContext = forwardErr, result, account, child
 		if forwardErr == nil {
 			if result == nil {
@@ -203,7 +203,7 @@ func (h *OpenAIGatewayHandler) runDeepSeekRecovery(c *gin.Context, in deepSeekRe
 		service.RecordDeepSeekRecoveryFailure(c, account, result, attempts, forwardErr, attempt.Outcome())
 		outcome := attempt.Outcome()
 		var upstreamFailure *service.UpstreamFailoverError
-		budgetEnded := outcome.FinishReason == "length" || outcome.FinishReason == "max_tokens" || outcome.FinishReason == "max_output_tokens"
+		budgetEnded := outcome.ObservedFinishReason == "length" || outcome.ObservedFinishReason == "max_tokens" || outcome.ObservedFinishReason == "max_output_tokens"
 		if parent.Err() == nil && !sink.ClientGone() && !budgetEnded && outcome.CyberPolicy == nil &&
 			errors.As(forwardErr, &upstreamFailure) && (upstreamFailure.StatusCode >= 500 || upstreamFailure.StatusCode == 429) {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account, in.forwardModel, false, nil, forwardErr)

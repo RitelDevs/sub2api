@@ -503,6 +503,11 @@ func (s *OpsService) prepareErrorLogInput(ctx context.Context, entry *OpsInsertE
 		if last == nil {
 			continue
 		}
+		if last.Reason == "deepseek_delivery_error" {
+			entry.ErrorPhase, entry.ErrorOwner, entry.ErrorSource = "internal", "platform", "gateway"
+			entry.ErrorType = "deepseek_delivery_error"
+			entry.IsBusinessLimited = false
+		}
 		if last.Stage == string(GatewayFailureStageAccountAuth) {
 			entry.ErrorPhase = string(GatewayFailureStageAccountAuth)
 			entry.ErrorOwner = "provider"

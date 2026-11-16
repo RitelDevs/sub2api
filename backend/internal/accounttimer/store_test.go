@@ -32,7 +32,7 @@ func expectAccount(m sqlmock.Sqlmock, status string, deleted bool) {
 	if deleted {
 		d = time.Now()
 	}
-	m.ExpectQuery("SELECT status, expires_at, deleted_at FROM accounts").WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"status", "expires_at", "deleted_at"}).AddRow(status, nil, d))
+	m.ExpectQuery("SELECT status, expires_at, deleted_at,").WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"status", "expires_at", "deleted_at", "balance_paused"}).AddRow(status, nil, d, false))
 }
 func TestSaveRejectsConflictingOppositeAction(t *testing.T) {
 	s, m := testStore(t)
@@ -255,7 +255,7 @@ func TestThirdFailureBecomesTerminalAndStaleRetryCannotChangeNewVersion(t *testi
 func TestBusyAccountIsSkippedWithoutMisreportingDeletion(t *testing.T) {
 	s, m := testStore(t)
 	m.ExpectBegin()
-	m.ExpectQuery("SELECT status, expires_at, deleted_at FROM accounts").WillReturnRows(sqlmock.NewRows([]string{"status", "expires_at", "deleted_at"}))
+	m.ExpectQuery("SELECT status, expires_at, deleted_at,").WillReturnRows(sqlmock.NewRows([]string{"status", "expires_at", "deleted_at", "balance_paused"}))
 	m.ExpectQuery("SELECT EXISTS").WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 	m.ExpectRollback()
 	if err := s.execute(context.Background(), Task{AccountID: 7, Action: "open", Version: 1}); err != nil {
@@ -347,5 +347,20 @@ func TestDailyExecutionAuditsOccurrenceAndFencesOldWorkers(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestExecuteDoesNotReopenDeepSeekBalancePause(t *testing.T) {
+	s, m := testStore(t)
+	now := s.now()
+	task := Task{AccountID: 7, Action: "open", Version: 1, ExecuteAt: now, Timezone: "UTC", RequestedBy: 9, Status: "pending"}
+	m.ExpectBegin()
+	m.ExpectQuery("SELECT status, expires_at, deleted_at,").WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"status", "expires_at", "deleted_at", "balance_paused"}).AddRow("active", nil, nil, true))
+	m.ExpectQuery("SELECT "+regexp.QuoteMeta(taskColumns)).WithArgs(int64(7), "open", now).WillReturnRows(taskRows().AddRow(7, "open", 1, now, "UTC", 9, "pending", 0, nil, "", "once", ""))
+	m.ExpectExec("UPDATE account_schedulable_timers SET status").WithArgs(int64(7), "open", "skipped", now, "balance_manual_recovery_required", int64(1)).WillReturnResult(sqlmock.NewResult(0, 1))
+	m.ExpectExec("INSERT INTO account_schedulable_timer_audit").WillReturnResult(sqlmock.NewResult(1, 1))
+	m.ExpectCommit()
+	if err := s.execute(context.Background(), task); err != nil {
+		t.Fatal(err)
 	}
 }

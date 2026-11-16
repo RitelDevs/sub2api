@@ -33,16 +33,20 @@ type DeepSeekRecoveryUsage struct {
 // UsageUnknown remains true until both input and output counts were observed;
 // observed counts are a lower bound when an upstream stream was interrupted.
 type DeepSeekRecoveryOutcome struct {
-	Protocol     string                `json:"protocol"`
-	FinishReason string                `json:"finish_reason,omitempty"`
-	Semantic     bool                  `json:"semantic"`
-	Answer       bool                  `json:"answer"`
-	ToolCall     bool                  `json:"tool_call"`
-	Refusal      bool                  `json:"refusal"`
-	Terminal     bool                  `json:"terminal"`
-	Usage        DeepSeekRecoveryUsage `json:"usage"`
-	UsageUnknown bool                  `json:"usage_unknown"`
-	CyberPolicy  *CyberPolicyMark      `json:"cyber_policy,omitempty"`
+	ObservedFinishReason string                `json:"observed_finish_reason,omitempty"`
+	HTTPStatus           int                   `json:"http_status,omitempty"`
+	UpstreamRequestID    string                `json:"upstream_request_id,omitempty"`
+	HTTPErrorClass       string                `json:"http_error_class,omitempty"`
+	Protocol             string                `json:"protocol"`
+	FinishReason         string                `json:"finish_reason,omitempty"`
+	Semantic             bool                  `json:"semantic"`
+	Answer               bool                  `json:"answer"`
+	ToolCall             bool                  `json:"tool_call"`
+	Refusal              bool                  `json:"refusal"`
+	Terminal             bool                  `json:"terminal"`
+	Usage                DeepSeekRecoveryUsage `json:"usage"`
+	UsageUnknown         bool                  `json:"usage_unknown"`
+	CyberPolicy          *CyberPolicyMark      `json:"cyber_policy,omitempty"`
 }
 
 type deepSeekRecoveryTimeouts struct{ firstSemantic, stall, attempt time.Duration }
@@ -280,6 +284,7 @@ func (s *OpenAIGatewayService) doDeepSeekRecoveryUpstream(req *http.Request, pro
 	// Repository TLS fallback and net/http's replay paths require GetBody.
 	// Disable that capability only on this private outbound clone; the original
 	// adapter request stays readable and any retry reenters the attempt guard.
+	policyBody := req.GetBody
 	req.GetBody = nil
 	// This single physical send deliberately bypasses runtime proxy fallback.
 	// Adapter field repair/retries reenter doOpenAIUpstream and are rejected above.
@@ -295,6 +300,10 @@ func (s *OpenAIGatewayService) doDeepSeekRecoveryUpstream(req *http.Request, pro
 		}
 		return nil, a.fail(deepSeekRecoveryFailure("transport_error", 0))
 	}
+	a.mu.Lock()
+	a.out.HTTPStatus = resp.StatusCode
+	a.out.UpstreamRequestID = truncateString(resp.Header.Get("x-request-id"), 512)
+	a.mu.Unlock()
 	if resp.Request == nil {
 		resp.Request = req
 	}
@@ -336,12 +345,38 @@ func (s *OpenAIGatewayService) doDeepSeekRecoveryUpstream(req *http.Request, pro
 			closeBody()
 		})
 		var payload json.RawMessage
-		decodeErr := json.NewDecoder(io.LimitReader(raw, deepSeekMaxErrorBody)).Decode(&payload)
+		var captured bytes.Buffer
+		decodeErr := json.NewDecoder(io.TeeReader(io.LimitReader(raw, deepSeekMaxErrorBody), &captured)).Decode(&payload)
 		timer.Stop()
 		if decodeErr == nil {
 			a.observeUsage(gjson.ParseBytes(payload))
 			a.observeCyberPolicy(payload, resp.StatusCode)
 		}
+		// Use the selected attempt's request, not the canceled transport/body
+		// timer context, for one bounded account-policy update.
+		policyPayload := []byte(payload)
+		if decodeErr != nil {
+			policyPayload = captured.Bytes()
+		}
+		var policyModel string
+		if policyBody != nil {
+			if body, err := policyBody(); err == nil {
+				var request struct {
+					Model string `json:"model"`
+				}
+				if json.NewDecoder(io.LimitReader(body, deepSeekMaxSourceJSON)).Decode(&request) == nil {
+					policyModel = request.Model
+				}
+				_ = body.Close()
+			}
+		}
+		if s.rateLimitService != nil && a.Outcome().CyberPolicy == nil {
+			s.handleOpenAIAccountUpstreamError(a.parent, account, resp.StatusCode, resp.Header, policyPayload, policyModel)
+		}
+		category, _ := classifyAccountOpsFailure(account.Platform, resp.StatusCode, resp.Header, policyPayload)
+		a.mu.Lock()
+		a.out.HTTPErrorClass = category
+		a.mu.Unlock()
 		closeBody()
 		stopBody()
 		cleanup()
@@ -684,6 +719,9 @@ func (b *deepSeekValidatedBody) tool(key string, name, args gjson.Result, replac
 }
 
 func (b *deepSeekValidatedBody) terminal(reason string, final bool) error {
+	b.attempt.mu.Lock()
+	b.attempt.out.ObservedFinishReason = reason
+	b.attempt.mu.Unlock()
 	switch reason {
 	case "insufficient_system_resource", "aborted", "error", "failed", "cancelled":
 		return b.fail("failure_finish")

@@ -332,7 +332,7 @@ func TestDeepSeekRecoverySinkBoundedBuffers(t *testing.T) {
 	t.Run("prelude", func(t *testing.T) {
 		w, rec := recoverySinkTestWriter(t, "chat", true)
 		for i := 0; i < 600; i++ {
-			recoverySinkWrite(t, w, recoverySinkChat(map[string]any{"role": "assistant"}, nil, nil))
+			recoverySinkWrite(t, w, recoverySinkChat(map[string]any{"vendor_metadata": "retain"}, nil, nil))
 		}
 		require.ErrorContains(t, w.EndAttempt(nil), "prelude too large")
 		require.Empty(t, rec.Body.String())
@@ -482,4 +482,31 @@ func TestDeepSeekRecoverySinkPartialToolCarriersStillStopRetry(t *testing.T) {
 		require.Error(t, w.EndAttempt(errors.New("interrupted")))
 		require.False(t, w.CanRetry())
 	}
+}
+
+func TestDeepSeekRecoverySinkEmptyThinkingPrelude(t *testing.T) {
+	w, rec := recoverySinkTestWriter(t, "chat", true)
+	for i := 0; i < 786; i++ {
+		recoverySinkWrite(t, w, recoverySinkChat(map[string]any{"role": "assistant", "reasoning_content": "", "content": nil}, nil, nil))
+	}
+	require.NoError(t, w.err)
+	require.Len(t, w.prelude, 1, "only the initial role is retained")
+	require.Empty(t, rec.Body.String())
+	recoverySinkWrite(t, w, recoverySinkChat(map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": "call_1", "type": "function", "function": map[string]any{"name": "report_result", "arguments": "{\"value\":42}"}}}}, nil, nil))
+	recoverySinkWrite(t, w, recoverySinkChat(map[string]any{}, "tool_calls", map[string]any{"prompt_tokens": 10, "completion_tokens": 800}))
+	recoverySinkWrite(t, w, "data: [DONE]\n\n")
+	require.NoError(t, w.EndAttempt(nil))
+	require.NoError(t, w.CommitSuccess())
+	require.True(t, w.ToolExposed())
+	require.False(t, w.CanRetry())
+	require.Equal(t, 1, strings.Count(rec.Body.String(), "[DONE]"))
+	require.Contains(t, rec.Body.String(), "report_result")
+}
+func TestDeepSeekRecoverySinkPreservesWhitespaceAndExtensions(t *testing.T) {
+	w, rec := recoverySinkTestWriter(t, "chat", true)
+	recoverySinkWrite(t, w, recoverySinkChat(map[string]any{"vendor_extension": "retain", "reasoning_content": ""}, nil, nil))
+	recoverySinkWrite(t, w, recoverySinkChat(map[string]any{"content": " "}, nil, nil))
+	require.True(t, w.BusinessStarted())
+	require.Contains(t, rec.Body.String(), "vendor_extension")
+	require.Contains(t, rec.Body.String(), `"content":" "`)
 }

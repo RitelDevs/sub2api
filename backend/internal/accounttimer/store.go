@@ -124,9 +124,10 @@ func scanTask(row scanner) (Task, error) {
 }
 
 type accountState struct {
-	status  string
-	expires *time.Time
-	deleted *time.Time
+	status        string
+	expires       *time.Time
+	deleted       *time.Time
+	balancePaused bool
 }
 
 func lockAccount(ctx context.Context, tx *sql.Tx, id int64, skip bool) (accountState, error) {
@@ -135,7 +136,7 @@ func lockAccount(ctx context.Context, tx *sql.Tx, id int64, skip bool) (accountS
 	if skip {
 		suffix += " SKIP LOCKED"
 	}
-	err := tx.QueryRowContext(ctx, "SELECT status, expires_at, deleted_at FROM accounts WHERE id = $1"+suffix, id).Scan(&a.status, &a.expires, &a.deleted)
+	err := tx.QueryRowContext(ctx, "SELECT status, expires_at, deleted_at, (platform = 'deepseek' AND NOT schedulable AND COALESCE(extra->>'deepseek_balance_pause_reason','') <> '') FROM accounts WHERE id = $1"+suffix, id).Scan(&a.status, &a.expires, &a.deleted, &a.balancePaused)
 	return a, err
 }
 func audit(ctx context.Context, tx *sql.Tx, t Task, actor int64, now time.Time, result, reason string) error {
@@ -446,6 +447,9 @@ func (s *Store) execute(ctx context.Context, candidate Task) error {
 		return nil
 	}
 	reason := Decision(t.Action == "open", t.ExecuteAt, now, a.status, a.expires, a.deleted != nil, s.policy())
+	if t.Action == "open" && a.balancePaused {
+		reason = "balance_manual_recovery_required"
+	}
 	result := "executed"
 	var next time.Time
 	if t.Recurrence == "daily" && reason != "account_deleted" {

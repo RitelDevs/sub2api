@@ -12,6 +12,8 @@ import (
 // this is not an upstream invoice or OAuth subscription spend.
 // https://developers.openai.com/api/docs/models/gpt-6-astra
 // https://developers.openai.com/api/docs/models/gpt-6.1-sol
+// Terra added and its standard/priority/long-context prices verified on 2026-11-16:
+// https://developers.openai.com/api/docs/models/gpt-6.1-terra
 // https://developers.openai.com/api/docs/models/gpt-6-luna
 // https://developers.openai.com/api/docs/models/gpt-5.6-sol
 // https://developers.openai.com/api/docs/models/gpt-5.6-terra
@@ -56,6 +58,7 @@ func deepseekEquivalentPrice(model string, input, cachedInput, output float64) a
 var accountAPIEquivalentPrices = []apiEquivalentPrice{
 	openAIEquivalentPrice("gpt-6-astra", 10, 1, 50, 2, 6),
 	openAIEquivalentPrice("gpt-6.1-sol", 2, .1, 10, 2, 0),
+	openAIEquivalentPrice("gpt-6.1-terra", 1, .05, 5, 2, 0),
 	openAIEquivalentPrice("gpt-6-sol", 2, .2, 10, 2, 0),
 	openAIEquivalentPrice("gpt-6-luna", .1, .01, .5, 2, 0),
 	openAIEquivalentPrice("gpt-5.6-sol", 4, .4, 20, 2, 0),

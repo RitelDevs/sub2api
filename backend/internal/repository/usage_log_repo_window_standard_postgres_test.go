@@ -58,6 +58,46 @@ func TestAccountWindowStandard_ExactRangeStoredPricesPostgres(t *testing.T) {
 	require.InDelta(t, 21.11, *stats.APIEquivalentCost, 0.0000001)
 	require.Equal(t, int64(1), stats.APIEquivalentUnpricedRequests)
 	require.Equal(t, int64(1), stats.APIEquivalentInternalPricedRequests)
+	// Regression: Terra was billable but missing from the independent official
+	// equivalence catalogue. These seven historical rows retain their charges.
+	_, err = db.ExecContext(ctx, `INSERT INTO usage_logs
+ (account_id,created_at,model,input_tokens,cache_read_tokens,output_tokens,total_cost,actual_cost)
+ VALUES
+ (44,'2026-10-28T10:01:00Z','gpt-6.1-terra',15890,13312,88,0.0169956,0.0084978),
+ (44,'2026-10-28T10:02:00Z','gpt-6.1-terra',8452,29056,235,0.0110798,0.0055399),
+ (44,'2026-10-28T10:03:00Z','gpt-6.1-terra',11108,37504,326,0.0146132,0.0073066),
+ (44,'2026-10-28T10:04:00Z','gpt-6.1-terra',4297,48768,2936,0.0214154,0.0107077),
+ (44,'2026-10-28T10:05:00Z','gpt-6.1-terra',217,55808,876,0.0073874,0.0036937),
+ (44,'2026-10-28T10:06:00Z','gpt-6.1-terra',221,56704,411,0.0051112,0.0025556),
+ (44,'2026-10-28T10:07:00Z','gpt-6.1-terra',833,57216,116,0.0042738,0.0021369);`)
+	require.NoError(t, err)
+	const digest = `SELECT MD5(STRING_AGG(TO_JSONB(ul)::text, ',' ORDER BY created_at)) FROM usage_logs ul WHERE account_id=44`
+	var beforeTerra, afterTerra string
+	require.NoError(t, db.QueryRowContext(ctx, digest).Scan(&beforeTerra))
+	terra, err := repo.GetAccountWindowStatsRange(ctx, 44, start, end)
+	require.NoError(t, err)
+	require.Equal(t, int64(7), terra.Requests)
+	require.NotNil(t, terra.APIEquivalentCost)
+	require.InDelta(t, 0.0808764, *terra.APIEquivalentCost, 1e-10)
+	require.Zero(t, terra.APIEquivalentUnpricedRequests)
+	require.InDelta(t, 0.0808764, terra.StandardCost, 1e-10)
+	require.InDelta(t, 0.0404382, terra.UserCost, 1e-10)
+	require.NoError(t, db.QueryRowContext(ctx, digest).Scan(&afterTerra))
+	require.Equal(t, beforeTerra, afterTerra, "official-equivalence reads must preserve historical charges")
+
+	// Newly arriving Terra usage is covered by the same read path, without backfill.
+	_, err = db.ExecContext(ctx, `INSERT INTO usage_logs
+ (account_id,created_at,model,input_tokens,cache_read_tokens,output_tokens,total_cost,actual_cost)
+ VALUES (44,'2026-10-28T10:08:00Z','gpt-6.1-terra',1000,1000,100,0.00155,0.000775)`)
+	require.NoError(t, err)
+	terra, err = repo.GetAccountWindowStatsRange(ctx, 44, start, end)
+	require.NoError(t, err)
+	require.Equal(t, int64(8), terra.Requests)
+	require.NotNil(t, terra.APIEquivalentCost)
+	require.InDelta(t, 0.0824264, *terra.APIEquivalentCost, 1e-10)
+	require.Zero(t, terra.APIEquivalentUnpricedRequests)
+	require.InDelta(t, 0.0412132, terra.UserCost, 1e-10)
+
 	// Empty future cycles are known zero, not inferred from quota utilization.
 	empty, err := repo.GetAccountWindowStatsRange(ctx, 42, end.Add(time.Hour), end.Add(2*time.Hour))
 	require.NoError(t, err)

@@ -950,6 +950,10 @@ function isBackendModePublicRouteAllowed(path: string, hasPendingAuthSession: bo
   return false
 }
 
+function isCentralAuthRoute(path: string): boolean {
+  return path.startsWith('/auth/') || ['/login', '/register', '/forgot-password', '/reset-password', '/email-verify'].includes(path)
+}
+
 router.beforeEach(async (to, _from, next) => {
   // 开始导航加载状态
   navigationLoading.startNavigation()
@@ -964,16 +968,18 @@ router.beforeEach(async (to, _from, next) => {
   }
 
   if (centralAccountEnabled) {
-    const isAuthRoute = to.path.startsWith('/auth/') || ['/login', '/register', '/forgot-password', '/reset-password', '/email-verify'].includes(to.path)
-    if (isAuthRoute) {
+    if (isCentralAuthRoute(to.path)) {
       const defaultPath = authStore.isAdmin ? '/admin/dashboard' : authStore.isObserver ? '/admin/accounts' : '/dashboard'
+      const redirect = typeof to.query.redirect === 'string' ? to.query.redirect : undefined
       // A register continuation returns here after central auth. Never redirect
       // an authenticated visitor back through login and lose their referral link.
       if (authStore.isAuthenticated) {
-        next(defaultPath)
+        const returnPath = consoleReturnPath(redirect ?? '/')
+        // Match canonical records too: Vue Router accepts /LOGIN and /login/.
+        const returnsToAuth = router.resolve(returnPath).matched.some(route => isCentralAuthRoute(route.path))
+        next(returnPath === '/' || returnsToAuth ? defaultPath : returnPath)
         return
       }
-      const redirect = typeof to.query.redirect === 'string' ? to.query.redirect : undefined
       if (to.path === '/register') {
         const firstString = (value: unknown): string => {
           const first = Array.isArray(value) ? value[0] : value

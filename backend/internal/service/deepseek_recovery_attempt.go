@@ -36,6 +36,7 @@ type DeepSeekRecoveryOutcome struct {
 	ObservedFinishReason string                `json:"observed_finish_reason,omitempty"`
 	HTTPStatus           int                   `json:"http_status,omitempty"`
 	UpstreamRequestID    string                `json:"upstream_request_id,omitempty"`
+	PublicErrorCode      string                `json:"public_error_code,omitempty"`
 	HTTPErrorClass       string                `json:"http_error_class,omitempty"`
 	Protocol             string                `json:"protocol"`
 	FinishReason         string                `json:"finish_reason,omitempty"`
@@ -351,6 +352,7 @@ func (s *OpenAIGatewayService) doDeepSeekRecoveryUpstream(req *http.Request, pro
 		if decodeErr == nil {
 			a.observeUsage(gjson.ParseBytes(payload))
 			a.observeCyberPolicy(payload, resp.StatusCode)
+			a.observePublicError(payload, resp.StatusCode)
 		}
 		// Use the selected attempt's request, not the canceled transport/body
 		// timer context, for one bounded account-policy update.
@@ -560,6 +562,7 @@ func (b *deepSeekValidatedBody) readFrame() ([]byte, error) {
 				if json.Valid(bytes.TrimSpace(data)) {
 					b.attempt.observeUsage(gjson.ParseBytes(data))
 					b.attempt.observeCyberPolicy(data, b.status)
+					b.attempt.observePublicError(data, b.status)
 				}
 				return nil, b.fail("error_event")
 			}
@@ -767,6 +770,7 @@ func (b *deepSeekValidatedBody) validate(raw []byte, event string, stream bool) 
 		(r.Get("error").Exists() && r.Get("error").Type != gjson.Null) ||
 		(r.Get("response.error").Exists() && r.Get("response.error").Type != gjson.Null) {
 		b.attempt.observeCyberPolicy(raw, b.status)
+		b.attempt.observePublicError(raw, b.status)
 		return b.fail("error_envelope")
 	}
 	switch b.protocol {

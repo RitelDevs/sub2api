@@ -510,3 +510,21 @@ func TestDeepSeekRecoverySinkPreservesWhitespaceAndExtensions(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "vendor_extension")
 	require.Contains(t, rec.Body.String(), `"content":" "`)
 }
+
+func TestDeepSeekRecoveryPublicContextError(t *testing.T) {
+	for _, protocol := range []string{"chat", "messages"} {
+		for _, started := range []bool{false, true} {
+			w, rec := recoverySinkTestWriter(t, protocol, true)
+			w.business = started
+			require.NoError(t, w.CommitFailureCode("private upstream", "context_limit"))
+			if started {
+				require.Contains(t, rec.Body.String(), `"recoverable":false`)
+				require.Contains(t, rec.Body.String(), `"code":"upstream_unavailable"`)
+			} else {
+				require.Contains(t, rec.Body.String(), `"recoverable":true`)
+				require.Contains(t, rec.Body.String(), `"code":"context_limit"`)
+				require.NotContains(t, rec.Body.String(), "private upstream")
+			}
+		}
+	}
+}

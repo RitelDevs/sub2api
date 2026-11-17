@@ -72,8 +72,11 @@ func (h *OpenAIGatewayHandler) runDeepSeekRecovery(c *gin.Context, in deepSeekRe
 			selection, err = h.gatewayService.SelectDeepSeekRecoveryAccount(parent, in.apiKey.GroupID, in.forwardModel, excluded)
 		}
 		if err != nil || selection == nil || selection.Account == nil {
+			if err == nil {
+				err = service.ErrNoAvailableAccounts
+			}
 			if lastErr == nil {
-				lastErr = service.ErrNoAvailableAccounts
+				lastErr = err
 			}
 			break
 		}
@@ -251,12 +254,27 @@ func (h *OpenAIGatewayHandler) runDeepSeekRecovery(c *gin.Context, in deepSeekRe
 		if attempts == 0 {
 			requesttiming.ObserveOperationSource(c.Request.Context(), requesttiming.OperationEvidence{Protocol: in.protocol, Terminal: "failed", FailureReason: "no_available_attempt", Complete: true})
 		}
-		service.MarkOpsStreamFailure(c, "api_error", "deepseek_recovery_exhausted", "DeepSeek recovery exhausted", http.StatusBadGateway)
-		publicCode := "upstream_unavailable"
-		if attempts > 0 && allContextLimited && !sink.BusinessStarted() && parent.Err() == nil {
-			publicCode = "context_limit"
+		status, errType := http.StatusBadGateway, ""
+		message, publicCode := "DeepSeek 暂时无法完成回复，请稍后重试。", "upstream_unavailable"
+		if len(excluded) == 0 && errors.Is(lastErr, service.ErrNoAvailableAccounts) && parent.Err() == nil && !c.Writer.Written() {
+			// Only the first selector can prove that nothing was dispatched. An
+			// exhausted recovery, slot error or committed stream keeps its contract.
+			cls := classifyNoAccountErrorFromGin(c, h.gatewayService, in.apiKey, in.forwardModel, in.model, service.PlatformDeepseek)
+			cls = classifySelectionFailureError(lastErr, cls)
+			status, errType, message = cls.Status, cls.ErrType, cls.Message
+			if cls.Code != "" {
+				publicCode = cls.Code
+			}
+			if !cls.ModelNotFound {
+				markOpsRoutingCapacityLimited(c)
+			}
+		} else {
+			service.MarkOpsStreamFailure(c, "api_error", "deepseek_recovery_exhausted", "DeepSeek recovery exhausted", status)
+			if attempts > 0 && allContextLimited && !sink.BusinessStarted() && parent.Err() == nil {
+				publicCode = "context_limit"
+			}
 		}
-		commitObservationErr := sink.CommitFailureCode("DeepSeek 暂时无法完成回复，请稍后重试。", publicCode)
+		commitObservationErr := sink.CommitFailureCode(status, errType, message, publicCode)
 		requesttiming.OperationDelivery(c.Request.Context(), "", true, commitObservationErr)
 	}
 	// Only an attempt that exposed a tool or whose downstream disconnected

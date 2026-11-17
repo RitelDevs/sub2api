@@ -516,7 +516,7 @@ func TestDeepSeekRecoveryPublicContextError(t *testing.T) {
 		for _, started := range []bool{false, true} {
 			w, rec := recoverySinkTestWriter(t, protocol, true)
 			w.business = started
-			require.NoError(t, w.CommitFailureCode("private upstream", "context_limit"))
+			require.NoError(t, w.CommitFailureCode(http.StatusBadGateway, "", "private upstream", "context_limit"))
 			if started {
 				require.Contains(t, rec.Body.String(), `"recoverable":false`)
 				require.Contains(t, rec.Body.String(), `"code":"upstream_unavailable"`)

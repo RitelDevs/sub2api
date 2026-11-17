@@ -72,6 +72,12 @@ func deepSeekHandlerFixture(t *testing.T, protocol string, upstream *deepSeekRec
 			Status: service.StatusActive, Schedulable: true, Priority: int(i), Concurrency: 1, GroupIDs: []int64{groupID},
 			Credentials: map[string]any{"api_key": "sk-fixture", "base_url": "https://deepseek.example.test", "api_protocol": "chat_completions"}})
 	}
+	return deepSeekRecoveryHandlerWithRepo(t, protocol, upstream, openAIImagesFailoverAccountRepo{accounts: accounts}, billing...)
+}
+
+func deepSeekRecoveryHandlerWithRepo(t *testing.T, protocol string, upstream *deepSeekRecoveryTestUpstream, repo service.AccountRepository, billing ...service.UsageBillingRepository) (*OpenAIGatewayHandler, *gin.Context, *httptest.ResponseRecorder, *openAIWSUsageHandlerUsageLogRepoStub) {
+	t.Helper()
+	groupID := int64(17)
 	usage := &openAIWSUsageHandlerUsageLogRepoStub{created: make(chan *service.UsageLog, 16)}
 	cfg := &config.Config{RunMode: config.RunModeSimple}
 	cfg.Default.RateMultiplier = 1
@@ -82,7 +88,7 @@ func deepSeekHandlerFixture(t *testing.T, protocol string, upstream *deepSeekRec
 	if len(billing) > 0 {
 		billingRepo = billing[0]
 	}
-	svc := service.NewOpenAIGatewayService(openAIImagesFailoverAccountRepo{accounts: accounts}, nil, usage, billingRepo, nil, nil, nil, nil, cfg, nil, slots, service.NewBillingService(cfg, nil), nil, cache, upstream, &service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil)
+	svc := service.NewOpenAIGatewayService(repo, nil, usage, billingRepo, nil, nil, nil, nil, cfg, nil, slots, service.NewBillingService(cfg, nil), nil, cache, upstream, &service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil)
 	h := NewOpenAIGatewayHandler(svc, slots, cache, service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg), nil, nil, nil, nil, cfg)
 	body := `{"model":"deepseek-flash","stream":true,"max_tokens":64000,"messages":[{"role":"user","content":"hello"}]}`
 	path := "/v1/chat/completions"
@@ -166,11 +172,67 @@ func TestDeepSeekRecoveryHandlersSwitchAfterUpstreamFailure(t *testing.T) {
 	}
 }
 
+type deepSeekSelectionErrorRepo struct {
+	openAIImagesFailoverAccountRepo
+}
+
+func (deepSeekSelectionErrorRepo) ListSchedulableByPlatform(context.Context, string) ([]service.Account, error) {
+	return nil, fmt.Errorf("fixture storage unavailable")
+}
+
+func TestDeepSeekRecoveryInitialSelectionFailure(t *testing.T) {
+	for _, protocol := range []string{"messages", "chat"} {
+		otherModel := openAIImagesFailoverAccountRepo{accounts: []service.Account{{ID: 1, Platform: service.PlatformDeepseek,
+			Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, Concurrency: 1, GroupIDs: []int64{17},
+			Credentials: map[string]any{"model_mapping": map[string]any{"other-model": "other-model"}}}}}
+		for _, tc := range []struct {
+			name         string
+			repo         service.AccountRepository
+			precommitted bool
+			status       int
+			routing      bool
+			code         string
+		}{
+			{"empty pool", openAIImagesFailoverAccountRepo{}, false, http.StatusServiceUnavailable, true, "upstream_unavailable"},
+			{"unsupported model", otherModel, false, http.StatusNotFound, false, "model_not_found"},
+			{"selection store error", deepSeekSelectionErrorRepo{}, false, http.StatusBadGateway, false, "upstream_unavailable"},
+			{"stream already started", openAIImagesFailoverAccountRepo{}, true, http.StatusOK, false, "upstream_unavailable"},
+		} {
+			t.Run(protocol+"/"+tc.name, func(t *testing.T) {
+				upstream := &deepSeekRecoveryTestUpstream{}
+				h, c, rec, usage := deepSeekRecoveryHandlerWithRepo(t, protocol, upstream, tc.repo)
+				if tc.precommitted {
+					c.Header("Content-Type", "text/event-stream")
+					c.Writer.Flush()
+				}
+				if protocol == "messages" {
+					h.Messages(c)
+				} else {
+					h.ChatCompletions(c)
+				}
+				require.Equal(t, tc.status, rec.Code, rec.Body.String())
+				require.Equal(t, tc.routing, isOpsRoutingCapacityLimited(c))
+				require.Empty(t, upstream.ids)
+				require.Empty(t, usage.created)
+				require.Contains(t, rec.Body.String(), tc.code)
+				if tc.precommitted {
+					require.Contains(t, rec.Body.String(), "data: ")
+				} else {
+					require.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+					require.False(t, gjson.Get(rec.Body.String(), "error.recoverable").Bool())
+				}
+			})
+		}
+	}
+}
+
 func TestDeepSeekRecoveryHandlersBoundAttempts(t *testing.T) {
 	u := &deepSeekRecoveryTestUpstream{response: func(int, *http.Request) (int, string) { return 503, `{"error":{"message":"overloaded"}}` }}
 	h, c, rec, usage := deepSeekHandlerFixture(t, "chat", u)
 	h.ChatCompletions(c)
 	require.Len(t, u.ids, 3)
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	require.False(t, isOpsRoutingCapacityLimited(c))
 	require.Equal(t, u.ids[2], c.GetInt64(opsAccountIDKey))
 	require.Len(t, usage.created, 0)
 	require.Contains(t, rec.Body.String(), "error")

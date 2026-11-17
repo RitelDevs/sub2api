@@ -881,10 +881,10 @@ func (w *deepSeekRecoveryStream) CommitSuccess() error {
 }
 
 func (w *deepSeekRecoveryStream) CommitFailure(message string) error {
-	return w.CommitFailureCode(message, "upstream_unavailable")
+	return w.CommitFailureCode(http.StatusBadGateway, "", message, "upstream_unavailable")
 }
 
-func (w *deepSeekRecoveryStream) CommitFailureCode(message, code string) error {
+func (w *deepSeekRecoveryStream) CommitFailureCode(status int, errType, message, code string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.finalized {
@@ -897,7 +897,7 @@ func (w *deepSeekRecoveryStream) CommitFailureCode(message, code string) error {
 	if message == "" {
 		message = "DeepSeek 暂时无法完成回复，请稍后重试。"
 	}
-	if code != "context_limit" || w.business {
+	if code == "context_limit" && w.business {
 		code = "upstream_unavailable"
 	}
 	if code == "context_limit" {
@@ -911,6 +911,9 @@ func (w *deepSeekRecoveryStream) CommitFailureCode(message, code string) error {
 		publicError["type"] = "api_error"
 		obj = map[string]any{"type": "error", "error": publicError}
 	}
+	if errType != "" {
+		publicError["type"] = errType
+	}
 	if w.stream && w.downstream.Written() {
 		return w.emitFrame(deepSeekRecoveryFrame{event: event, data: obj})
 	}
@@ -919,8 +922,8 @@ func (w *deepSeekRecoveryStream) CommitFailureCode(message, code string) error {
 		return err
 	}
 	w.downstream.Header().Set("Content-Type", "application/json")
-	w.downstream.WriteHeader(http.StatusBadGateway)
-	// WriteHeaderNow preserves 502; emit normally initializes fresh streams as 200.
+	w.downstream.WriteHeader(status)
+	// Commit the error status before emit; emit normally initializes fresh streams as 200.
 	w.downstream.WriteHeaderNow()
 	return w.emit(b, false)
 }

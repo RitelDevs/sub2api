@@ -262,12 +262,13 @@ func (h *OpenAIGatewayHandler) runDeepSeekRecovery(c *gin.Context, in deepSeekRe
 		// ruling out the partial/tool/disconnect charge branch. Persist a zero
 		// receipt through the normal durable journal so an external wallet can
 		// settle the reservation without interpreting HTTP status or missing logs.
+		input := &service.OpenAIRecordUsageInput{
+			Result: &service.OpenAIForwardResult{Model: in.model}, APIKey: in.apiKey, User: in.apiKey.User,
+			Account: lastAccount, RequestPayloadHash: service.HashUsageRequestPayload(in.body), APIKeyService: h.apiKeyService,
+			InboundEndpoint: GetInboundEndpoint(c), UpstreamEndpoint: resolveOpenAIUpstreamEndpoint(finalContext, lastAccount, lastResult),
+		}
 		h.submitMandatoryUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
-			if err := h.gatewayService.RecordConfirmedUnbilledDeepSeek(ctx, &service.OpenAIRecordUsageInput{
-				Result: &service.OpenAIForwardResult{Model: in.model}, APIKey: in.apiKey, User: in.apiKey.User,
-				Account: lastAccount, RequestPayloadHash: service.HashUsageRequestPayload(in.body), APIKeyService: h.apiKeyService,
-				InboundEndpoint: GetInboundEndpoint(c), UpstreamEndpoint: resolveOpenAIUpstreamEndpoint(finalContext, lastAccount, lastResult),
-			}); err != nil {
+			if err := h.gatewayService.RecordConfirmedUnbilledDeepSeek(ctx, input); err != nil {
 				log.Error("deepseek.unbilled_receipt_pending", zap.Error(err))
 			}
 		})

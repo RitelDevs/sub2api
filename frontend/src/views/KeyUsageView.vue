@@ -322,18 +322,19 @@ const fieldLabelScope = useFieldLabelId()
 
 import LoadingRegion from '@/components/common/LoadingRegion.vue'
 import AppHeading from '@/components/common/AppHeading.vue'
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, shallowRef, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores'
 import { FeatureFlags, resolveFeatureFlag } from '@/utils/featureFlags'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import ThemeSwitcher from '@/components/common/ThemeSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
-import DataTable from '@/components/common/DataTable.vue'
 import { buildGatewayUrl } from '@/api/client'
 import { formatDateLocalInput } from '@/utils/format'
 import { sanitizeUrl } from '@/utils/url'
 import { BRAND_NAME, BRAND_LOGO } from '@/utils/branding'
+
+const DataTable = shallowRef<typeof import('@/components/common/DataTable.vue')['default']>()
 
 const { t, locale } = useI18n()
 const appStore = useAppStore()
@@ -800,6 +801,9 @@ async function queryKey() {
   try {
     const data = await fetchUsage(key)
     resultData.value = data
+    if (!DataTable.value && (dailyUsageRows.value.length || modelStats.value.length)) {
+      DataTable.value = (await import('@/components/common/DataTable.vue')).default
+    }
     showLoading.value = false
     showDatePicker.value = true
 

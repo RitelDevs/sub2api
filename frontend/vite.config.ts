@@ -137,6 +137,10 @@ export default defineConfig(({ mode }) => {
               return 'vendor-airwallex'
             }
 
+            // Only result tables / sortable lists and QR-code screens use these packages.
+            if (id.includes('/vue-draggable-plus/')) return 'vendor-draggable'
+            if (id.includes('/qrcode/') || id.includes('/dijkstrajs/')) return 'vendor-qrcode'
+
             // 其他小型第三方库合并
             return 'vendor-misc'
           }

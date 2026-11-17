@@ -187,6 +187,7 @@ describe('KeyUsageView daily detail', () => {
     await wrapper.find('input').setValue('sk-test-key')
     await wrapper.find('input').trigger('keydown.enter')
     await flushPromises()
+    await vi.dynamicImportSettled()
     await nextTick()
 
     const fetchMock = vi.mocked(fetch)
@@ -233,6 +234,7 @@ describe('KeyUsageView daily detail', () => {
     await wrapper.find('input').setValue('sk-test-key')
     await wrapper.find('input').trigger('keydown.enter')
     await flushPromises()
+    await vi.dynamicImportSettled()
 
     const requestUrl = String(vi.mocked(fetch).mock.calls[0][0])
     expect(requestUrl).toContain('start_date=2026-07-13')
@@ -252,6 +254,7 @@ describe('KeyUsageView daily detail', () => {
     await wrapper.find('input').setValue('sk-test-key')
     await wrapper.find('input').trigger('keydown.enter')
     await flushPromises()
+    await vi.dynamicImportSettled()
     await nextTick()
     await vi.advanceTimersByTimeAsync(1)
     expect(requestFrame).toHaveBeenCalled()

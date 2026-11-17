@@ -610,7 +610,8 @@ describe('user KeysView column settings', () => {
     expect(connection.props('keyRecord')).toBeNull()
   })
 
-  it('imports the clicked key directly using the saved model and metadata templates', async () => {
+  it('preserves metadata while native Claude follows client defaults', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ models: [{ slug: 'claude-opus-5-5' }] }) }))
     const open = vi.spyOn(window, 'open').mockImplementation(() => null)
     setKeys({ ...createApiKey(), group: { id: 42, name: 'Claude', platform: 'anthropic' } as Group })
     getPublicSettings.mockResolvedValue({
@@ -622,10 +623,11 @@ describe('user KeysView column settings', () => {
     })
     const wrapper = await mountView(true)
     await wrapper.get('[data-testid="connect-key-row"]').trigger('click')
+    await flushPromises()
     await wrapper.get('[data-testid="connection-ccs-my-claude"]').trigger('click')
     expect(open).toHaveBeenCalledOnce()
     const params = new URL(String(open.mock.calls[0]?.[0])).searchParams
-    expect(params.get('model')).toBe('configured-model')
+    expect(params.get('model')).toBeNull()
     expect(params.get('name')).toMatch(/ \/ test-key$/)
     expect(params.get('apiKey')).toBe('sk-test-key')
     expect(params.get('usageAutoInterval')).toBe('0')
@@ -633,6 +635,7 @@ describe('user KeysView column settings', () => {
   })
 
   it('offers every application tab and imports only the chosen app with the exact selected key', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ models: [{ slug: 'gpt-6.1-sol' }] }) }))
     const open = vi.spyOn(window, 'open').mockImplementation(() => null)
     setKeys({ ...createApiKey(), group: { id: 42, name: 'OpenAI', platform: 'openai' } as Group })
     getPublicSettings.mockResolvedValue({
@@ -656,11 +659,12 @@ describe('user KeysView column settings', () => {
     expect(wrapper.get('[data-app-tab="claude"]').attributes('aria-selected')).toBe('true')
     expect(wrapper.findAll('[data-testid^="connection-ccs-"]')).toHaveLength(1)
     expect(wrapper.find('[data-testid="connection-ccs-openai-codex"]').exists()).toBe(false)
+    await flushPromises()
     await wrapper.get('[data-testid="connection-ccs-claude"]').trigger('click')
     expect(open).toHaveBeenCalledOnce()
     const params = new URL(String(open.mock.calls[0]?.[0])).searchParams
     expect(params.get('app')).toBe('claude')
-    expect(params.get('model')).toBe('model-b')
+    expect(params.get('model')).toBe('gpt-6.1-sol')
     expect(params.get('apiKey')).toBe('sk-test-key')
     expect(params.get('apiFormat')).toBe('openai_responses')
     expect(wrapper.findAll('[role="dialog"]')).toHaveLength(1)
@@ -704,11 +708,11 @@ describe('user KeysView column settings', () => {
     const [href, target] = open.mock.calls[0]
     const url = new URL(String(href))
     expect(target).toBe('_self')
-    expect(url.protocol).toBe('magpie:')
-    expect(url.host).toBe('import')
-    expect(url.searchParams.get('name')).toBe('第二把密钥 · 示例站')
-    expect(url.searchParams.getAll('key')).toEqual(['sk-test-second+a&b'])
-    expect(url.searchParams.get('responses')).toBe('https://gateway.example/relay/v1')
+    expect(url.origin + url.pathname).toBe('https://usemagpie.ai/import')
+    expect(url.search).toBe('')
+    expect(new URLSearchParams(url.hash.slice(1)).get('name')).toBe('第二把密钥 · 示例站')
+    expect(new URLSearchParams(url.hash.slice(1)).getAll('key')).toEqual(['sk-test-second+a&b'])
+    expect(new URLSearchParams(url.hash.slice(1)).get('responses')).toBe('https://gateway.example/relay/v1')
     expect(showInfo).toHaveBeenCalledWith('keys.magpieImport.openHelp', 6500)
     expect(showError).not.toHaveBeenCalled()
   })
@@ -729,7 +733,7 @@ describe('user KeysView column settings', () => {
     await flushPromises()
     expect(button.attributes('disabled')).toBeUndefined()
     await button.trigger('click')
-    expect(new URL(String(open.mock.calls[0][0])).searchParams.get('chat')).toBe('https://gateway.example/v1')
+    expect(new URLSearchParams(new URL(String(open.mock.calls[0][0])).hash.slice(1)).get('chat')).toBe('https://gateway.example/v1')
   })
 
   it('does not open Magpie for a key with no assigned group', async () => {

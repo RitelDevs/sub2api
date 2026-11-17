@@ -1,7 +1,18 @@
 import type { GroupPlatform } from '@/types'
 import type { CcsImportApp, CcsImportConfig, CcsImportProfile } from '@/types/ccswitch'
+import { ccSwitchModelFamily, ccSwitchApiFormat, ccSwitchContextWindow, ccSwitchReasoningEffort, ccSwitchRoleModels, selectCcSwitchModel, type CcSwitchImportContext, type CcsRoleModels } from './ccsModelSelection'
+import { buildCodexImportConfig } from './codexImportConfig'
+export type { CcSwitchImportContext } from './ccsModelSelection'
 
-export type CcSwitchApplicationProfile = Omit<CcsImportProfile, 'platform'> & { platform: GroupPlatform }
+export type CcSwitchApplicationProfile = Omit<CcsImportProfile, 'platform'> & {
+  platform: GroupPlatform
+  modelOptions?: string[]
+  roleModels?: CcsRoleModels
+  nativeClaude?: boolean
+  unavailableReason?: 'models' | 'protocol'
+  contextWindow?: number
+  reasoningEffort?: string
+}
 
 export const OPENAI_CC_SWITCH_CODEX_MODEL = 'gpt-6.1-sol'
 export const GROK_CC_SWITCH_MODEL = 'grok-4.7'
@@ -10,7 +21,12 @@ export const GEMINI_CC_SWITCH_MODEL = 'gemini-4-argon'
 
 /** GPT/Claude defaults selected by the administrator on 2026-11-06; other platforms retain their defaults. */
 export function getCcSwitchDefaultModel(platform: GroupPlatform, app?: CcsImportApp): string {
+  if (app === 'claude' && (platform === 'anthropic' || platform === 'antigravity')) return ''
   if (app === 'gemini' || app === 'agy') return GEMINI_CC_SWITCH_MODEL
+  if (['deepseek', 'minimax', 'kimi', 'zhipu', 'opencode_go'].includes(platform)) {
+    if (app === 'mcode') return 'minimax-m3.1-flash'
+    if (app === 'kimi') return 'kimi-k3.1-pro'
+  }
   const models: Partial<Record<GroupPlatform, string>> = {
     openai: OPENAI_CC_SWITCH_CODEX_MODEL, composite: OPENAI_CC_SWITCH_CODEX_MODEL,
     anthropic: CLAUDE_CC_SWITCH_MODEL, antigravity: CLAUDE_CC_SWITCH_MODEL,
@@ -40,6 +56,7 @@ export interface CcSwitchImportDeeplinkInput {
   userId?: string | number
   settings?: CcsImportConfig | null
   profile?: CcSwitchApplicationProfile
+  context?: CcSwitchImportContext
 }
 
 /** Provider import contract: CC Switch v4.0.26 (f621d4216189ef06bcc6acd3588c84937b9794e1). */
@@ -51,10 +68,10 @@ export const CC_SWITCH_SUPPORTED_APPS = [
 export function createDefaultCcSwitchImportConfig(): CcsImportConfig {
   return {
     profiles: [
-      { id: 'anthropic-claude', label: 'Claude Code', platform: 'anthropic', app: 'claude', parameters: { model: CLAUDE_CC_SWITCH_MODEL } },
+      { id: 'anthropic-claude', label: 'Claude Code', platform: 'anthropic', app: 'claude', parameters: {} },
       { id: 'openai-codex', label: 'Codex', platform: 'openai', app: 'codex', parameters: { model: OPENAI_CC_SWITCH_CODEX_MODEL } },
       { id: 'gemini-cli', label: 'Gemini CLI', platform: 'gemini', app: 'gemini', parameters: { model: GEMINI_CC_SWITCH_MODEL } },
-      { id: 'antigravity-claude', label: 'Claude Code', platform: 'antigravity', app: 'claude', parameters: { model: CLAUDE_CC_SWITCH_MODEL } },
+      { id: 'antigravity-claude', label: 'Claude Code', platform: 'antigravity', app: 'claude', parameters: {} },
       { id: 'antigravity-gemini', label: 'Gemini CLI', platform: 'antigravity', app: 'gemini', parameters: { model: GEMINI_CC_SWITCH_MODEL } },
       { id: 'grok-build', label: 'Grok Build', platform: 'grok', app: 'grokbuild', parameters: { model: GROK_CC_SWITCH_MODEL } }
     ]
@@ -76,7 +93,8 @@ export function getCcSwitchImportProfiles(
 /** User-facing app selection is independent of the key's platform templates. */
 export function getCcSwitchApplicationProfiles(
   platform: GroupPlatform,
-  settings?: CcsImportConfig | null
+  settings?: CcsImportConfig | null,
+  context?: CcSwitchImportContext
 ): CcSwitchApplicationProfile[] {
   // SystemOne/TypeSafe is a dedicated non-LLM API, not an agent provider.
   if (platform === 'typesafe') return []
@@ -91,32 +109,46 @@ export function getCcSwitchApplicationProfiles(
     { app: 'kimi', label: 'Kimi Code' }, { app: 'dsh', label: 'DeepSeek Harness' }, { app: 'omp', label: 'Oh My Pi' }
   ]
   return apps.flatMap(({ app, label }) => {
-    const model = getCcSwitchDefaultModel(platform, app)
+    const { model, options, family } = selectCcSwitchModel(platform, app, context)
+    const nativeClaude = app === 'claude' && family === 'anthropic'
     const profile: CcSwitchApplicationProfile = {
-      id: `${platform}-${app}`, label, platform, app, parameters: model ? { model } : {}
+      id: `${platform}-${app}`, label, platform, app,
+      modelOptions: options, nativeClaude,
+      contextWindow: ccSwitchContextWindow(model, context),
+      reasoningEffort: ccSwitchReasoningEffort(model, context),
+      parameters: model && !nativeClaude ? { model } : {},
+      ...(context && !model ? { unavailableReason: 'models' as const } : {})
     }
-    // Gemini CLI cannot consume a converted protocol. Its availability is shown
-    // explicitly in the UI. Other clients use CCS routing or a native SDK.
-    let apiFormat = platform === 'gemini' ? 'gemini_native'
-      : platform === 'anthropic' || platform === 'antigravity' ? 'anthropic'
-        : platform === 'openai' || platform === 'composite' ? 'openai_responses' : 'openai_chat'
-    if (app === 'gemini' || app === 'agy') apiFormat = 'gemini_native'
-    if (apiFormat === 'gemini_native' && ['codex', 'grokbuild', 'hermes', 'mcode', 'dsh'].includes(app)) apiFormat = 'openai_responses'
-    profile.parameters.apiFormat = apiFormat
-    if (['claude', 'claude-desktop'].includes(app) && model && platform !== 'anthropic' && platform !== 'antigravity') {
-      profile.parameters.haikuModel = model
-      profile.parameters.sonnetModel = model
-      profile.parameters.opusModel = model
+    profile.parameters.apiFormat = ccSwitchApiFormat(platform, app, family)
+    // gateway.go only exposes Messages under /antigravity/v1. There is no
+    // Chat route there; dropping the prefix would lose the group isolation.
+    if (app === 'opencode' && family === 'gemini' && platform === 'antigravity') {
+      profile.unavailableReason = 'protocol'
+    }
+    if (profile.parameters.apiFormat === 'gemini_native' && ['codex', 'grokbuild', 'hermes', 'mcode', 'dsh'].includes(app)) profile.unavailableReason = 'protocol'
+    if (['gemini', 'agy'].includes(app) && !['gemini', 'antigravity', 'composite'].includes(platform)) {
+      profile.unavailableReason = 'protocol'
+    }
+    if (['claude', 'claude-desktop'].includes(app) && model && !nativeClaude) {
+      profile.roleModels = ccSwitchRoleModels(family, model, options)
+      profile.parameters.haikuModel = profile.roleModels.haiku
+      profile.parameters.sonnetModel = profile.roleModels.sonnet
+      profile.parameters.opusModel = profile.roleModels.opus
     }
     const configured = templates.filter(item => item.app === app)
-    if (configured.length) return configured.map(item => ({
-      ...item, parameters: {
-        ...profile.parameters,
-        ...(['claude', 'claude-desktop'].includes(app) && item.parameters.model && platform !== 'anthropic' && platform !== 'antigravity'
-          ? { haikuModel: item.parameters.model, sonnetModel: item.parameters.model, opusModel: item.parameters.model } : {}),
-        ...item.parameters
+    if (configured.length) return configured.map(item => {
+      const parameters = { ...profile.parameters, ...item.parameters }
+      // A user's actual key catalog owns the model/protocol choice. Saved
+      // platform-wide defaults must not send GPT to a Gemini-only group.
+      if (context) {
+        for (const field of ['model', 'haikuModel', 'sonnetModel', 'opusModel', 'apiFormat']) {
+          delete parameters[field]
+          if (profile.parameters[field] !== undefined) parameters[field] = profile.parameters[field]!
+        }
       }
-    }))
+      if (nativeClaude) for (const field of ['model', 'haikuModel', 'sonnetModel', 'opusModel']) delete parameters[field]
+      return { ...profile, id: item.id, label: item.label, parameters }
+    })
     return [profile]
   })
 }
@@ -226,6 +258,7 @@ const DEFAULT_IMPORT_PARAMETERS = {
 }
 
 function defaultProfileApiFormat(profile: CcSwitchApplicationProfile): string {
+  if (profile.app === 'opencode' && profile.platform === 'gemini') return 'openai_chat'
   if (['opencode', 'openclaw', 'hermes', 'pi', 'mcode', 'kimi', 'dsh', 'omp'].includes(profile.app)) {
     return profile.platform === 'gemini' ? (['mcode', 'dsh'].includes(profile.app) ? 'openai_responses' : 'gemini_native')
       : profile.platform === 'anthropic' || profile.platform === 'antigravity' ? 'anthropic'
@@ -257,10 +290,27 @@ export function isCcSwitchOmpKeyReference(apiKey: string): boolean {
 }
 
 export function buildCcSwitchImportDeeplink(input: CcSwitchImportDeeplinkInput): string {
-  const profiles = getCcSwitchImportProfiles(input.platform, input.settings)
-  const profile = input.profile || profiles.find(item => item.app === input.clientType) || profiles[0]
+  const profiles = getCcSwitchApplicationProfiles(input.platform || 'anthropic', input.settings, input.context)
+  const templates = getCcSwitchImportProfiles(input.platform, input.settings)
+  const legacySelection = templates.find(item => item.app === input.clientType) || templates[0]
+  const profile = input.profile || profiles.find(item => item.id === legacySelection?.id)
   if (!profile || !CC_SWITCH_SUPPORTED_APPS.includes(profile.app) || profile.platform !== (input.platform || 'anthropic')) {
     throw new Error('No CC Switch import profile is available for this platform')
+  }
+  if (input.context && profile.unavailableReason) throw new Error('No compatible model is available for this key and application')
+  const family = ccSwitchModelFamily(String(profile.parameters.model || ''))
+    ?? selectCcSwitchModel(profile.platform, profile.app, input.context).family
+  const nativeClaude = profile.app === 'claude' && family === 'anthropic'
+  if (profile.app === 'opencode' && family === 'gemini' && profile.platform === 'antigravity') {
+    throw new Error('OpenCode Gemini import is unavailable: the Antigravity route does not support Chat Completions')
+  }
+  // Live templates currently have no inline Codex config. Without a TOML
+  // parser, arbitrary nested overrides cannot be safely merged with the
+  // key-scoped model/auth rules. Preserve the saved template and fail clearly
+  // instead of silently discarding its custom fields or importing stale ones.
+  if (profile.app === 'codex' && input.context && profile.parameters.config !== undefined &&
+    (typeof profile.parameters.config !== 'string' || profile.parameters.config.trim())) {
+    throw new Error('Saved inline Codex config cannot be safely merged. Clear the old template config and use the current automatic configuration.')
   }
 
   if (profile.app === 'omp' && isCcSwitchOmpKeyReference(input.apiKey)) {
@@ -286,10 +336,18 @@ export function buildCcSwitchImportDeeplink(input: CcSwitchImportDeeplinkInput):
     usageScript: input.usageScript ?? DEFAULT_IMPORT_PARAMETERS.usageScript,
     ...profile.parameters
   }
-  if (!String(parameters.model || '').trim()) parameters.model = getCcSwitchDefaultModel(profile.platform, profile.app)
+  // An empty/whitespace-only override is the cleared-template path.
+  if (profile.app === 'codex' && input.context) delete parameters.config
+  if (nativeClaude) {
+    for (const field of ['model', 'haikuModel', 'sonnetModel', 'opusModel']) delete parameters[field]
+  } else if (!String(parameters.model || '').trim()) parameters.model = getCcSwitchDefaultModel(profile.platform, profile.app)
+  if (profile.app === 'opencode' && family === 'gemini') {
+    parameters.apiFormat = 'openai_chat'
+    if (typeof parameters.endpoint === 'string') parameters.endpoint = parameters.endpoint.replace(/\/v1beta\/?$/, '/v1')
+  }
   // Additive clients default to OpenAI Chat in CCS. Select the platform's
   // native format unless the administrator explicitly chose another one.
-  if (!profile.parameters.apiFormat && ['opencode', 'openclaw', 'hermes', 'pi', 'mcode', 'kimi', 'dsh', 'omp'].includes(profile.app)) {
+  if (!parameters.apiFormat && ['opencode', 'openclaw', 'hermes', 'pi', 'mcode', 'kimi', 'dsh', 'omp'].includes(profile.app)) {
     parameters.apiFormat = defaultProfileApiFormat(profile)
   }
   const apiFormat = String(parameters.apiFormat || defaultProfileApiFormat(profile))
@@ -301,6 +359,30 @@ export function buildCcSwitchImportDeeplink(input: CcSwitchImportDeeplinkInput):
   }
   const defaultEndpoint = defaultProfileEndpoint(input, profile, String(parameters.apiFormat || defaultProfileApiFormat(profile)))
   if (!parameters.endpoint) parameters.endpoint = defaultEndpoint
+  if (profile.app === 'claude' || profile.app === 'claude-desktop') {
+    const config = typeof parameters.config === 'string' && parameters.config ? JSON.parse(parameters.config) : {}
+    const env: Record<string, unknown> = { ...(config.env ?? {}) }
+    delete env.CLAUDE_CODE_SUBAGENT_MODEL
+    if (nativeClaude) {
+      for (const key of Object.keys(env)) {
+        if (/^ANTHROPIC_(?:MODEL|SMALL_FAST_MODEL|DEFAULT_.*_MODEL(?:_NAME)?)$/.test(key)) delete env[key]
+      }
+    } else if (profile.roleModels) {
+      const mark = (model: string) => profile.app === 'claude' && (ccSwitchContextWindow(model, input.context) ?? 0) >= 1000000 ? `${model}[1M]` : model
+      for (const [role, model] of Object.entries(profile.roleModels)) env[`ANTHROPIC_DEFAULT_${role.toUpperCase()}_MODEL`] = mark(model)
+      for (const [field, role] of [['sonnetModel', 'sonnet'], ['opusModel', 'opus'], ['haikuModel', 'haiku']] as const) parameters[field] = mark(profile.roleModels[role])
+      if (parameters.model) parameters.model = mark(String(parameters.model))
+      // Desktop has no fableModel query field: its fourth route inherits model.
+      // Keep all three named roles explicit and use this field for Fable only.
+      // Desktop's selected/default menu item is chosen in the client.
+      if (profile.app === 'claude-desktop') parameters.model = profile.roleModels.fable
+    }
+    if (profile.reasoningEffort) env.CLAUDE_CODE_EFFORT_LEVEL = profile.reasoningEffort
+    if (Object.keys(env).length || parameters.config) {
+      parameters.config = JSON.stringify({ ...config, env })
+      parameters.configFormat = 'json'
+    }
+  }
   const result = new URLSearchParams({ resource: 'provider', app: profile.app })
   for (const [key, value] of Object.entries(parameters)) {
     if (!PROVIDER_PARAMETERS.has(key)) continue
@@ -319,20 +401,15 @@ export function buildCcSwitchImportDeeplink(input: CcSwitchImportDeeplinkInput):
   if (!result.get('endpoint')) result.set('endpoint', defaultEndpoint)
   if (!result.get('homepage')) result.set('homepage', input.baseUrl)
   if (profile.app === 'codex' && !result.has('config')) {
-    const toml = `model_provider = "ritel"
-model = ${JSON.stringify(String(parameters.model))}
-model_reasoning_effort = "high"
-disable_response_storage = true
-service_tier = "fast"
-
-[model_providers.ritel]
-name = ${JSON.stringify(input.providerName)}
-base_url = ${JSON.stringify(result.get('endpoint'))}
-wire_api = "responses"
-requires_openai_auth = true
-`
+    const endpoint = result.get('endpoint')!
+    const config = buildCodexImportConfig({
+      apiKey: input.apiKey, endpoint, model: String(parameters.model),
+      contextWindow: profile.contextWindow,
+      modelCatalogUrl: `${endpoint.replace(/\/+$/, '')}/models`,
+      reasoningEffort: profile.reasoningEffort
+    })
     result.set('configFormat', 'json')
-    result.set('config', encodeUtf8Base64(JSON.stringify({ auth: { OPENAI_API_KEY: input.apiKey }, config: toml })))
+    result.set('config', encodeUtf8Base64(JSON.stringify(config)))
   }
   // No administrator setting can replace the key chosen by this user.
   result.set('apiKey', input.apiKey)

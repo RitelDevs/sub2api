@@ -30,7 +30,8 @@ describe('user CC Switch application choices', () => {
         expect(params.get('apiKey')).toBe(base.apiKey)
         expect(params.get('app')).toBe(item.app)
         expect(params.get('endpoint')).not.toContain('/v1/v1')
-        expect(params.get('model')).toBeTruthy()
+        if (item.nativeClaude) expect(params.has('model')).toBe(false)
+        else expect(params.get('model')).toBeTruthy()
       }
     }
   )
@@ -41,15 +42,15 @@ describe('user CC Switch application choices', () => {
     expect(params.get('apiFormat')).toBe('openai_responses')
     expect(params.get('endpoint')).toBe('https://api.example.com/v1')
     expect(params.get('model')).toBe('gpt-6.1-sol')
-    expect(params.get('haikuModel')).toBe('gpt-6.1-sol')
-    expect(params.get('sonnetModel')).toBe('gpt-6.1-sol')
+    expect(params.get('haikuModel')).toBe('gpt-6-luna')
+    expect(params.get('sonnetModel')).toBe('gpt-6.1-terra')
     expect(params.get('opusModel')).toBe('gpt-6.1-sol')
   })
 
   it('uses compatible formats for Gemini keys in clients without native Gemini support', () => {
     for (const profile of getCcSwitchApplicationProfiles('gemini')) {
       const params = new URL(buildCcSwitchImportDeeplink({ ...base, platform: 'gemini', profile })).searchParams
-      expect(params.get('apiFormat')).toBe(['codex', 'grokbuild', 'hermes', 'mcode', 'dsh'].includes(profile.app) ? 'openai_responses' : 'gemini_native')
+      expect(params.get('apiFormat')).toBe(profile.app === 'opencode' ? 'openai_chat' : ['codex', 'grokbuild', 'hermes', 'mcode', 'dsh'].includes(profile.app) ? 'openai_responses' : 'gemini_native')
     }
   })
 
@@ -170,7 +171,7 @@ describe('administrator CC Switch provider profiles', () => {
     ['anthropic', 'hermes', 'anthropic', ''],
     ['anthropic', 'pi', 'anthropic', ''],
     ['anthropic', 'openclaw', 'anthropic', ''],
-    ['gemini', 'opencode', 'gemini_native', '/v1beta'],
+    ['gemini', 'opencode', 'openai_chat', '/v1'],
     ['gemini', 'pi', 'gemini_native', '/v1beta'],
     ['gemini', 'openclaw', 'gemini_native', '/v1beta'],
     ['gemini', 'gemini', null, ''],

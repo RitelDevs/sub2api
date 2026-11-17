@@ -74,17 +74,55 @@
         </div>
 
         <section id="connection-application-panel" role="tabpanel" :aria-labelledby="`connection-tab-${activeApplication}`" :data-application="activeApplication" class="space-y-4">
-        <div v-if="selectedCcsProfiles.length" class="space-y-3" data-testid="selected-application-import">
+        <section v-if="platform !== 'typesafe'" class="space-y-3" data-testid="application-model-selection" aria-live="polite">
+          <p v-if="unavailableMessage()" :role="codexModelManifestState === 'error' ? 'alert' : 'status'" class="text-sm text-gray-600 dark:text-gray-300" data-testid="model-selection-status">{{ unavailableMessage() }}</p>
+          <button v-if="codexModelManifestState === 'error'" type="button" class="btn btn-secondary" data-testid="models-retry" @click="loadCodexModelManifest">{{ kc.modelsRetry }}</button>
+          <template v-if="modelSetupReady">
+            <p v-if="nativeClaude" class="text-sm text-gray-600 dark:text-gray-300" data-testid="native-claude-model">{{ kc.nativeClaudeModel }}</p>
+            <label v-else class="block">
+              <span class="input-label">{{ kc.defaultModel }}</span>
+              <select v-model="selectedModel" class="input" data-testid="application-model-select">
+                <option v-for="model in modelOptions" :key="model" :value="model">{{ model }}</option>
+              </select>
+            </label>
+            <p v-if="!nativeClaude" class="text-xs text-gray-500 dark:text-gray-400">{{ kc.modelSelectionScope }}</p>
+            <p v-if="!nativeClaude" class="text-xs text-gray-500 dark:text-gray-400" data-testid="model-catalog-capabilities">
+              {{ kc.catalogCapabilities }} · {{ kc.contextWindow }}: {{ activeProfile?.contextWindow ?? kc.capabilityUnknown }} · {{ kc.reasoningEffort }}: {{ activeProfile?.reasoningEffort ?? kc.clientDefault }} · {{ kc.inputModalities }}: {{ selectedInputModalities.join(' / ') || kc.capabilityUnknown }}
+            </p>
+            <dl v-if="roleModels || nativeClaude" class="space-y-2 text-sm" data-testid="model-role-table">
+              <div v-for="role in ['opus', 'fable', 'sonnet', 'haiku'] as const" :key="role" class="grid grid-cols-[5rem_minmax(0,1fr)] gap-3">
+                <dt class="capitalize text-gray-500 dark:text-gray-400">{{ role }}</dt>
+                <dd class="break-all"><code v-if="roleModels">{{ roleModels[role] }}</code><span v-else>{{ kc.clientDefault }}</span></dd>
+              </div>
+              <div v-if="activeApplication === 'claude'" class="grid grid-cols-[5rem_minmax(0,1fr)] gap-3">
+                <dt class="text-gray-500 dark:text-gray-400">Subagent</dt><dd>{{ kc.subagentInherit }}</dd>
+              </div>
+            </dl>
+            <p v-if="activeApplication === 'claude-desktop'" class="text-sm text-amber-700 dark:text-amber-300" data-testid="desktop-model-limits">{{ kc.desktopModelLimits }}</p>
+          </template>
+        </section>
+        <div v-if="selectedCcsProfiles.length || showMagpieImport" class="space-y-3" data-testid="selected-application-import">
           <p v-if="activeApplication === 'codex'" class="text-sm text-gray-600 dark:text-gray-300">{{ kc.codexSharedConfig }}</p>
+          <p v-if="activeApplication === 'codex'" class="text-sm text-gray-500 dark:text-gray-400" data-testid="codex-fast-notice">{{ kc.codexFastNotice }}</p>
           <div v-if="activeApplication === 'claude-desktop'" class="space-y-2 text-sm text-gray-600 dark:text-gray-300" data-testid="claude-desktop-import-guide">
             <p>{{ kc.claudeDesktopSeparate }}</p>
           </div>
           <div class="flex flex-wrap gap-2">
-            <button v-for="profile in selectedCcsProfiles" :key="profile.id" type="button" class="btn btn-primary" :disabled="!canImportApplication(profile)" :title="canImportApplication(profile) ? undefined : profile.app === 'omp' ? kc.ompKeyLimit : kc.geminiNativeOnly" :data-testid="`connection-ccs-${profile.id}`" @click="importConnection(profile)">
+            <button v-for="profile in selectedCcsProfiles" :key="profile.id" type="button" class="btn btn-primary" :disabled="!canImportApplication(profile)" :title="unavailableMessage(profile) || undefined" :data-testid="`connection-ccs-${profile.id}`" @click="importConnection(profile)">
               <Icon name="download" size="sm" class="mr-2" />{{ kc.oneClickImport }} · {{ profile.label }}
             </button>
+            <button v-if="showMagpieImport" type="button" class="btn btn-secondary" :disabled="!canImportMagpie" data-testid="connection-magpie" @click="importMagpie">
+              <Icon name="download" size="sm" class="mr-2" />{{ kc.magpieImport }}
+            </button>
           </div>
-          <p class="text-sm text-gray-600 dark:text-gray-300">{{ kc.defaultModel }} · <code>{{ selectedCcsModels.join(' / ') }}</code></p>
+          <p v-if="showMagpieImport" class="text-sm text-gray-500 dark:text-gray-400" data-testid="magpie-import-guide">{{ kc.magpieImportScope }} <a href="https://usemagpie.ai" target="_blank" rel="noopener noreferrer" class="link whitespace-nowrap">{{ kc.downloadMagpie }}</a></p>
+          <p v-if="magpieImportFailed" role="alert" class="text-sm text-red-600 dark:text-red-400" data-testid="magpie-import-error">{{ kc.magpieImportError }}</p>
+
+          <div v-if="fullProviderConfig" class="space-y-2" data-testid="full-provider-config">
+            <button type="button" class="btn btn-secondary" data-testid="copy-full-provider-config" @click="clipboardCopy(fullProviderConfig.content)">{{ kc.copyFullProviderConfig }}</button>
+            <p class="text-sm text-gray-500 dark:text-gray-400">{{ fullProviderConfig.formatLabel }} · {{ kc.fullProviderConfigScope }}</p>
+            <p v-if="fullProviderConfig.requiresProviderId" class="text-sm text-gray-500 dark:text-gray-400">{{ kc.providerIdPlaceholder }}</p>
+          </div>
           <div v-if="activeApplication === 'claude-desktop'" class="space-y-2 text-sm text-gray-600 dark:text-gray-300">
             <p>{{ kc.claudeDesktopImportNext }}</p>
             <p>{{ kc.claudeDesktopRestart }}</p>
@@ -341,7 +379,7 @@
 
 <script setup lang="ts">
 import AppHeading from '@/components/common/AppHeading.vue'
-import { ref, computed, h, watch, type Component } from 'vue'
+import { ref, computed, h, watch, onBeforeUnmount, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useKeyConnectionCopy } from './keyConnectionCopy'
 import CcsAppIcon from './CcsAppIcon.vue'
@@ -351,13 +389,11 @@ import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
 import { buildCodexModelCatalogUrl, fetchCodexModelsManifest } from '@/api/codex'
 import type { ApiKey, GroupPlatform, PublicSettings } from '@/types'
-import { buildCcSwitchImportDeeplink, getCcSwitchApplicationProfiles, getCcSwitchDefaultModel, isCcSwitchOmpKeyReference, type CcSwitchApplicationProfile } from '@/utils/ccswitchImport'
-import {
-  findCodexCatalogModel,
-  formatCodexReasoningEffortTomlLine,
-  parseCodexCatalogModels,
-  selectCodexConfigReasoningEffort
-} from '@/utils/codexCatalogConfig'
+import { buildCcSwitchImportDeeplink, getCcSwitchApplicationProfiles, isCcSwitchOmpKeyReference, type CcSwitchApplicationProfile } from '@/utils/ccswitchImport'
+import { buildCcSwitchProviderConfig } from '@/utils/ccsProviderConfig'
+import { buildCodexImportConfig } from '@/utils/codexImportConfig'
+import { buildMagpieImportUrl } from '@/utils/magpieImport'
+import { parseCcSwitchModels, ccSwitchContextWindow, type CcSwitchImportContext, type CcsModelInfo } from '@/utils/ccsModelSelection'
 
 interface Props {
   show: boolean
@@ -394,20 +430,70 @@ const kc = useKeyConnectionCopy()
 const { copyToClipboard: clipboardCopy } = useClipboard()
 
 const ccsImportFailed = ref(false)
-const ccsProfiles = computed(() => !props.keyRecord || !props.platform || props.publicSettings?.hide_ccs_import_button
-  ? [] : getCcSwitchApplicationProfiles(props.platform, props.publicSettings?.ccs_import_config))
+const magpieImportFailed = ref(false)
+const showMagpieImport = computed(() => !!props.keyRecord && !!props.platform && props.platform !== 'typesafe')
+const canImportMagpie = computed(() => props.show && showMagpieImport.value && !!props.apiKey && codexModelManifestState.value === 'ready' && !!modelOptions.value.length && !props.keyRecord?.group?.claude_code_only)
+function importMagpie() {
+  if (!canImportMagpie.value || !props.keyRecord || !props.platform) return
+  magpieImportFailed.value = false
+  try {
+    const url = buildMagpieImportUrl({
+      baseUrl: props.baseUrl || window.location.origin, apiKey: props.apiKey,
+      dashboardOrigin: window.location.origin, keyId: props.keyRecord.id, keyName: props.keyRecord.name,
+      platform: props.platform,
+      app: activeApplication.value === 'grok' ? 'grokbuild' : activeApplication.value as CcSwitchApplicationProfile['app'],
+      context: importContext.value
+    })
+    window.open(url, '_blank', 'noopener,noreferrer')
+  } catch {
+    magpieImportFailed.value = true
+  }
+}
+const selectedModels = ref<Record<string, string>>({})
+const availableModels = ref<CcsModelInfo[]>([])
 const activeApplication = computed(() => activeClientTab.value === 'codex-ws' ? 'codex' : activeClientTab.value)
-const selectedCcsProfiles = computed(() => ccsProfiles.value.filter(profile => profile.app === (activeApplication.value === 'grok' ? 'grokbuild' : activeApplication.value)))
-const selectedCcsModels = computed(() => [...new Set(selectedCcsProfiles.value.map(profile => String(profile.parameters.model || getCcSwitchDefaultModel(profile.platform, profile.app))))])
-const supportsGeminiNative = computed(() => ['gemini', 'antigravity', 'composite'].includes(props.platform || ''))
+const importContext = computed<CcSwitchImportContext>(() => ({
+  models: availableModels.value,
+  selectedModel: selectedModels.value[activeApplication.value],
+  allowLongContext: props.keyRecord?.allow_long_context,
+  contextTokenLimit: props.keyRecord?.context_token_limit,
+  maxReasoningEffort: props.keyRecord?.group?.max_reasoning_effort
+}))
+const applicationProfiles = computed(() => props.platform
+  ? getCcSwitchApplicationProfiles(props.platform, props.publicSettings?.ccs_import_config, importContext.value) : [])
+const activeProfiles = computed(() => applicationProfiles.value.filter(profile => profile.app === (activeApplication.value === 'grok' ? 'grokbuild' : activeApplication.value)))
+const selectedCcsProfiles = computed(() => !props.keyRecord || props.publicSettings?.hide_ccs_import_button ? [] : activeProfiles.value)
+const activeProfile = computed(() => activeProfiles.value[0] ?? (props.platform
+  ? getCcSwitchApplicationProfiles(props.platform, undefined, importContext.value).find(profile => profile.app === (activeApplication.value === 'grok' ? 'grokbuild' : activeApplication.value)) : undefined))
+const modelOptions = computed(() => activeProfile.value?.modelOptions ?? [])
+const selectedModel = computed({
+  get: () => String(activeProfile.value?.parameters.model || ''),
+  set: (model: string) => { selectedModels.value[activeApplication.value] = model }
+})
+const nativeClaude = computed(() => activeProfile.value?.nativeClaude === true)
+const roleModels = computed(() => activeProfile.value?.roleModels)
+const selectedInputModalities = computed(() => availableModels.value.find(model => model.id === selectedModel.value)?.inputModalities ?? [])
+const modelSetupReady = computed(() => codexModelManifestState.value === 'ready' && !!activeProfile.value && !activeProfile.value.unavailableReason && modelOptions.value.length > 0)
+function unavailableMessage(profile = activeProfile.value): string {
+  if (codexModelManifestState.value === 'loading' || codexModelManifestState.value === 'idle') return kc.value.modelsLoading
+  if (codexModelManifestState.value === 'error') return kc.value.modelsError
+  if (profile?.unavailableReason === 'protocol') return ['gemini', 'agy'].includes(profile.app)
+    ? kc.value.geminiNativeOnly : kc.value.protocolUnavailable
+  if (profile?.unavailableReason === 'models' || !profile?.modelOptions?.length) return kc.value.modelsUnavailable
+  if (profile.app === 'omp' && isCcSwitchOmpKeyReference(props.apiKey)) return kc.value.ompKeyLimit
+  return ''
+}
+const fullProviderConfig = computed(() => modelSetupReady.value && activeProfile.value ? buildCcSwitchProviderConfig({
+  profile: activeProfile.value, baseUrl: props.baseUrl || window.location.origin, apiKey: props.apiKey, context: importContext.value
+}) : null)
 const canImportApplication = (profile: CcSwitchApplicationProfile) =>
-  (!['gemini', 'agy'].includes(profile.app) || supportsGeminiNative.value) &&
-  (profile.app !== 'omp' || !isCcSwitchOmpKeyReference(props.apiKey))
+  props.show && !!props.apiKey && codexModelManifestState.value === 'ready' && !unavailableMessage(profile)
 function connectionDeeplink(profile: CcSwitchApplicationProfile) {
   return buildCcSwitchImportDeeplink({
     baseUrl: props.baseUrl || window.location.origin,
     platform: props.platform,
     profile,
+    context: importContext.value,
     settings: props.publicSettings?.ccs_import_config,
     providerName: 'Ritel.SI API',
     apiKey: props.apiKey, keyName: props.keyRecord?.name, userId: props.keyRecord?.user_id
@@ -419,8 +505,11 @@ const dshConnectionUrl = computed(() => {
   if (props.platform === 'antigravity') return root.endsWith('/antigravity') ? root : `${root}/antigravity`
   return props.platform === 'anthropic' ? root : `${root}/v1`
 })
-const dshProtocol = computed(() => props.platform === 'anthropic' || props.platform === 'antigravity' ? 'Anthropic Messages'
-  : ['openai', 'gemini', 'composite'].includes(props.platform || '') ? 'OpenAI Responses' : 'OpenAI Chat Completions')
+const dshProtocol = computed(() => {
+  const format = activeProfile.value?.parameters.apiFormat
+  return format === 'anthropic' ? 'Anthropic Messages' : format === 'openai_responses' ? 'OpenAI Responses'
+    : format === 'gemini_native' ? 'Gemini Native' : 'OpenAI Chat Completions'
+})
 const connectionUrls = computed(() => {
   const root = (props.baseUrl || window.location.origin).replace(/\/+$/, '').replace(/\/v1(?:beta)?$/, '')
   const antigravityRoot = root.endsWith('/antigravity') ? root : `${root}/antigravity`
@@ -435,9 +524,9 @@ const connectionUrls = computed(() => {
   if (client === 'opencode') {
     if (props.platform === 'antigravity') return [
       { url: `${antigravityRoot}/v1`, label: 'Claude' },
-      { url: `${antigravityRoot}/v1beta`, label: 'Gemini' }
+      { url: `${root.replace(/\/antigravity$/, '')}/v1`, label: 'Gemini' }
     ]
-    return [{ url: `${root}/${props.platform === 'gemini' ? 'v1beta' : 'v1'}`, label: '' }]
+    return [{ url: `${root}/v1`, label: '' }]
   }
   if (client === 'codex' || client === 'codex-ws' || client === 'grok') return [{ url: `${root}/v1`, label: '' }]
   if (props.platform === 'antigravity') return [{ url: antigravityRoot, label: '' }]
@@ -455,7 +544,7 @@ function importConnection(profile: CcSwitchApplicationProfile) {
     ccsImportFailed.value = true
   }
 }
-watch(() => [props.show, props.keyRecord?.id], () => { ccsImportFailed.value = false; advancedOpen.value = false })
+watch(() => [props.show, props.keyRecord?.id], () => { ccsImportFailed.value = false; magpieImportFailed.value = false; advancedOpen.value = false })
 
 const copiedIndex = ref<number | null>(null)
 const activeTab = ref<string>('unix')
@@ -493,8 +582,8 @@ const codexModelCatalogPath = computed(() => {
 const CODEX_MODEL_CATALOG_CONFIG_PATH = '~/.codex/codex-models.json'
 
 const codexManifestContext = computed(() => {
-  if (!showCodexModelCatalog.value) return ''
-  return `${props.platform}|${props.baseUrl}|${props.apiKey}`
+  if (!props.show || !props.apiKey || !props.platform || props.platform === 'typesafe') return ''
+  return JSON.stringify([props.platform, props.baseUrl, props.apiKey, props.keyRecord?.id])
 })
 
 // Reset tabs when platform changes
@@ -532,14 +621,20 @@ watch(() => props.show, (show) => {
 watch(codexManifestContext, (context, previousContext) => {
   if (context !== previousContext) {
     resetCodexModelManifest()
+    selectedModels.value = {}
+    codexModelCatalogMode.value = 'remote'
+    if (context) void loadCodexModelManifest()
   }
-})
+}, { immediate: true })
+
+onBeforeUnmount(resetCodexModelManifest)
 
 // Reset shell tab when client changes
 watch(activeClientTab, () => {
   activeTab.value = 'unix'
   advancedOpen.value = false
   ccsImportFailed.value = false
+  magpieImportFailed.value = false
 })
 
 // Icon components
@@ -767,13 +862,15 @@ function resetCodexModelManifest() {
   codexModelManifestRequestID += 1
   codexModelManifestState.value = 'idle'
   codexModelManifestContent.value = ''
+  availableModels.value = []
   codexModelManifestModelCount.value = 0
   codexModelManifestResponseBytes.value = 0
 }
 
 async function loadCodexModelManifest() {
-  if (!showCodexModelCatalog.value || !props.apiKey) return
+  if (!codexManifestContext.value) return
 
+  const requestContext = codexManifestContext.value
   codexModelManifestController?.abort()
   const controller = new AbortController()
   const requestID = ++codexModelManifestRequestID
@@ -782,7 +879,9 @@ async function loadCodexModelManifest() {
 
   try {
     const result = await fetchCodexModelsManifest(props.baseUrl, props.apiKey, controller.signal)
-    if (requestID !== codexModelManifestRequestID) return
+    if (requestID !== codexModelManifestRequestID || requestContext !== codexManifestContext.value) return
+    const models = parseCcSwitchModels(result.content)
+    availableModels.value = models
     codexModelManifestContent.value = result.content
     codexModelManifestModelCount.value = result.modelCount
     codexModelManifestResponseBytes.value = result.responseBytes
@@ -792,7 +891,7 @@ async function loadCodexModelManifest() {
     const errorName = error && typeof error === 'object' && 'name' in error
       ? String((error as { name?: unknown }).name || '')
       : ''
-    if (requestID !== codexModelManifestRequestID || errorName === 'AbortError') return
+    if (requestID !== codexModelManifestRequestID || requestContext !== codexManifestContext.value || errorName === 'AbortError') return
     codexModelManifestState.value = 'error'
   } finally {
     if (requestID === codexModelManifestRequestID) {
@@ -806,20 +905,6 @@ function downloadCodexModelManifest() {
   saveAs(
     new Blob([codexModelManifestContent.value], { type: 'application/json;charset=utf-8' }),
     'codex-models.json'
-  )
-}
-
-const codexCatalogModelSlugs = computed(() =>
-  parseCodexCatalogModels(codexModelManifestContent.value).map((model) => model.slug)
-)
-
-function selectCodexCatalogModel(preferredModel: string): string {
-  return codexCatalogModelSlugs.value[0] || preferredModel
-}
-
-function codexReasoningEffortTomlLine(modelSlug: string): string {
-  return formatCodexReasoningEffortTomlLine(
-    selectCodexConfigReasoningEffort(findCodexCatalogModel(codexModelManifestContent.value, modelSlug))
   )
 }
 
@@ -842,100 +927,17 @@ const comment = (value: string) => wrapToken('text-slate-500', value)
 // Syntax highlighting helpers
 // Generate file configs based on platform and active tab
 const currentFiles = computed((): FileConfig[] => {
-  const baseUrl = props.baseUrl || window.location.origin
+  if (props.platform !== 'typesafe' && !modelSetupReady.value) return []
+  const root = (props.baseUrl || window.location.origin).replace(/\/+$/, '').replace(/\/v1(?:beta)?$/, '')
+  const endpoint = connectionUrls.value[0]?.url || root
   const apiKey = props.apiKey
-  const baseRoot = baseUrl.replace(/\/v1\/?$/, '').replace(/\/+$/, '')
-  const ensureV1 = (value: string) => {
-    const trimmed = value.replace(/\/+$/, '')
-    return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`
-  }
-  const apiBase = ensureV1(baseRoot)
-  const antigravityBase = ensureV1(`${baseRoot}/antigravity`)
-  const antigravityGeminiBase = (() => {
-    const trimmed = `${baseRoot}/antigravity`.replace(/\/+$/, '')
-    return trimmed.endsWith('/v1beta') ? trimmed : `${trimmed}/v1beta`
-  })()
-  const geminiBase = (() => {
-    const trimmed = baseRoot.replace(/\/+$/, '')
-    return trimmed.endsWith('/v1beta') ? trimmed : `${trimmed}/v1beta`
-  })()
-
-  if (activeClientTab.value === 'opencode') {
-    switch (props.platform) {
-      case 'anthropic':
-        return [generateOpenCodeConfig('anthropic', apiBase, apiKey), ritelEnvironmentFile(apiKey)]
-      case 'openai':
-        return [generateOpenCodeConfig('openai', apiBase, apiKey), ritelEnvironmentFile(apiKey)]
-      case 'gemini':
-        return [generateOpenCodeConfig('gemini', geminiBase, apiKey), ritelEnvironmentFile(apiKey)]
-      case 'antigravity':
-        return [
-          generateOpenCodeConfig('antigravity-claude', antigravityBase, apiKey, 'opencode.json (Claude)'),
-          generateOpenCodeConfig('antigravity-gemini', antigravityGeminiBase, apiKey, 'opencode.json (Gemini)')
-          , ritelEnvironmentFile(apiKey)
-        ]
-      case 'grok':
-        return [generateOpenCodeConfig('grok', apiBase, apiKey), ritelEnvironmentFile(apiKey)]
-      default:
-        return [generateOpenCodeConfig(props.platform || 'openai', apiBase, apiKey), ritelEnvironmentFile(apiKey)]
-    }
-  }
-
-  switch (props.platform) {
-    case 'typesafe':
-      return [generateSystemOneCurl(baseRoot, apiKey)]
-    case 'openai':
-      if (activeClientTab.value === 'claude') {
-        // Anthropic clients append /v1/messages themselves.
-        return generateAnthropicFiles(baseRoot, apiKey)
-      }
-      if (activeClientTab.value === 'codex-ws') {
-        return generateOpenAIWsFiles(apiBase, apiKey)
-      }
-      // Codex appends /responses directly and does not add /v1.
-      return generateOpenAIFiles(apiBase, apiKey)
-    case 'gemini':
-      if (activeClientTab.value === 'codex') {
-        return generateRoutedCodexFiles(apiBase, apiKey, 'gemini')
-      }
-      return [generateGeminiCliContent(baseUrl, apiKey)]
-    case 'antigravity':
-      if (activeClientTab.value === 'codex') {
-        return generateRoutedCodexFiles(apiBase, apiKey, 'antigravity')
-      }
-      if (activeClientTab.value === 'gemini') {
-        return [generateGeminiCliContent(`${baseUrl}/antigravity`, apiKey)]
-      }
-      return generateAnthropicFiles(`${baseUrl}/antigravity`, apiKey)
-    case 'grok':
-      if (activeClientTab.value === 'claude') {
-        return generateGrokClaudeFiles(baseRoot, apiKey)
-      }
-      if (activeClientTab.value === 'codex') {
-        return generateGrokCodexFiles(apiBase, apiKey)
-      }
-      return generateGrokFiles(apiBase, apiKey)
-    case 'deepseek':
-      if (activeClientTab.value === 'codex') {
-        return generateRoutedCodexFiles(apiBase, apiKey, 'deepseek')
-      }
-      return generateAnthropicFiles(baseRoot, apiKey)
-    case 'minimax':
-      if (activeClientTab.value === 'codex') {
-        return generateRoutedCodexFiles(apiBase, apiKey, 'minimax')
-      }
-      return generateAnthropicFiles(baseRoot, apiKey)
-    case 'composite':
-      if (activeClientTab.value === 'codex') {
-        return generateRoutedCodexFiles(apiBase, apiKey, 'composite')
-      }
-      return generateAnthropicFiles(baseRoot, apiKey)
-    default:
-      if (activeClientTab.value === 'codex' && props.platform) {
-        return generateRoutedCodexFiles(apiBase, apiKey, props.platform)
-      }
-      return generateAnthropicFiles(baseUrl, apiKey)
-  }
+  if (props.platform === 'typesafe') return [generateSystemOneCurl(root, apiKey)]
+  if (activeApplication.value === 'opencode') return [generateOpenCodeConfig(), ritelEnvironmentFile(apiKey)]
+  if (activeApplication.value === 'codex') return generateCodexFiles(endpoint, apiKey)
+  if (activeApplication.value === 'claude') return generateAnthropicFiles(endpoint, apiKey)
+  if (activeApplication.value === 'gemini') return [generateGeminiCliContent(endpoint, apiKey)]
+  if (activeApplication.value === 'grok') return generateGrokFiles(endpoint, apiKey)
+  return []
 })
 
 function generateSystemOneCurl(baseUrl: string, apiKey: string): FileConfig {
@@ -979,119 +981,40 @@ Invoke-RestMethod -Method Post -Uri "${endpoint}" -Headers $headers -ContentType
 }
 
 function generateAnthropicFiles(baseUrl: string, apiKey: string): FileConfig[] {
-  let path: string
-  let content: string
-  const model = getCcSwitchDefaultModel(props.platform || 'anthropic')
-
-  switch (activeTab.value) {
-    case 'unix':
-      path = 'Terminal'
-      content = `export ANTHROPIC_BASE_URL="${baseUrl}"
-export ANTHROPIC_AUTH_TOKEN="${apiKey}"
-export ANTHROPIC_MODEL="${model}"
-export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
-      break
-    case 'cmd':
-      path = 'Command Prompt'
-      content = `set ANTHROPIC_BASE_URL=${baseUrl}
-set ANTHROPIC_AUTH_TOKEN=${apiKey}
-set ANTHROPIC_MODEL=${model}
-set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
-      break
-    case 'powershell':
-      path = 'PowerShell'
-      content = `$env:ANTHROPIC_BASE_URL="${baseUrl}"
-$env:ANTHROPIC_AUTH_TOKEN="${apiKey}"
-$env:ANTHROPIC_MODEL="${model}"
-$env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
-      break
-    default:
-      path = 'Terminal'
-      content = ''
-  }
-
-  const vscodeSettingsPath = activeTab.value === 'unix'
-    ? '~/.claude/settings.json'
-    : '%USERPROFILE%\\.claude\\settings.json'
-
-  const vscodeContent = `{
-  "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "env": {
-    "ANTHROPIC_BASE_URL": "${baseUrl}",
-    "ANTHROPIC_AUTH_TOKEN": "${apiKey}",
-    "ANTHROPIC_MODEL": "${model}",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
-  }
-}`
-
-  return [
-    { path, content },
-    {
-      path: vscodeSettingsPath,
-      content: vscodeContent,
-      hint: t('keys.useKeyModal.claudeSettingsHint')
-    }
-  ]
-}
-
-function generateGrokClaudeFiles(baseUrl: string, apiKey: string): FileConfig[] {
-  const environment = {
+  const environment: Record<string, string> = {
     ANTHROPIC_BASE_URL: baseUrl,
     ANTHROPIC_AUTH_TOKEN: apiKey,
-    ANTHROPIC_MODEL: 'grok-4.7',
-    ANTHROPIC_DEFAULT_OPUS_MODEL: 'grok-4.7',
-    ANTHROPIC_DEFAULT_SONNET_MODEL: 'grok-4.7',
-    ANTHROPIC_DEFAULT_HAIKU_MODEL: 'grok-4.7',
-    ANTHROPIC_DEFAULT_FABLE_MODEL: 'grok-4.7',
-    CLAUDE_CODE_SUBAGENT_MODEL: 'grok-4.7',
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
   }
-  let path: string
-  let content: string
-
-  switch (activeTab.value) {
-    case 'unix':
-      path = 'Terminal'
-      content = Object.entries(environment)
-        .map(([name, value]) => `export ${name}="${value}"`)
-        .join('\n')
-      break
-    case 'cmd':
-      path = 'Command Prompt'
-      content = Object.entries(environment)
-        .map(([name, value]) => `set ${name}=${value}`)
-        .join('\n')
-      break
-    case 'powershell':
-      path = 'PowerShell'
-      content = Object.entries(environment)
-        .map(([name, value]) => `$env:${name}="${value}"`)
-        .join('\n')
-      break
-    default:
-      path = 'Terminal'
-      content = ''
+  if (!nativeClaude.value) {
+    const mark = (model: string) => (ccSwitchContextWindow(model, importContext.value) ?? 0) >= 1000000 ? `${model}[1M]` : model
+    environment.ANTHROPIC_MODEL = mark(selectedModel.value)
+    for (const [role, model] of Object.entries(roleModels.value ?? {})) {
+      environment[`ANTHROPIC_DEFAULT_${role.toUpperCase()}_MODEL`] = mark(model)
+    }
   }
-
-  const settingsPath = activeTab.value === 'unix'
-    ? '~/.claude/settings.json'
-    : '%USERPROFILE%\\.claude\\settings.json'
-
+  if (activeProfile.value?.reasoningEffort) {
+    environment.CLAUDE_CODE_EFFORT_LEVEL = activeProfile.value.reasoningEffort
+  }
+  const shell = activeTab.value
+  const content = Object.entries(environment).map(([name, value]) => {
+    const literal = name === 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC' ? value : `"${value}"`
+    if (shell === 'powershell') return `$env:${name}=${literal}`
+    if (shell === 'cmd') return `set ${name}=${value}`
+    return `export ${name}=${literal}`
+  }).join('\n')
   return [
-    { path, content },
+    { path: shell === 'powershell' ? 'PowerShell' : shell === 'cmd' ? 'Command Prompt' : 'Terminal', content },
     {
-      path: settingsPath,
-      content: JSON.stringify({
-        $schema: 'https://json.schemastore.org/claude-code-settings.json',
-        env: environment
-      }, null, 2),
+      path: shell === 'unix' ? '~/.claude/settings.json' : '%USERPROFILE%\\.claude\\settings.json',
+      content: JSON.stringify({ $schema: 'https://json.schemastore.org/claude-code-settings.json', env: environment }, null, 2),
       hint: t('keys.useKeyModal.claudeSettingsHint')
     }
   ]
 }
 
 function generateGeminiCliContent(baseUrl: string, apiKey: string): FileConfig {
-  const model = getCcSwitchDefaultModel('gemini')
+  const model = selectedModel.value
   const modelComment = t('keys.useKeyModal.gemini.modelComment')
   let path: string
   let content: string
@@ -1135,72 +1058,42 @@ ${keyword('$env:')}${variable('GEMINI_MODEL')}${operator('=')}${string(`"${model
   return { path, content, highlighted }
 }
 
-function generateOpenAIFiles(baseUrl: string, apiKey: string): FileConfig[] {
+function generateCodexFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const isWindows = activeTab.value === 'windows'
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
-
-  const model = selectCodexCatalogModel(getCcSwitchDefaultModel('openai'))
-  const reasoningEffortLine = codexReasoningEffortTomlLine(model)
-
-  // config.toml content
-  const configContent = `model_provider = "ritel"
-model = "${model}"
-review_model = "${model}"
-service_tier = "fast"
-${reasoningEffortLine}disable_response_storage = true
-${codexLocalCatalogToml.value}network_access = "enabled"
-windows_wsl_setup_acknowledged = true
-
-[model_providers.ritel]
-name = "Ritel.SI API"
-base_url = "${baseUrl}"
-${codexModelCatalogMode.value === 'remote' ? `model_catalog_url = "${escapeTomlBasicString(buildCodexModelCatalogUrl(baseUrl))}"\n` : ''}wire_api = "responses"
-${generateCodexProviderAuthConfig(apiKey)}
-
-[features]
-${codexModelCatalogMode.value === 'remote' ? 'api_key_model_discovery = true\n' : ''}goals = true`
-
-  return buildOpenAICodexFileConfigs(configDir, configContent, apiKey)
+  const model = selectedModel.value
+  const useApiKey = props.platform !== 'openai' || codexAuthMode.value === 'api-key'
+  const websocket = activeClientTab.value === 'codex-ws'
+  let config = buildCodexImportConfig({
+    apiKey, endpoint: baseUrl, model,
+    contextWindow: activeProfile.value?.contextWindow,
+    reasoningEffort: activeProfile.value?.reasoningEffort ?? null,
+    modelCatalogUrl: codexModelCatalogMode.value === 'remote' ? buildCodexModelCatalogUrl(baseUrl) : undefined
+  }).config
+  config = config.replace('\n[model_providers.custom]', `\nreview_model = "${escapeTomlBasicString(model)}"\n${codexLocalCatalogToml.value}\n[model_providers.custom]`)
+  const auth = useApiKey ? generateCodexProviderAuthConfig() : 'requires_openai_auth = true'
+  config = config.replace('requires_openai_auth = true', `supports_websockets = ${websocket}\n${auth}`)
+  if (props.platform === 'openai') {
+    if (!config.includes('[features]')) config += '\n[features]\n'
+    if (websocket) config += 'responses_websockets_v2 = true\n'
+    config += 'goals = true\n'
+  }
+  const files: FileConfig[] = [{
+    path: joinConfigPath(configDir, 'config.toml', isWindows), content: config,
+    hint: t('keys.useKeyModal.openai.configTomlHint')
+  }]
+  if (useApiKey) files.unshift(ritelEnvironmentFile(apiKey))
+  else files.push({ path: joinConfigPath(configDir, 'auth.json', isWindows), content: JSON.stringify({ OPENAI_API_KEY: apiKey }, null, 2) })
+  return files
 }
 
-function generateCodexProviderAuthConfig(_apiKey: string): string {
-  if (codexAuthMode.value === 'api-key') {
-    return `requires_openai_auth = false
-env_key = "RITEL_API_KEY"
-http_headers = { "x-openai-actor-authorization" = "local-image-extension" }`
-  }
-
-  return 'requires_openai_auth = true'
+function generateCodexProviderAuthConfig(): string {
+  return `requires_openai_auth = false
+env_key = "RITEL_API_KEY"${props.platform === 'openai' ? '\nhttp_headers = { "x-openai-actor-authorization" = "local-image-extension" }' : ''}`
 }
 
 function ritelEnvironmentFile(apiKey: string): FileConfig {
   return { path: activeTab.value === 'windows' ? 'PowerShell' : 'Terminal', content: activeTab.value === 'windows' ? `$env:RITEL_API_KEY="${apiKey}"` : `export RITEL_API_KEY="${apiKey}"`, hint: t('consoleExperience.legacyConfig') }
-}
-
-function buildOpenAICodexFileConfigs(
-  configDir: string,
-  configContent: string,
-  apiKey: string
-): FileConfig[] {
-  const files: FileConfig[] = [
-    {
-      path: `${configDir}/config.toml`,
-      content: configContent,
-      hint: t('keys.useKeyModal.openai.configTomlHint')
-    }
-  ]
-
-  if (codexAuthMode.value === 'api-key') {
-    files.unshift(ritelEnvironmentFile(apiKey))
-  }
-  if (codexAuthMode.value === 'legacy') {
-    files.push({
-      path: `${configDir}/auth.json`,
-      content: JSON.stringify({ OPENAI_API_KEY: apiKey }, null, 2)
-    })
-  }
-
-  return files
 }
 
 function joinConfigPath(dir: string, file: string, windows: boolean): string {
@@ -1213,996 +1106,57 @@ function escapeTomlBasicString(value: string): string {
 }
 
 function generateGrokFiles(baseUrl: string, apiKey: string): FileConfig[] {
-  // Prefer unix/cmd/powershell when shell tabs are shown; fall back to windows tab.
-  const shell = activeTab.value
-  const isWindowsPath = shell === 'windows' || shell === 'cmd' || shell === 'powershell'
-  const configDir = isWindowsPath ? '%userprofile%\\.grok' : '~/.grok'
+  const isWindows = activeTab.value === 'windows'
+  const configDir = isWindows ? '%userprofile%\\.grok' : '~/.grok'
+  // Grok Build's custom-model contract names the three native API backends.
+  const format = activeProfile.value?.parameters.apiFormat
+  const backend = format === 'openai_chat' ? 'chat_completions' : format === 'anthropic' ? 'messages' : 'responses'
+  const effort = activeProfile.value?.reasoningEffort
+  const modelBlocks = modelOptions.value.map(model => {
+    const window = ccSwitchContextWindow(model, importContext.value)
+    return `[model."${escapeTomlBasicString(model)}"]
+model = "${escapeTomlBasicString(model)}"
+name = "${escapeTomlBasicString(model)}"
+env_key = "XAI_API_KEY"
+api_backend = "${backend}"${window ? `\ncontext_window = ${window}` : ''}`
+  }).join('\n\n')
+  return [
+    {
+      path: isWindows ? 'PowerShell' : 'Terminal',
+      content: isWindows ? `$env:GROK_MODELS_BASE_URL="${baseUrl}"\n$env:XAI_API_KEY="${apiKey}"` : `export GROK_MODELS_BASE_URL="${baseUrl}"\nexport XAI_API_KEY="${apiKey}"`
+    },
+    {
+      path: joinConfigPath(configDir, 'config.toml', isWindows),
+      content: `[endpoints]
+models_base_url = "${baseUrl}"
+models_list_url = "${baseUrl.replace(/\/+$/, '')}/models"
+xai_api_base_url = "${baseUrl}"
+cli_chat_proxy_base_url = "${baseUrl}"
 
-  let envPath: string
-  let envContent: string
-  switch (shell) {
-    case 'cmd':
-      envPath = 'Command Prompt'
-      envContent = `set GROK_MODELS_BASE_URL=${baseUrl}
-set XAI_API_KEY=${apiKey}`
-      break
-    case 'powershell':
-    case 'windows':
-      envPath = 'PowerShell'
-      envContent = `$env:GROK_MODELS_BASE_URL="${baseUrl}"
-$env:XAI_API_KEY="${apiKey}"`
-      break
-    default:
-      envPath = 'Terminal'
-      envContent = `export GROK_MODELS_BASE_URL="${baseUrl}"
-export XAI_API_KEY="${apiKey}"`
-  }
-
-  // Shape follows Grok Build user guide (~/.grok/docs + custom-models) and production-ready Ritel.SI API setups.
-  // Text models only (Responses). Image/video: Imagine model IDs on media endpoints / feature overrides.
-  // Credential order: api_key field → env_key → signed-in session → XAI_API_KEY global fallback.
-  const modelsListUrl = `${baseUrl.replace(/\/+$/, '')}/models`
-  const configContent = `# Grok Build CLI → Ritel.SI API group (API key auth).
-# Docs: ~/.grok/docs/user-guide/05-configuration.md + 11-custom-models.md
-# Verify after save: grok inspect
-#
-# IMPORTANT: api_backend must be "responses" for Ritel.SI API (POST /v1/responses).
-# If omitted, Grok Build defaults to chat_completions (/v1/chat/completions).
-# Keep api_backend = "responses" on every model entry.
-#
-# Prefer env_key over hardcoding api_key (never commit secrets).
-# Also export GROK_MODELS_BASE_URL + XAI_API_KEY in the shell block above.
-
-# Global inference / catalog endpoints (same role as env GROK_MODELS_BASE_URL).
-# When models_base_url is set, Grok uses API-key Bearer auth (no grok login required).
-[endpoints]
-models_base_url = "${baseUrl}"              # inference base; model list defaults to {base}/models
-models_list_url = "${modelsListUrl}"        # optional override (env: GROK_MODELS_LIST_URL)
-xai_api_base_url = "${baseUrl}"             # public xAI API base override for gateway routing
-cli_chat_proxy_base_url = "${baseUrl}"      # CLI chat-proxy base (env: GROK_CLI_CHAT_PROXY_BASE_URL)
-
-# Prefer API key when using a custom gateway (matches Ritel.SI API).
-# Requires XAI_API_KEY env or per-model env_key / api_key.
 [auth]
 preferred_method = "api_key"
 
-[model."grok-4.7"]
-model = "grok-4.7"                          # id sent to the API
-name = "Grok 4.7"                           # shown in /model picker
-description = "Grok 4.7 via Ritel.SI API (Responses)"
-# base_url inherits from [endpoints].models_base_url; override only if needed:
-# base_url = "${baseUrl}"
-env_key = "XAI_API_KEY"                     # or: api_key = "${apiKey}"  (not recommended)
-api_backend = "responses"                   # chat_completions | responses | messages
-context_window = 500000                     # drives auto-compaction timing
-# Optional sampling (global defaults can live under [models] instead):
-# temperature = 0.7
-# top_p = 0.95
-# max_completion_tokens = 8192
-# Server-side (backend) web_search tools — only if your gateway exposes them:
-supports_backend_search = true
-
-[model."grok-build-0.1"]
-model = "grok-build-0.1"
-name = "Grok Build"
-description = "Coding / agent sessions (xAI recommends grok-build* for coding)"
-env_key = "XAI_API_KEY"
-api_backend = "responses"
-context_window = 256000
-supports_backend_search = true
-
-# Text multi-agent / client web_search sub-agent (NOT Imagine image/video).
-[model."grok-4.20-multi-agent-0309"]
-model = "grok-4.20-multi-agent-0309"
-name = "Grok 4.20 Multi Agent (text / web_search)"
-description = "Text multi-agent; use for web_search sub-agent, not image/video"
-env_key = "XAI_API_KEY"
-api_backend = "responses"
-context_window = 1000000
-supports_backend_search = true
-
-[model."grok-4.3"]
-model = "grok-4.3"
-name = "Grok 4.3"
-env_key = "XAI_API_KEY"
-api_backend = "responses"
-context_window = 1000000
-supports_backend_search = true
-
-# Optional short alias for /model grok:
-# [model."grok"]
-# model = "grok-4.7"
-# name = "Grok"
-# env_key = "XAI_API_KEY"
-# api_backend = "responses"
-# context_window = 1000000
-# supports_backend_search = true
+${modelBlocks}
 
 [models]
-# Use the current Grok flagship for coding and general chat.
-default = "grok-4.7"
-web_search = "grok-4.7"                     # client-side web_search tool model (must exist as [model.*])
-image_description = "grok-4.7"              # vision/describe-image helper model
-# Optional environment-wide sampling defaults (per-model values win):
-# temperature = 0.7
-# top_p = 0.95
-# max_completion_tokens = 8192
-# max_retries = 8
-
-[session]
-auto_compact_threshold_percent = 80         # auto-compact at this % of context_window (default 85)
-
-# Imagine tools: model IDs go to Ritel.SI API media endpoints (not the text [model.*] catalog).
-# Enable only if the Grok group allows image/video generation.
-[features]
-image_gen = true
-video_gen = true
-image_gen_model_override = "grok-imagine-image-quality"   # or grok-imagine-image
-image_edit_model_override = "grok-imagine-edit"
-# Optional feature flags (defaults shown in docs):
-# telemetry = false
-# remote_fetch = true                         # set false for air-gapped / pure-gateway catalogs
-# lsp_tools = false`
-
-  return [
-    { path: envPath, content: envContent },
-    {
-      path: joinConfigPath(configDir, 'config.toml', isWindowsPath),
-      content: configContent,
+default = "${escapeTomlBasicString(selectedModel.value)}"${effort ? `\ndefault_reasoning_effort = "${effort}"` : ''}`,
       hint: t('keys.useKeyModal.grok.configTomlHint')
     }
   ]
 }
 
-function generateGrokCodexFiles(baseUrl: string, apiKey: string): FileConfig[] {
-  // Codex config reference: wire_api = "responses" only; prefer env_key over experimental_bearer_token.
-  // Non-OpenAI gateways should set supports_websockets = false (HTTP/SSE).
-  const shell = activeTab.value
-  const isWindowsPath = shell === 'windows' || shell === 'cmd' || shell === 'powershell'
-  const configDir = isWindowsPath ? '%userprofile%\\.codex' : '~/.codex'
-  const model = selectCodexCatalogModel('grok-4.7')
-
-  let envPath: string
-  let envContent: string
-  switch (shell) {
-    case 'cmd':
-      envPath = 'Command Prompt'
-      envContent = `set RITEL_API_KEY=${apiKey}`
-      break
-    case 'powershell':
-    case 'windows':
-      envPath = 'PowerShell'
-      envContent = `$env:RITEL_API_KEY="${apiKey}"`
-      break
-    default:
-      envPath = 'Terminal'
-      envContent = `export RITEL_API_KEY="${apiKey}"`
-  }
-
-  const configContent = `# Codex CLI → Ritel.SI API group
-# Docs: Codex config reference (model_providers.*, wire_api = "responses")
-#
-# Text models only. Image/video: grok-imagine-image / grok-imagine-video on media endpoints.
-# Switch model: grok-4.7 | grok-4.3 | grok-build-0.1 | grok-4.20-multi-agent-0309 (text / web_search)
-
-model_provider = "ritel"
-model = "${model}"
-${codexLocalCatalogToml.value}# Optional:
-# review_model = "${model}"
-# model_reasoning_effort = "medium"
-# model_context_window = 500000
-# disable_response_storage = true
-# network_access = "enabled"
-# windows_wsl_setup_acknowledged = true
-
-[model_providers.ritel]
-name = "Ritel.SI API"
-base_url = "${baseUrl}"
-${codexModelCatalogMode.value === 'remote' ? `model_catalog_url = "${escapeTomlBasicString(buildCodexModelCatalogUrl(baseUrl))}"\n` : ''}# Prefer env_key (variable NAME). Do not combine with experimental_bearer_token.
-env_key = "RITEL_API_KEY"
-# Fallback only if you cannot set env (discouraged — keeps secret on disk):
-# experimental_bearer_token = "${apiKey}"
-wire_api = "responses"
-# API-key providers: do not require ChatGPT OAuth login
-requires_openai_auth = false
-# Grok/Ritel.SI API path is HTTP/SSE; disable WS (Codex may otherwise try WebSocket first)
-supports_websockets = false
-
-${codexModelCatalogMode.value === 'remote' ? '[features]\napi_key_model_discovery = true\n\n# Optional:' : '# Optional:\n# [features]'}
-# goals = true`
-
-  return [
-    { path: envPath, content: envContent },
-    {
-      path: joinConfigPath(configDir, 'config.toml', isWindowsPath),
-      content: configContent,
-      hint: t('keys.useKeyModal.grok.codexConfigTomlHint')
-    }
-  ]
-}
-
-function generateRoutedCodexFiles(
-  baseUrl: string,
-  apiKey: string,
-  platform: GroupPlatform
-): FileConfig[] {
-  const isWindows = activeTab.value === 'windows'
-  const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
-  const preferredModel = getCcSwitchDefaultModel(platform)
-  const model = selectCodexCatalogModel(preferredModel)
-  const envContent = isWindows
-    ? `$env:RITEL_API_KEY="${apiKey}"`
-    : `export RITEL_API_KEY="${apiKey}"`
-
-  const configContent = `# Codex CLI -> Ritel.SI API group
-model_provider = "ritel"
-model = "${model}"
-review_model = "${model}"
-disable_response_storage = true
-${codexLocalCatalogToml.value}
-[model_providers.ritel]
-name = "Ritel.SI API"
-base_url = "${baseUrl}"
-${codexModelCatalogMode.value === 'remote' ? `model_catalog_url = "${escapeTomlBasicString(buildCodexModelCatalogUrl(baseUrl))}"\n` : ''}env_key = "RITEL_API_KEY"
-wire_api = "responses"
-requires_openai_auth = false
-supports_websockets = false${codexModelCatalogMode.value === 'remote' ? '\n\n[features]\napi_key_model_discovery = true' : ''}`
-
-  return [
-    { path: isWindows ? 'PowerShell' : 'Terminal', content: envContent },
-    {
-      path: joinConfigPath(configDir, 'config.toml', isWindows),
-      content: configContent,
-      hint: t(
-        platform === 'deepseek' || platform === 'minimax' || platform === 'composite'
-          ? `keys.useKeyModal.${platform}.codexConfigTomlHint`
-          : 'keys.useKeyModal.routedCodex.configTomlHint'
-      )
-    }
-  ]
-}
-
-function generateOpenAIWsFiles(baseUrl: string, apiKey: string): FileConfig[] {
-  const isWindows = activeTab.value === 'windows'
-  const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
-  const model = selectCodexCatalogModel(getCcSwitchDefaultModel('openai'))
-  const reasoningEffortLine = codexReasoningEffortTomlLine(model)
-
-  // config.toml content with WebSocket v2
-  const configContent = `model_provider = "ritel"
-model = "${model}"
-review_model = "${model}"
-service_tier = "fast"
-${reasoningEffortLine}disable_response_storage = true
-${codexLocalCatalogToml.value}network_access = "enabled"
-windows_wsl_setup_acknowledged = true
-
-[model_providers.ritel]
-name = "Ritel.SI API"
-base_url = "${baseUrl}"
-${codexModelCatalogMode.value === 'remote' ? `model_catalog_url = "${escapeTomlBasicString(buildCodexModelCatalogUrl(baseUrl))}"\n` : ''}wire_api = "responses"
-supports_websockets = true
-${generateCodexProviderAuthConfig(apiKey)}
-
-[features]
-${codexModelCatalogMode.value === 'remote' ? 'api_key_model_discovery = true\n' : ''}responses_websockets_v2 = true
-goals = true`
-
-  return buildOpenAICodexFileConfigs(configDir, configContent, apiKey)
-}
-
-function generateOpenCodeConfig(platform: string, baseUrl: string, _apiKey: string, pathLabel?: string): FileConfig {
-  const provider: Record<string, any> = {
-    [platform]: {
-      options: {
-        baseURL: baseUrl,
-        apiKey: '{env:RITEL_API_KEY}'
-      }
-    }
-  }
-  const openaiModels = {
-    'gpt-6': {
-      name: 'GPT-6 (Astra)',
-      limit: {
-        context: 1050000,
-        output: 128000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {},
-        max: {}
-      }
-    },
-    'gpt-6-astra': {
-      name: 'GPT-6 Astra',
-      limit: {
-        context: 1050000,
-        output: 128000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {},
-        max: {}
-      }
-    },
-    'gpt-5.2': {
-      name: 'GPT-5.2',
-      limit: {
-        context: 400000,
-        output: 128000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {}
-      }
-    },
-    'gpt-5.6': {
-      name: 'GPT-5.6 (Sol)',
-      limit: {
-        context: 1050000,
-        output: 128000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {},
-        max: {}
-      }
-    },
-    'gpt-6.1-terra': {
-      name: 'GPT-6.1 Terra',
-      limit: { context: 1050000, output: 128000 },
-      options: { store: false },
-      variants: { none: {}, low: {}, medium: {}, high: {}, xhigh: {}, max: {} }
-    },
-    'gpt-6.1-sol': {
-      name: 'GPT-6.1 Sol',
-      limit: {
-        context: 1050000,
-        output: 128000
-      },
-      options: {
-        store: false,
-        reasoningEffort: 'medium'
-      },
-      variants: {
-        low: { reasoningEffort: 'low' },
-        medium: { reasoningEffort: 'medium' },
-        high: { reasoningEffort: 'high' },
-        xhigh: { reasoningEffort: 'xhigh' },
-        max: { reasoningEffort: 'max' }
-      }
-    },
-    'gpt-6-sol': {
-      name: 'GPT-6 Sol',
-      limit: {
-        context: 1050000,
-        output: 128000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        none: {},
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {},
-        max: {}
-      }
-    },
-    'gpt-5.6-sol': {
-      name: 'GPT-5.6 Sol',
-      limit: {
-        context: 1050000,
-        output: 128000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {},
-        max: {}
-      }
-    },
-    'gpt-5.6-terra': {
-      name: 'GPT-5.6 Terra',
-      limit: {
-        context: 1050000,
-        output: 128000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {},
-        max: {}
-      }
-    },
-    'gpt-6-luna': {
-      name: 'GPT-6 Luna',
-      limit: {
-        context: 1050000,
-        output: 128000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        none: {},
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {},
-        max: {}
-      }
-    },
-    'gpt-5.6-luna': {
-      name: 'GPT-5.6 Luna',
-      limit: {
-        context: 1050000,
-        output: 128000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {},
-        max: {}
-      }
-    },
-    'gpt-5.5': {
-      name: 'GPT-5.5',
-      limit: {
-        context: 1050000,
-        output: 128000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {}
-      }
-    },
-    'gpt-5.4': {
-      name: 'GPT-5.4',
-      limit: {
-        context: 1050000,
-        output: 128000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {}
-      }
-    },
-    'gpt-5.4-mini': {
-      name: 'GPT-5.4 Mini',
-      limit: {
-        context: 400000,
-        output: 128000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {}
-      }
-    },
-    'gpt-5.3-codex-spark': {
-      name: 'GPT-5.3 Codex Spark',
-      limit: {
-        context: 128000,
-        output: 32000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {},
-        xhigh: {}
-      }
-    },
-    'codex-mini-latest': {
-      name: 'Codex Mini',
-      limit: {
-        context: 200000,
-        output: 100000
-      },
-      options: {
-        store: false
-      },
-      variants: {
-        low: {},
-        medium: {},
-        high: {}
-      }
-    }
-  }
-  const geminiModels = {
-    'gemini-2.0-flash': {
-      name: 'Gemini 2.0 Flash',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      }
-    },
-    'gemini-2.5-flash': {
-      name: 'Gemini 2.5 Flash',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      }
-    },
-    'gemini-2.5-pro': {
-      name: 'Gemini 2.5 Pro',
-      limit: {
-        context: 2097152,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'gemini-3.5-flash': {
-      name: 'Gemini 3.5 Flash',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      }
-    },
-    'gemini-3-flash-preview': {
-      name: 'Gemini 3 Flash Preview',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      }
-    },
-    'gemini-3-pro-preview': {
-      name: 'Gemini 3 Pro Preview',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'gemini-3.1-pro-preview': {
-      name: 'Gemini 3.1 Pro Preview',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    }
-  }
-
-  const antigravityGeminiModels = {
-    'gemini-2.5-flash': {
-      name: 'Gemini 2.5 Flash',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'disable'
-        }
-      }
-    },
-    'gemini-2.5-flash-lite': {
-      name: 'Gemini 2.5 Flash Lite',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'gemini-2.5-flash-thinking': {
-      name: 'Gemini 2.5 Flash (Thinking)',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'gemini-3-flash': {
-      name: 'Gemini 3 Flash',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'gemini-3.1-pro-low': {
-      name: 'Gemini 3.1 Pro Low',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'gemini-3.1-pro-high': {
-      name: 'Gemini 3.1 Pro High',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'gemini-2.5-flash-image': {
-      name: 'Gemini 2.5 Flash Image',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image'],
-        output: ['image']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'gemini-3.1-flash-image': {
-      name: 'Gemini 3.1 Flash Image',
-      limit: {
-        context: 1048576,
-        output: 65536
-      },
-      modalities: {
-        input: ['text', 'image'],
-        output: ['image']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    }
-  }
-  const claudeModels = {
-    'claude-fable-5-1': {
-      name: 'Claude Fable 5.1',
-      limit: {
-        context: 1048576,
-        output: 128000
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          type: 'adaptive'
-        }
-      }
-    },
-    'claude-fable-5': {
-      name: 'Claude Fable 5',
-      limit: {
-        context: 1048576,
-        output: 128000
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          type: 'adaptive'
-        }
-      }
-    },
-    'claude-opus-4-6-thinking': {
-      name: 'Claude 4.6 Opus (Thinking)',
-      limit: {
-        context: 200000,
-        output: 128000
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    },
-    'claude-sonnet-4-6': {
-      name: 'Claude 4.6 Sonnet',
-      limit: {
-        context: 200000,
-        output: 64000
-      },
-      modalities: {
-        input: ['text', 'image', 'pdf'],
-        output: ['text']
-      },
-      options: {
-        thinking: {
-          budgetTokens: 24576,
-          type: 'enabled'
-        }
-      }
-    }
-  }
-  // Align context_window with Grok Build official sample (docs.x.ai/build/settings) where known.
-  // Image/video: grok-imagine-image / grok-imagine-video on media endpoints — not this list.
-  const grokModels = {
-    'grok-4.5': {
-      name: 'Grok 4.5',
-      limit: { context: 500000, output: 64000 }
-    },
-    'grok-build-0.1': {
-      name: 'Grok Build 0.1',
-      limit: { context: 256000, output: 64000 }
-    },
-    'grok-4.20-multi-agent-0309': {
-      name: 'Grok 4.20 Multi Agent (text / web_search)',
-      limit: { context: 1000000, output: 64000 }
-    },
-    'grok-4.3': {
-      name: 'Grok 4.3',
-      limit: { context: 1000000, output: 64000 }
-    },
-    'grok-composer-2.5-fast': {
-      name: 'Grok Composer 2.5 Fast',
-      limit: { context: 500000, output: 64000 }
-    }
-  }
-
-  if (platform === 'gemini') {
-    provider[platform].npm = '@ai-sdk/google'
-    provider[platform].models = geminiModels
-  } else if (platform === 'anthropic') {
-    provider[platform].npm = '@ai-sdk/anthropic'
-    // Mythos requires an eligible Anthropic account; configuration does not grant access.
-    provider[platform].models = {
-      'claude-fable-5-2': {
-        name: 'Claude Fable 5.2',
-        limit: { context: 1000000, output: 128000 },
-        modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
-        options: { thinking: { type: 'adaptive' }, effort: 'high' },
-        variants: {
-          low: { effort: 'low' },
-          medium: { effort: 'medium' },
-          high: { effort: 'high' },
-          xhigh: { effort: 'xhigh' },
-          max: { effort: 'max' }
-        }
-      },
-      'claude-mythos-5-2': {
-        name: 'Claude Mythos 5.2',
-        limit: { context: 1000000, output: 128000 },
-        modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
-        options: { thinking: { type: 'adaptive' }, effort: 'high' },
-        variants: {
-          low: { effort: 'low' },
-          medium: { effort: 'medium' },
-          high: { effort: 'high' },
-          xhigh: { effort: 'xhigh' },
-          max: { effort: 'max' }
-        }
-      },
-      'claude-opus-5-5': {
-        name: 'Claude Opus 5.5',
-        limit: { context: 1000000, output: 128000 },
-        modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
-        options: { thinking: { type: 'adaptive' }, effort: 'medium' },
-        variants: {
-          low: { effort: 'low' },
-          medium: { effort: 'medium' },
-          high: { effort: 'high' },
-          xhigh: { effort: 'xhigh' },
-          max: { effort: 'max' }
-        }
-      },
-      'claude-sonnet-5-5': {
-        name: 'Claude Sonnet 5.5',
-        limit: { context: 1000000, output: 128000 },
-        modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
-        options: { thinking: { type: 'adaptive' }, effort: 'high' },
-        variants: {
-          low: { effort: 'low' },
-          medium: { effort: 'medium' },
-          high: { effort: 'high' },
-          xhigh: { effort: 'xhigh' },
-          max: { effort: 'max' }
-        }
-      }
-    }
-  } else if (platform === 'antigravity-claude') {
-    provider[platform].npm = '@ai-sdk/anthropic'
-    provider[platform].name = 'Antigravity (Claude)'
-    provider[platform].models = claudeModels
-  } else if (platform === 'antigravity-gemini') {
-    provider[platform].npm = '@ai-sdk/google'
-    provider[platform].name = 'Antigravity (Gemini)'
-    provider[platform].models = antigravityGeminiModels
-  } else if (platform === 'openai') {
-    provider[platform].models = openaiModels
-  } else if (platform === 'grok') {
-    // Custom provider pointing at Ritel.SI API OpenAI-compatible Responses/Chat endpoints.
-    provider[platform].npm = '@ai-sdk/openai-compatible'
-    provider[platform].name = 'Grok via Ritel.SI API'
-    provider[platform].models = grokModels
-  }
-
-  const agent =
-    platform === 'openai'
-      ? {
-          build: {
-            options: {
-              store: false
-            }
-          },
-          plan: {
-            options: {
-              store: false
-            }
-          }
-        }
-      : undefined
-
-  const modelPlatform = platform.startsWith('antigravity-') ? 'antigravity' : platform
-  const defaultModel = getCcSwitchDefaultModel(modelPlatform, platform === 'antigravity-gemini' ? 'gemini' : undefined)
-  provider[platform].models = {
-    ...provider[platform].models,
-    ...(platform === 'anthropic' ? claudeModels : {}),
-    [defaultModel]: provider[platform].models?.[defaultModel] || { name: defaultModel }
-  }
-  if (!provider[platform].npm) provider[platform].npm = platform === 'openai' ? '@ai-sdk/openai' : '@ai-sdk/openai-compatible'
-  const content = JSON.stringify(
-    {
-      model: `ritel/${defaultModel}`,
-      provider: { ritel: { ...provider[platform], name: 'Ritel.SI API' } },
-      ...(agent ? { agent } : {}),
-      $schema: 'https://opencode.ai/config.json'
-    },
-    null,
-    2
-  )
-
+function generateOpenCodeConfig(): FileConfig {
+  // The editor helper owns the same filtered catalog and capabilities as the import.
+  const provider = JSON.parse(fullProviderConfig.value!.content)
+  provider.name = 'Ritel.SI API'
+  provider.options.apiKey = '{env:RITEL_API_KEY}'
   return {
-    path: pathLabel ?? 'opencode.json',
-    content,
+    path: 'opencode.json',
+    content: JSON.stringify({
+      $schema: 'https://opencode.ai/config.json',
+      model: `ritel/${selectedModel.value}`,
+      provider: { ritel: provider }
+    }, null, 2),
     hint: t('keys.useKeyModal.opencode.hint')
   }
 }

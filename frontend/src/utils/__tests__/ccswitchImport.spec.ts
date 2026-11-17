@@ -54,7 +54,7 @@ describe('ccswitchImport utils', () => {
     }
     expect(params.get('configFormat')).toBe('json')
     expect(embedded.auth.OPENAI_API_KEY).toBe(baseInput.apiKey)
-    expect(embedded.config.split('\n[')[0]).toContain('service_tier = "fast"')
+    expect(embedded.config.split('\n[')[0]).toContain('service_tier = "default"')
     expect(embedded.config.match(/^service_tier = /gm)).toHaveLength(1)
     expect(embedded.config).toContain(`base_url = "${endpoint}"`)
     expect(atob(params.get('usageScript') || '')).toBe(baseInput.usageScript)
@@ -82,7 +82,7 @@ describe('ccswitchImport utils', () => {
   })
 
   it.each([
-    { platform: 'anthropic' as GroupPlatform, clientType: 'claude' as const, app: 'claude', model: 'claude-opus-5-5' },
+    { platform: 'anthropic' as GroupPlatform, clientType: 'claude' as const, app: 'claude', model: null },
     { platform: 'gemini' as GroupPlatform, clientType: 'gemini' as const, app: 'gemini', model: 'gemini-4-argon' }
   ])('includes the production default model for $platform imports', ({ platform, clientType, app, model }) => {
     const params = paramsFromDeeplink(
@@ -119,8 +119,10 @@ describe('ccswitchImport utils', () => {
     }))
     const bytes = Uint8Array.from(atob(params.get('config')!), (character) => character.charCodeAt(0))
     const embedded = JSON.parse(new TextDecoder().decode(bytes)) as { config: string }
-    expect(embedded.config).toContain(`name = ${JSON.stringify(providerName)}`)
-    expect(embedded.config.split('\n[')[0]).toContain('service_tier = "fast"')
+    expect(params.get('name')).toBe(providerName)
+    expect(embedded.config).toContain('name = "OpenAI"')
+    expect(embedded.config).toContain('model_provider = "custom"')
+    expect(embedded.config.split('\n[')[0]).toContain('service_tier = "default"')
   })
 })
 
@@ -176,7 +178,7 @@ describe('Antigravity CC Switch endpoint', () => {
       expect(url.searchParams.get('endpoint')).toBe(endpoint)
       expect(url.searchParams.get('app')).toBe(clientType)
       expect(url.searchParams.get('homepage')).toBe(baseUrl)
-      expect(url.searchParams.get('model')).toBe(clientType === 'claude' ? 'claude-opus-5-5' : 'gemini-4-argon')
+      expect(url.searchParams.get('model')).toBe(clientType === 'claude' ? null : 'gemini-4-argon')
     }
   })
 })

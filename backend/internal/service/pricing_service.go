@@ -85,6 +85,29 @@ var (
 		LongContextInputCostMultiplier: 2, LongContextOutputCostMultiplier: 1.5,
 		SupportsServiceTier: true, LiteLLMProvider: "openai", Mode: "chat", SupportsPromptCaching: true,
 	}
+	// GPT-6.2 standard/Fast rates, 2026-11-17. Cache writes retain separate TTLs.
+	// https://developers.openai.com/api/docs/models/gpt-6.2-astra
+	openAIGPT62AstraFallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken: 8e-6, InputCostPerTokenPriority: 16e-6,
+		OutputCostPerToken: 40e-6, OutputCostPerTokenPriority: 80e-6,
+		CacheCreationInputTokenCost: 10e-6, CacheCreationInputTokenCostPriority: 20e-6,
+		CacheCreationInputTokenCostAbove1hr: 20e-6,
+		CacheReadInputTokenCost:             0.4e-6, CacheReadInputTokenCostPriority: 0.8e-6,
+		LongContextInputTokenThreshold: 272_000,
+		LongContextInputCostMultiplier: 2, LongContextOutputCostMultiplier: 1.5,
+		SupportsServiceTier: true, LiteLLMProvider: "openai", Mode: "chat", SupportsPromptCaching: true,
+	}
+	// https://developers.openai.com/api/docs/models/gpt-6.2-sol
+	openAIGPT62SolFallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken: 2e-6, InputCostPerTokenPriority: 4e-6,
+		OutputCostPerToken: 10e-6, OutputCostPerTokenPriority: 20e-6,
+		CacheCreationInputTokenCost: 2.5e-6, CacheCreationInputTokenCostPriority: 5e-6,
+		CacheCreationInputTokenCostAbove1hr: 5e-6,
+		CacheReadInputTokenCost:             0.1e-6, CacheReadInputTokenCostPriority: 0.2e-6,
+		LongContextInputTokenThreshold: 272_000,
+		LongContextInputCostMultiplier: 2, LongContextOutputCostMultiplier: 1.5,
+		SupportsServiceTier: true, LiteLLMProvider: "openai", Mode: "chat", SupportsPromptCaching: true,
+	}
 	openAIGPT61SolFallbackPricing = &LiteLLMModelPricing{
 		InputCostPerToken:                   2e-6,
 		InputCostPerTokenPriority:           4e-6,
@@ -1613,6 +1636,19 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 				Info(fmt.Sprintf("[Pricing] OpenAI fallback matched %s -> %s", model, "gpt-5.1-codex"))
 			return pricing
 		}
+	}
+
+	if openai.IsGPT62AstraModelSpelling(model) {
+		if pricing, ok := s.pricingData["gpt-6.2-astra"]; ok {
+			return pricing
+		}
+		return openAIGPT62AstraFallbackPricing
+	}
+	if openai.IsGPT62SolModelSpelling(model) {
+		if pricing, ok := s.pricingData["gpt-6.2-sol"]; ok {
+			return pricing
+		}
+		return openAIGPT62SolFallbackPricing
 	}
 
 	if openai.IsGPT61TerraModelSpelling(model) {

@@ -25,7 +25,7 @@ type GatewayBorrowAccountQualityClassification struct {
 }
 
 func GatewayBorrowAccountQualityLinkedModel(model string) bool {
-	return gatewayBorrowCanonicalModel(model)
+	return gatewayBorrowCanonicalModel(normalizeExcelBPSIsolationModel(openAIQualityProtectionModel(model)))
 }
 
 func GatewayBorrowAccountQuality(a *Account, now time.Time, maxAge time.Duration) (GatewayBorrowAccountQualityClassification, bool) {

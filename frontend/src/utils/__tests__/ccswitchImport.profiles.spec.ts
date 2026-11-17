@@ -41,10 +41,10 @@ describe('user CC Switch application choices', () => {
     const params = new URL(buildCcSwitchImportDeeplink({ ...base, profile })).searchParams
     expect(params.get('apiFormat')).toBe('openai_responses')
     expect(params.get('endpoint')).toBe('https://api.example.com/v1')
-    expect(params.get('model')).toBe('gpt-6.1-sol')
+    expect(params.get('model')).toBe('gpt-6.2-sol')
     expect(params.get('haikuModel')).toBe('gpt-6-luna')
     expect(params.get('sonnetModel')).toBe('gpt-6.1-terra')
-    expect(params.get('opusModel')).toBe('gpt-6.1-sol')
+    expect(params.get('opusModel')).toBe('gpt-6.2-sol')
   })
 
   it('uses compatible formats for Gemini keys in clients without native Gemini support', () => {
@@ -79,11 +79,11 @@ const decode = (encoded: string) => new TextDecoder().decode(Uint8Array.from(ato
 describe('administrator CC Switch provider profiles', () => {
   it('uses fresh defaults with Sol and preserves explicitly disabled platforms', () => {
     const defaults = createDefaultCcSwitchImportConfig()
-    expect(getCcSwitchImportProfiles('openai')[0]?.parameters.model).toBe('gpt-6.1-sol')
+    expect(getCcSwitchImportProfiles('openai')[0]?.parameters.model).toBe('gpt-6.2-sol')
     expect(getCcSwitchImportProfiles('antigravity')).toHaveLength(2)
     expect(getCcSwitchImportProfiles('openai', { profiles: [] })).toEqual([])
     defaults.profiles[1]!.parameters.model = 'edited'
-    expect(createDefaultCcSwitchImportConfig().profiles[1]?.parameters.model).toBe('gpt-6.1-sol')
+    expect(createDefaultCcSwitchImportConfig().profiles[1]?.parameters.model).toBe('gpt-6.2-sol')
     expect(() => buildCcSwitchImportDeeplink({ ...base, settings: { profiles: [] } })).toThrow('No CC Switch')
   })
 

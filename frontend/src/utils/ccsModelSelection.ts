@@ -21,7 +21,7 @@ export type CcsModelFamily = 'openai' | 'anthropic' | 'gemini' | 'grok' | 'domes
 export interface CcsRoleModels { sonnet: string; opus: string; haiku: string; fable: string }
 
 const preferred: Record<CcsModelFamily, string[]> = {
-  openai: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-terra', 'gpt-6-luna'],
+  openai: ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-terra', 'gpt-6-luna'],
   anthropic: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-2'],
   gemini: ['gemini-4-argon', 'gemini-4-carbon', 'gemini-4-hydrogen', 'gemini-3.8-flash'],
   grok: ['grok-4.7', 'grok-4.6', 'grok-4.5', 'grok-4.3'],
@@ -101,7 +101,11 @@ export function ccSwitchRoleModels(family: CcsModelFamily, model: string, option
   const available = new Set(options)
   const pick = (id: string) => available.has(id) ? id : model
   switch (family) {
-    case 'openai': return { opus: pick('gpt-6.1-sol'), fable: pick('gpt-6-astra'), sonnet: pick('gpt-6.1-terra'), haiku: pick('gpt-6-luna') }
+    case 'openai': return {
+      opus: pick(available.has('gpt-6.2-sol') ? 'gpt-6.2-sol' : 'gpt-6.1-sol'),
+      fable: pick(available.has('gpt-6.2-astra') ? 'gpt-6.2-astra' : 'gpt-6-astra'),
+      sonnet: pick('gpt-6.1-terra'), haiku: pick('gpt-6-luna')
+    }
     case 'gemini': return { opus: pick('gemini-4-argon'), fable: pick('gemini-4-carbon'), sonnet: pick('gemini-4-hydrogen'), haiku: pick('gemini-3.8-flash') }
     case 'anthropic': return { opus: pick('claude-opus-5-5'), fable: pick('claude-fable-5-2'), sonnet: pick('claude-sonnet-5-5'), haiku: pick('claude-haiku-5-5') }
     case 'grok': { const target = pick('grok-4.7'); return { opus: target, fable: target, sonnet: target, haiku: target } }

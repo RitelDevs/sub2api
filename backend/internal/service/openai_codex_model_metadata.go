@@ -89,9 +89,20 @@ func accountCodexToolCapabilities(account *Account, modelID string) map[string]j
 		}
 		applyCodexToolCapabilities(capabilities, defaults, false)
 	}
+	if account.IsOpenAI() && openai.IsGPT62ModelSpelling(modelID) && official {
+		// Only advertise public Responses capabilities. No bundled official
+		// Codex 6.2 descriptor is available to seed ChatGPT-only wire fields.
+		applyCodexToolCapabilities(capabilities, map[string]json.RawMessage{
+			"supports_search_tool":  json.RawMessage("true"),
+			"apply_patch_tool_type": json.RawMessage(`"freeform"`),
+			"use_responses_lite":    json.RawMessage("false"),
+		}, false)
+	}
 	if account.IsOpenAIApiKey() {
 		target := modelID
-		if isOpenAIGPT6AstraModel(target) {
+		if canonical := openai.CanonicalGPT62Model(target); canonical != "" {
+			target = canonical
+		} else if isOpenAIGPT6AstraModel(target) {
 			target = "gpt-6-astra"
 		} else if openai.IsGPT61SolModelSpelling(target) {
 			target = "gpt-6.1-sol"

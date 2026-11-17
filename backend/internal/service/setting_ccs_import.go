@@ -60,7 +60,7 @@ func (c *CCSImportConfig) UnmarshalJSON(data []byte) error {
 func DefaultCCSImportConfig() CCSImportConfig {
 	return CCSImportConfig{Profiles: []CCSImportProfile{
 		{ID: "anthropic-claude", Label: "Claude Code", Platform: "anthropic", App: "claude", Parameters: map[string]any{"model": "claude-opus-5-5"}},
-		{ID: "openai-codex", Label: "Codex", Platform: "openai", App: "codex", Parameters: map[string]any{"model": "gpt-6.1-sol"}},
+		{ID: "openai-codex", Label: "Codex", Platform: "openai", App: "codex", Parameters: map[string]any{"model": "gpt-6.2-sol"}},
 		{ID: "gemini-cli", Label: "Gemini CLI", Platform: "gemini", App: "gemini", Parameters: map[string]any{"model": "gemini-4-argon"}},
 		{ID: "antigravity-claude", Label: "Claude Code", Platform: "antigravity", App: "claude", Parameters: map[string]any{"model": "claude-opus-5-5"}},
 		{ID: "antigravity-gemini", Label: "Gemini CLI", Platform: "antigravity", App: "gemini", Parameters: map[string]any{"model": "gemini-4-argon"}},

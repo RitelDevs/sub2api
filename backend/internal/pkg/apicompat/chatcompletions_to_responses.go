@@ -27,11 +27,8 @@ func ChatCompletionsToResponsesWithMinOutputTokens(req *ChatCompletionsRequest, 
 	// Use one effective effort without changing the caller's field provenance.
 	// Legacy Responses ingress still distinguishes native reasoning from the
 	// flat Chat alias when deciding which top-level fields to replace.
-	effort := openai.NormalizeGPT61SolReasoningEffort(req.Model, req.EffectiveReasoningEffort())
-	if err := openai.ValidateGPT61SolReasoningEffort(req.Model, effort); err != nil {
-		return nil, err
-	}
-	if err := openai.ValidateGPT61TerraReasoningEffort(req.Model, effort); err != nil {
+	effort := openai.NormalizeReasoningEffortForModel(req.Model, req.EffectiveReasoningEffort())
+	if err := openai.ValidateReasoningEffortForModel(req.Model, effort); err != nil {
 		return nil, err
 	}
 	input, err := convertChatMessagesToResponsesInput(req.Messages)

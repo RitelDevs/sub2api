@@ -95,7 +95,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		writeOpenAIResponsesFallbackError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
-	if (openai.IsGPT61SolModelSpelling(upstreamModel) || openai.IsGPT61TerraModelSpelling(upstreamModel)) && len(effectiveTools) > 0 {
+	if (openai.RequiresResponsesForToolCalls(upstreamModel)) && len(effectiveTools) > 0 {
 		err := fmt.Errorf("%s requires Responses for tool calls; this account only supports Chat Completions", upstreamModel)
 		writeOpenAIResponsesFallbackError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
@@ -112,7 +112,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	if err != nil {
 		return nil, fmt.Errorf("marshal chat completions fallback request: %w", err)
 	}
-	if openai.IsGPT61SolModelSpelling(upstreamModel) || openai.IsGPT61TerraModelSpelling(upstreamModel) {
+	if openai.RequiresResponsesForToolCalls(upstreamModel) {
 		chatBody, _, err = normalizeGPT6ResponsesSampling(chatBody, upstreamModel)
 		if err != nil {
 			return nil, err

@@ -51,7 +51,7 @@ func (a *Account) RequiresGatewayBorrowUpstream(model string) bool {
 	default:
 		return true
 	}
-	mapped := config.CanonicalGatewayBorrowModel(normalizeExcelBPSIsolationModel(model))
+	mapped := config.CanonicalGatewayBorrowModel(normalizeExcelBPSIsolationModel(openAIQualityProtectionModel(model)))
 	for _, value := range models {
 		canonical := config.CanonicalGatewayBorrowModel(normalizeExcelBPSIsolationModel(value))
 		if canonical != "gpt-6-astra" && canonical != "gpt-6.1-sol" {

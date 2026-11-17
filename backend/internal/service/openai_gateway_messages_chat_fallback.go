@@ -78,13 +78,13 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
-	if (openai.IsGPT61SolModelSpelling(upstreamModel) || openai.IsGPT61TerraModelSpelling(upstreamModel)) && len(anthropicReq.Tools) > 0 {
+	if (openai.RequiresResponsesForToolCalls(upstreamModel)) && len(anthropicReq.Tools) > 0 {
 		err := fmt.Errorf("%s requires Responses for tool calls; this account only supports Chat Completions", upstreamModel)
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
 	chatReq.Model = upstreamModel
-	if openai.IsGPT61SolModelSpelling(upstreamModel) {
+	if openai.IsGPT61SolModelSpelling(upstreamModel) || openai.IsGPT62ModelSpelling(upstreamModel) {
 		chatReq.Temperature = nil
 		chatReq.TopP = nil
 	}
@@ -113,14 +113,14 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 			return nil, policyErr
 		}
 		if changed {
-			if err := openai.ValidateGPT61ReasoningEffort(upstreamModel, gjson.GetBytes(policyBody, "reasoning_effort").String()); err != nil {
+			if err := openai.ValidateReasoningEffortForModel(upstreamModel, gjson.GetBytes(policyBody, "reasoning_effort").String()); err != nil {
 				writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 				return nil, err
 			}
 			chatBody = policyBody
 		}
 	}
-	if openai.IsGPT61SolModelSpelling(upstreamModel) {
+	if openai.IsGPT61SolModelSpelling(upstreamModel) || openai.IsGPT62ModelSpelling(upstreamModel) {
 		normalizedBody, _, normalizeErr := normalizeGPT6ResponsesSampling(chatBody, upstreamModel)
 		if normalizeErr != nil {
 			return nil, normalizeErr

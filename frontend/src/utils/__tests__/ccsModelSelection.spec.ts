@@ -19,6 +19,17 @@ function link(platform: GroupPlatform, app: CcsImportApp, ctx: CcSwitchImportCon
 const decode = (encoded: string) => JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'))
 
 describe('key-scoped model choices agreed with the owner', () => {
+  it('offers 6.2 only when the selected key exposes it and retains older manual choices', () => {
+    const models = context(['gpt-6.2-sol', 'gpt-6.2-astra', ...gpt.models.map(model => model.id)])
+    const selected = profile('openai', 'codex', models)
+    expect(selected.parameters.model).toBe('gpt-6.2-sol')
+    expect(selected.modelOptions).toContain('gpt-6.2-astra')
+    expect(profile('openai', 'claude', models).roleModels).toEqual({ opus: 'gpt-6.2-sol', fable: 'gpt-6.2-astra', sonnet: 'gpt-6.1-terra', haiku: 'gpt-6-luna' })
+    expect(profile('openai', 'codex', { ...models, selectedModel: 'gpt-6.1-sol' }).parameters.model).toBe('gpt-6.1-sol')
+    expect(profile('openai', 'codex', gpt).modelOptions).not.toContain('gpt-6.2-sol')
+    expect(profile('openai', 'codex', gpt).parameters.model).toBe('gpt-6.1-sol')
+  })
+
   it('does not use the OpenAI routing label as a GPT model entitlement', () => {
     const p = profile('openai', 'codex', gemini)
     expect(p.parameters.model).toBe('gemini-4-argon')

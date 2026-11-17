@@ -12,6 +12,10 @@ import (
 // this is not an upstream invoice or OAuth subscription spend.
 // https://developers.openai.com/api/docs/models/gpt-6-astra
 // https://developers.openai.com/api/docs/models/gpt-6.1-sol
+// GPT-6.2 cards and their 30m/12h and promotional Ultrafast rates verified 2026-11-17:
+// https://developers.openai.com/api/docs/models/gpt-6.2-astra
+// https://developers.openai.com/api/docs/models/gpt-6.2-sol
+// The GPT-6.2 Ultrafast promotion uses each row's recorded time in Pacific time.
 // Terra added and its standard/priority/long-context prices verified on 2026-11-16:
 // https://developers.openai.com/api/docs/models/gpt-6.1-terra
 // https://developers.openai.com/api/docs/models/gpt-6-luna
@@ -33,29 +37,38 @@ type apiEquivalentPrice struct {
 	contextInclusive                                              bool
 	contextInput, contextOutput, priority, flex, batch, ultrafast float64
 	peakUTC                                                       bool
+	cacheWrite12h                                                 float64
 }
 
 func openAIEquivalentPrice(model string, input, cachedInput, output, priority, ultrafast float64) apiEquivalentPrice {
 	return apiEquivalentPrice{model, input, cachedInput, output, input * 1.25, input * 1.25,
-		272000, false, 2, 1.5, priority, .5, .5, ultrafast, false}
+		272000, false, 2, 1.5, priority, .5, .5, ultrafast, false, 0}
+}
+
+func gpt62EquivalentPrice(model string, input, cachedInput, output float64) apiEquivalentPrice {
+	p := openAIEquivalentPrice(model, input, cachedInput, output, 2, 3)
+	p.cacheWrite12h = input * 2.5
+	return p
 }
 
 func claudeEquivalentPrice(model string, input, cachedInput, output, cache5m, cache1h float64, threshold int) apiEquivalentPrice {
 	return apiEquivalentPrice{model, input, cachedInput, output, cache5m, cache1h,
-		threshold, false, 2, 1.5, 0, 0, .5, 0, false}
+		threshold, false, 2, 1.5, 0, 0, .5, 0, false, 0}
 }
 
 func grokEquivalentPrice(model string, input, cachedInput, output float64) apiEquivalentPrice {
 	return apiEquivalentPrice{model, input, cachedInput, output, 0, 0,
-		200000, true, 2, 2, 0, 0, .5, 0, false}
+		200000, true, 2, 2, 0, 0, .5, 0, false, 0}
 }
 
 func deepseekEquivalentPrice(model string, input, cachedInput, output float64) apiEquivalentPrice {
 	return apiEquivalentPrice{model, input, cachedInput, output, 0, 0,
-		0, false, 1, 1, 0, 0, 0, 0, true}
+		0, false, 1, 1, 0, 0, 0, 0, true, 0}
 }
 
 var accountAPIEquivalentPrices = []apiEquivalentPrice{
+	gpt62EquivalentPrice("gpt-6.2-astra", 8, .4, 40),
+	gpt62EquivalentPrice("gpt-6.2-sol", 2, .1, 10),
 	openAIEquivalentPrice("gpt-6-astra", 10, 1, 50, 2, 6),
 	openAIEquivalentPrice("gpt-6.1-sol", 2, .1, 10, 2, 0),
 	openAIEquivalentPrice("gpt-6.1-terra", 1, .05, 5, 2, 0),
@@ -94,15 +107,15 @@ func accountAPIEquivalentRowsCTE(where string) string {
 	values := make([]string, 0, len(accountAPIEquivalentPrices))
 	for _, p := range accountAPIEquivalentPrices {
 		// All values are code-owned; no operator or request strings enter the SQL.
-		values = append(values, fmt.Sprintf("('%s', %s, %s, %s, %s, %s, %d, %t, %s, %s, %s, %s, %s, %s, %t)",
+		values = append(values, fmt.Sprintf("('%s', %s, %s, %s, %s, %s, %d, %t, %s, %s, %s, %s, %s, %s, %t, %s)",
 			p.model, apiEquivalentNumber(p.input), apiEquivalentNumber(p.cachedInput),
 			apiEquivalentNumber(p.output), apiEquivalentNumber(p.cacheWrite5m), apiEquivalentNumber(p.cacheWrite1h),
 			p.contextThreshold, p.contextInclusive, apiEquivalentNumber(p.contextInput),
 			apiEquivalentNumber(p.contextOutput), apiEquivalentNumber(p.priority), apiEquivalentNumber(p.flex),
-			apiEquivalentNumber(p.batch), apiEquivalentNumber(p.ultrafast), p.peakUTC))
+			apiEquivalentNumber(p.batch), apiEquivalentNumber(p.ultrafast), p.peakUTC, apiEquivalentNumber(p.cacheWrite12h)))
 	}
 	return `WITH api_equivalent_pricing(model, input_price, cache_price, output_price, write5_price, write1_price,
- context_threshold, context_inclusive, context_input, context_output, priority, flex, batch, ultrafast, peak_utc) AS (VALUES ` + strings.Join(values, ",") + `),
+ context_threshold, context_inclusive, context_input, context_output, priority, flex, batch, ultrafast, peak_utc, write12_price) AS (VALUES ` + strings.Join(values, ",") + `),
  api_equivalent_rows AS (
  SELECT ul.*, CASE
   WHEN validity.unsupported_usage THEN NULL
@@ -117,15 +130,20 @@ func accountAPIEquivalentRowsCTE(where string) string {
    AND COALESCE(billing_mode, '') NOT IN ('image', 'video') THEN 0::numeric
   WHEN p.model IS NULL OR (cache_creation_tokens > 0 AND p.write5_price = 0) THEN NULL
   ELSE (
-   (input_tokens * p.input_price + (cache_creation_tokens - cache_creation_1h_tokens) * p.write5_price
-     + cache_creation_1h_tokens * p.write1_price + cache_read_tokens * p.cache_price)
+   (input_tokens * p.input_price + CASE WHEN p.write12_price > 0
+     THEN (cache_creation_tokens - cache_creation_12h_tokens) * p.write5_price
+      + cache_creation_12h_tokens * p.write12_price
+     ELSE (cache_creation_tokens - cache_creation_1h_tokens) * p.write5_price
+      + cache_creation_1h_tokens * p.write1_price END + cache_read_tokens * p.cache_price)
    * CASE WHEN ctx.long_context THEN p.context_input ELSE 1 END
    + output_tokens * p.output_price * CASE WHEN ctx.long_context THEN p.context_output ELSE 1 END
   ) / 1000000 * CASE LOWER(TRIM(COALESCE(service_tier, '')))
    WHEN '' THEN 1 WHEN 'default' THEN 1 WHEN 'auto' THEN 1 WHEN 'standard' THEN 1
    WHEN 'priority' THEN NULLIF(p.priority, 0) WHEN 'fast' THEN NULLIF(p.priority, 0)
    WHEN 'flex' THEN NULLIF(p.flex, 0) WHEN 'batch' THEN NULLIF(p.batch, 0)
-   WHEN 'ultrafast' THEN NULLIF(p.ultrafast, 0)
+   WHEN 'ultrafast' THEN CASE WHEN p.model IN ('gpt-6.2-astra', 'gpt-6.2-sol')
+    AND ul.created_at AT TIME ZONE 'America/Los_Angeles' >= TIMESTAMP '2027-03-01 00:00:00'
+    THEN 6 ELSE NULLIF(p.ultrafast, 0) END
    ELSE NULL END * CASE WHEN p.peak_utc
    AND EXTRACT(ISODOW FROM ul.created_at AT TIME ZONE 'UTC') BETWEEN 1 AND 5
    AND (((ul.created_at AT TIME ZONE 'UTC')::time >= '01:00'::time AND (ul.created_at AT TIME ZONE 'UTC')::time < '04:00'::time)
@@ -146,7 +164,9 @@ func accountAPIEquivalentRowsCTE(where string) string {
    OR COALESCE(billing_mode, '') IN ('image', 'video')
    OR input_tokens < 0 OR output_tokens < 0 OR cache_creation_tokens < 0 OR cache_read_tokens < 0
    OR cache_creation_5m_tokens < 0 OR cache_creation_1h_tokens < 0
-   OR cache_creation_5m_tokens::bigint + cache_creation_1h_tokens > cache_creation_tokens) AS unsupported_usage,
+   OR cache_creation_5m_tokens::bigint + cache_creation_1h_tokens > cache_creation_tokens
+   OR (COALESCE(p.write12_price, 0) > 0 AND (cache_creation_30m_tokens < 0 OR cache_creation_12h_tokens < 0
+    OR cache_creation_30m_tokens::bigint + cache_creation_12h_tokens > cache_creation_tokens))) AS unsupported_usage,
   (recorded_model.name = 'codex-auto-review' AND ul.total_cost >= 0
    AND ul.total_cost NOT IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)) AS internally_priced
  ) validity

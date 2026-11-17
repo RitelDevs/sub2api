@@ -30,6 +30,11 @@ func TestAccountAPIEquivalent_ReadSideHistoricalAndNewRows(t *testing.T) {
 		want     float64
 		unpriced bool
 	}{
+		{name: "6.2 Astra standard", log: service.UsageLog{Model: "gpt-6.2-astra", InputTokens: 1000, CacheReadTokens: 1000, OutputTokens: 100}, want: .0124},
+		{name: "6.2 Sol standard", log: service.UsageLog{Model: "gpt-6.2-sol", InputTokens: 1000, CacheReadTokens: 1000, OutputTokens: 100}, want: .0031},
+		{name: "6.2 Sol 12h writes", log: service.UsageLog{Model: "gpt-6.2-sol", CacheCreationTokens: 1000, CacheCreation30mTokens: 400, CacheCreation12hTokens: 600}, want: .004},
+		{name: "6.2 Astra 12h writes fast", log: service.UsageLog{Model: "gpt-6.2-astra", CacheCreationTokens: 1000, CacheCreation30mTokens: 400, CacheCreation12hTokens: 600, ServiceTier: str("fast")}, want: .032},
+		{name: "6.2 Sol long context", log: service.UsageLog{Model: "gpt-6.2-sol", InputTokens: 272000, CacheCreationTokens: 1000, CacheCreation12hTokens: 1000, OutputTokens: 100}, want: 1.0995},
 		{name: "threshold strictly exclusive", log: service.UsageLog{Model: "gpt-6-astra", InputTokens: 272000, OutputTokens: 100}, want: 2.725},
 		{name: "cache contributes to context", log: service.UsageLog{Model: "gpt-6-astra", InputTokens: 20000, CacheReadTokens: 252001, OutputTokens: 100}, want: .911502},
 		{name: "cache creation contributes to context", log: service.UsageLog{Model: "gpt-6-astra", InputTokens: 272000, CacheCreationTokens: 1, OutputTokens: 100}, want: 5.447525},
@@ -238,3 +243,36 @@ func TestAccountAPIEquivalent_InternalReviewPrice(t *testing.T) {
 }
 
 func floatPtr(value float64) *float64 { return &value }
+
+func TestAccountAPIEquivalent_GPT62UltrafastPromotion(t *testing.T) {
+	ctx := context.Background()
+	tx := testEntTx(t)
+	client := tx.Client()
+	repo := newUsageLogRepositoryWithSQL(client, tx)
+	user := mustCreateUser(t, client, &service.User{Email: "gpt62-promotion@test.com"})
+	key := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-gpt62-promotion", Name: "test"})
+	account := mustCreateAccount(t, client, &service.Account{Name: "gpt62-promotion", Platform: service.PlatformOpenAI})
+	tier := "ultrafast"
+	boundary := time.Date(2027, time.March, 1, 8, 0, 0, 0, time.UTC)
+	for index, tc := range []struct {
+		at   time.Time
+		want float64
+	}{
+		{boundary.Add(-time.Nanosecond), .036}, {boundary, .072},
+	} {
+		// PostgreSQL persists microseconds; use the final representable instant.
+		if tc.at.Before(boundary) {
+			tc.at = boundary.Add(-time.Microsecond)
+		}
+		log := service.UsageLog{UserID: user.ID, APIKeyID: key.ID, AccountID: account.ID,
+			RequestID: fmt.Sprintf("gpt62-promotion-%d", index), Model: "gpt-6.2-astra",
+			InputTokens: 1000, OutputTokens: 100, ServiceTier: &tier, CreatedAt: tc.at}
+		_, err := repo.Create(ctx, &log)
+		require.NoError(t, err)
+		var got *float64
+		require.NoError(t, scanSingleRow(ctx, repo.sql, accountAPIEquivalentRowsCTE("ul.request_id = $1 AND ul.api_key_id = $2")+
+			"SELECT api_equivalent_row_cost FROM api_equivalent_rows", []any{log.RequestID, key.ID}, &got))
+		require.NotNil(t, got)
+		require.InDelta(t, tc.want, *got, 1e-12)
+	}
+}

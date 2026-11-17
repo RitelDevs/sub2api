@@ -31,6 +31,8 @@ var DefaultModels = []Model{
 	{ID: "gpt-5.6-terra", Object: "model", Created: 1780876800, OwnedBy: "openai", Type: "model", DisplayName: "GPT-5.6 Terra"},
 	{ID: "gpt-5.6-luna", Object: "model", Created: 1780876800, OwnedBy: "openai", Type: "model", DisplayName: "GPT-5.6 Luna"},
 	{ID: "gpt-6.1-sol", Object: "model", Created: 1790640000, OwnedBy: "openai", Type: "model", DisplayName: "GPT-6.1 Sol"},
+	{ID: "gpt-6.2-sol", Object: "model", Created: 1794873600, OwnedBy: "openai", Type: "model", DisplayName: "GPT-6.2 Sol", InputModalities: []string{"text", "image"}, OutputModalities: []string{"text"}, ContextWindow: 1_050_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{"low", "medium", "high", "xhigh", "max"}},
+	{ID: "gpt-6.2-astra", Object: "model", Created: 1794873600, OwnedBy: "openai", Type: "model", DisplayName: "GPT-6.2 Astra", InputModalities: []string{"text", "image"}, OutputModalities: []string{"text"}, ContextWindow: 1_050_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{"low", "medium", "high", "xhigh", "max"}},
 	{ID: "gpt-6.1-terra", Object: "model", Created: 1793145600, OwnedBy: "openai", Type: "model", DisplayName: "GPT-6.1 Terra", InputModalities: []string{"text", "image"}, OutputModalities: []string{"text"}, ContextWindow: 1_050_000, MaxOutputTokens: 128_000, ReasoningEfforts: []string{"none", "low", "medium", "high", "xhigh", "max"}},
 	{ID: "gpt-6-sol", Object: "model", Created: 1790035200, OwnedBy: "openai", Type: "model", DisplayName: "GPT-6 Sol"},
 	{ID: "gpt-6-luna", Object: "model", Created: 1790035200, OwnedBy: "openai", Type: "model", DisplayName: "GPT-6 Luna"},
@@ -280,7 +282,7 @@ func NormalizeGPT61SolReasoningEffort(model, effort string) string {
 }
 
 func RequiresResponsesForToolCalls(model string) bool {
-	return IsGPT61SolModelSpelling(model) || IsGPT61TerraModelSpelling(model)
+	return IsGPT61SolModelSpelling(model) || IsGPT61TerraModelSpelling(model) || IsGPT62ModelSpelling(model)
 }
 
 // ValidateGPT61SolReasoningEffort guards the final upstream effort. Callers
@@ -302,4 +304,75 @@ func ValidateGPT61ReasoningEffort(model, effort string) error {
 		return err
 	}
 	return ValidateGPT61TerraReasoningEffort(model, effort)
+}
+
+// IsGPT62ModelSpelling recognizes the two GPT-6.2 models without widening
+// the existing GPT-6 / GPT-6.1 aliases.
+func IsGPT62ModelSpelling(model string) bool {
+	return CanonicalGPT62Model(model) != ""
+}
+
+func IsGPT62SolModelSpelling(model string) bool {
+	return CanonicalGPT62Model(model) == "gpt-6.2-sol"
+}
+
+func IsGPT62AstraModelSpelling(model string) bool {
+	return CanonicalGPT62Model(model) == "gpt-6.2-astra"
+}
+
+// CanonicalGPT62Model preserves the model identity while recognizing the
+// supported local effort/compact suffixes and dated upstream model IDs.
+func CanonicalGPT62Model(model string) string {
+	canonical := CanonicalizeOpenAIModelAliasSpelling(model)
+	for _, base := range []string{"gpt-6.2-sol", "gpt-6.2-astra"} {
+		if canonical == base {
+			return base
+		}
+		suffix, ok := strings.CutPrefix(canonical, base+"-")
+		if !ok {
+			continue
+		}
+		switch suffix {
+		case "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "openai-compact":
+			return base
+		}
+		if len(suffix) != 10 || suffix[4] != '-' || suffix[7] != '-' {
+			continue
+		}
+		dated := true
+		for i, r := range suffix {
+			if i != 4 && i != 7 && (r < '0' || r > '9') {
+				dated = false
+				break
+			}
+		}
+		if dated {
+			return base
+		}
+	}
+	return ""
+}
+
+// NormalizeReasoningEffortForModel upgrades legacy disabled reasoning only
+// for models whose public API requires reasoning to remain enabled.
+func NormalizeReasoningEffortForModel(model, effort string) string {
+	if IsGPT62ModelSpelling(model) {
+		switch strings.ToLower(strings.TrimSpace(effort)) {
+		case "none", "minimal":
+			return "low"
+		}
+	}
+	return NormalizeGPT61SolReasoningEffort(model, effort)
+}
+
+func ValidateReasoningEffortForModel(model, effort string) error {
+	if IsGPT62ModelSpelling(model) {
+		switch strings.ToLower(strings.TrimSpace(effort)) {
+		case "", "low", "medium", "high", "xhigh", "max":
+			return nil
+		default:
+			return fmt.Errorf("%s does not support reasoning effort %q; use low, medium, high, xhigh or max", CanonicalGPT62Model(model), effort)
+		}
+	}
+	return ValidateGPT61ReasoningEffort(model, effort)
 }

@@ -358,7 +358,7 @@ func (s *OpenAIGatewayService) forwardAsAnthropic(
 			return nil, policyErr
 		}
 		if changed {
-			if err := openai.ValidateGPT61ReasoningEffort(upstreamModel, gjson.GetBytes(policyBody, "reasoning.effort").String()); err != nil {
+			if err := openai.ValidateReasoningEffortForModel(upstreamModel, gjson.GetBytes(policyBody, "reasoning.effort").String()); err != nil {
 				writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 				return nil, err
 			}
@@ -369,7 +369,7 @@ func (s *OpenAIGatewayService) forwardAsAnthropic(
 		}
 	}
 
-	if openai.IsGPT61SolModelSpelling(upstreamModel) {
+	if openai.IsGPT61SolModelSpelling(upstreamModel) || openai.IsGPT62ModelSpelling(upstreamModel) {
 		normalizedBody, _, normalizeErr := normalizeGPT6ResponsesSampling(responsesBody, upstreamModel)
 		if normalizeErr != nil {
 			return nil, normalizeErr

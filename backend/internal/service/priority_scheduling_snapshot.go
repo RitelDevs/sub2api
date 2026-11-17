@@ -4,8 +4,6 @@ import (
 	"cmp"
 	"slices"
 	"time"
-
-	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
 // Store only scoring inputs, never credentials, request bodies or session IDs.
@@ -33,7 +31,7 @@ func newPrioritySnapshotInput(req OpenAIAccountScheduleRequest, c PrioritySchedu
 		factor := a.EffectiveLoadFactor()
 		if a.IsOpenAIOAuth() && a.Extra[GatewayBorrowAccountQualityModeKey] == GatewayBorrowAccountQualityMode && !item.priorityQualityCaptured {
 			item.priorityQualityCaptured = true
-			if quality, known := GatewayBorrowAccountQuality(a, at, time.Duration(c.QualityMaxAgeHours)*time.Hour); known && GatewayBorrowAccountQualityLinkedModel(config.CanonicalGatewayBorrowModel(normalizeExcelBPSIsolationModel(a.GetMappedModel(req.RequestedModel)))) {
+			if quality, known := GatewayBorrowAccountQuality(a, at, time.Duration(c.QualityMaxAgeHours)*time.Hour); known && GatewayBorrowAccountQualityLinkedModel(a.GetMappedModel(req.RequestedModel)) {
 				passed := quality.State == "healthy"
 				item.priorityQualityPassed = &passed
 				item.priorityQualityExpires = quality.LatestProbeAt.Add(time.Duration(c.QualityMaxAgeHours) * time.Hour)

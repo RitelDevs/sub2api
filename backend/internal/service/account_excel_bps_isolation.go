@@ -100,7 +100,7 @@ func (a *Account) excelBPSRequiredUpstreamModel(model string) bool {
 	} // corrupted policy fails closed
 	model = normalizeExcelBPSIsolationModel(model)
 	for _, required := range models {
-		if model == required {
+		if model == required || openAIQualityProtectionModel(model) == required {
 			return true
 		}
 	}

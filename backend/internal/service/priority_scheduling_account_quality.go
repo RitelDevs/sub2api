@@ -3,8 +3,6 @@ package service
 import (
 	"context"
 	"time"
-
-	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
 // OAuth classification is a latest complete account decision, not an average
@@ -61,7 +59,7 @@ func (s *OpenAIGatewayService) capturePriorityOAuthQuality(req OpenAIAccountSche
 	item.priorityQualityCaptured = true
 	item.priorityQualityPassed = nil
 	item.priorityQualityExpires = time.Time{}
-	if !GatewayBorrowAccountQualityLinkedModel(config.CanonicalGatewayBorrowModel(normalizeExcelBPSIsolationModel(a.GetMappedModel(req.RequestedModel)))) {
+	if !GatewayBorrowAccountQualityLinkedModel(a.GetMappedModel(req.RequestedModel)) {
 		return
 	}
 	if quality, known := GatewayBorrowAccountQuality(a, now, maxAge); known {

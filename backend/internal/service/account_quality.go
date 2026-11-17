@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
 
 // Inactive degraded accounts remain at rest until an administrator enables them.
@@ -37,7 +39,8 @@ func IsQualityModelCooldown(entry any) bool {
 
 func (a *Account) hasQualityModelCooldown(model string) bool {
 	entries, _ := a.Extra["model_rate_limits"].(map[string]any)
-	return IsQualityModelCooldown(entries[model]) || IsQualityModelCooldown(entries[a.GetMappedModel(model)])
+	return IsQualityModelCooldown(entries[model]) || IsQualityModelCooldown(entries[a.GetMappedModel(model)]) ||
+		IsQualityModelCooldown(entries[openAIQualityProtectionModel(model)]) || IsQualityModelCooldown(entries[openAIQualityProtectionModel(a.GetMappedModel(model))])
 }
 
 // QualityModels is the single source of truth for the models a policy manages.
@@ -332,11 +335,25 @@ func (a *Account) IsQualityModelIsolated(model string) bool {
 		return false
 	}
 	entries, _ := a.Extra[QualityModelIsolationKey].(map[string]any)
-	return entries[model] != nil || entries[a.GetMappedModel(model)] != nil
+	return entries[model] != nil || entries[a.GetMappedModel(model)] != nil ||
+		entries[openAIQualityProtectionModel(model)] != nil || entries[openAIQualityProtectionModel(a.GetMappedModel(model))] != nil
 }
 
 // Only trusted internal account tests may probe through their own isolation.
 // Normal scheduler selection and every later WebSocket turn share this gate.
 func (a *Account) qualityModelBlocked(ctx context.Context, model string) bool {
 	return ctx.Value(qualityProbeContextKey{}) != true && (a.IsQualityModelIsolated(model) || a.hasQualityModelCooldown(model))
+}
+
+// New model names inherit the account's existing quality restrictions. This is
+// only a protection key: it never changes a wire model or fabricates test evidence.
+func openAIQualityProtectionModel(model string) string {
+	switch openai.CanonicalGPT62Model(model) {
+	case "gpt-6.2-astra":
+		return "gpt-6-astra"
+	case "gpt-6.2-sol":
+		return "gpt-6.1-sol"
+	default:
+		return model
+	}
 }

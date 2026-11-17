@@ -344,3 +344,29 @@ func TestUltrafastUsageExplicitRequestWithoutResponseBilling(t *testing.T) {
 		}
 	}
 }
+
+func TestGPT62RecordUsagePricingAndCacheTTL(t *testing.T) {
+	for _, model := range []string{"gpt-6.2-sol", "gpt-6.2-astra"} {
+		svc, input, repo, _ := ultrafastUsageHarness(t, ultrafastUsageGroup(), true)
+		input.Result = ultrafastUsageResult(t, model, "", "ultrafast", 10000, 8000, 1000, 500)
+		input.Result.Usage.CacheCreation30mInputTokens = 400
+		input.Result.Usage.CacheCreation12hInputTokens = 600
+		if err := svc.RecordUsage(context.Background(), input); err != nil {
+			t.Fatal(err)
+		}
+		event := ultrafastUsageEvent(t, repo)
+		factor := 1.0
+		if model == "gpt-6.2-astra" {
+			factor = 4
+		}
+		// Ordinary input=1000, cached input=8000, writes=400 short+600 long.
+		wantTotal := .0354 * factor
+		ultrafastUsageNear(t, "6.2 total", wantTotal, event.Usage.TotalCost)
+		ultrafastUsageNear(t, "6.2 user bill", wantTotal*.25, event.Command.BalanceCost)
+		ultrafastUsageNear(t, "6.2 TTL writes", .012*factor, event.Usage.CacheCreationCost)
+		if event.Usage.CacheCreation30mTokens != 400 || event.Usage.CacheCreation12hTokens != 600 ||
+			event.Command.InputTokens != 1000 || event.Command.CacheReadTokens != 8000 || event.Command.CacheCreationTokens != 1000 {
+			t.Fatalf("6.2 token buckets changed: %+v", event.Usage)
+		}
+	}
+}

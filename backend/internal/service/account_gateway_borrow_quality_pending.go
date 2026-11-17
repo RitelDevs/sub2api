@@ -81,7 +81,7 @@ func (a *Account) IsOpenAIGatewayAccountQualityPendingForModel(model string) boo
 }
 func (a *Account) IsOpenAIGatewayAccountQualityPendingForUpstreamModel(model string) bool {
 	return a.gatewayBorrowAccountQualityPending() && a.gatewayBorrowAccountHasAstraPermission() &&
-		GatewayBorrowAccountQualityLinkedModel(config.CanonicalGatewayBorrowModel(normalizeExcelBPSIsolationModel(model)))
+		GatewayBorrowAccountQualityLinkedModel(model)
 }
 
 // Key-level account edits can neither erase nor supply managed gate fields.

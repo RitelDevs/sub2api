@@ -39,7 +39,7 @@ func OAuthAccountModelReconcileState(a *Account) map[string]any {
 		"native_revision":    a.Extra["openai_account_defaults_revision"],
 		"native_identity":    a.Extra[nativeOAuthAccountDefaultsIdentityKey],
 		"quality_version":    candy["version"], "quality_state": candy["state"],
-		"quality_results": map[string]any{"gpt-6-sol": results["gpt-6-sol"], "gpt-6.1-sol": results["gpt-6.1-sol"], "gpt-6-astra": results["gpt-6-astra"]},
+		"quality_results": map[string]any{"gpt-6-sol": results["gpt-6-sol"], "gpt-6.1-sol": results["gpt-6.1-sol"], "gpt-6-astra": results["gpt-6-astra"], "gpt-6.2-sol": results["gpt-6.2-sol"], "gpt-6.2-astra": results["gpt-6.2-astra"]},
 		"bps":             a.Extra["openai_excel_bps"], "bps_models_present": bpsModelsPresent,
 		"bps_models":                          a.Extra["openai_excel_bps_models"],
 		GatewayBorrowAccountQualityModeKey:    a.Extra[GatewayBorrowAccountQualityModeKey],
@@ -75,10 +75,14 @@ func OAuthAccountModelMapping(c *OpenAIAccountDefaultsConfig, a *Account) (map[s
 	version, _ := json.Marshal(candy["version"])
 	classified := string(version) == "1" && (candy["state"] == "healthy" || candy["state"] == "degraded")
 	results, _ := a.Extra["quality_model_results"].(map[string]any)
-	for _, model := range []string{"gpt-6-sol", "gpt-6.1-sol", "gpt-6-astra"} {
+	for _, model := range []string{"gpt-6-sol", "gpt-6.1-sol", "gpt-6-astra", "gpt-6.2-sol", "gpt-6.2-astra"} {
+		protection := openAIQualityProtectionModel(model)
+		if protection != model && excluded[protection] {
+			excluded[model] = true
+		}
 		if classified || oauthAccountBPSRoutesModel(a.Extra, model) || results[model] == "good" {
 			delete(excluded, model)
-		} else if results[model] == "degraded" {
+		} else if results[model] == "degraded" || results[protection] == "degraded" {
 			excluded[model] = true
 		}
 	}

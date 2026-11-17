@@ -14,12 +14,12 @@ export type CcSwitchApplicationProfile = Omit<CcsImportProfile, 'platform'> & {
   reasoningEffort?: string
 }
 
-export const OPENAI_CC_SWITCH_CODEX_MODEL = 'gpt-6.1-sol'
+export const OPENAI_CC_SWITCH_CODEX_MODEL = 'gpt-6.2-sol'
 export const GROK_CC_SWITCH_MODEL = 'grok-4.7'
 export const CLAUDE_CC_SWITCH_MODEL = 'claude-opus-5-5'
 export const GEMINI_CC_SWITCH_MODEL = 'gemini-4-argon'
 
-/** GPT/Claude defaults selected by the administrator on 2026-11-06; other platforms retain their defaults. */
+/** Import defaults; key-scoped discovery still determines the available model. */
 export function getCcSwitchDefaultModel(platform: GroupPlatform, app?: CcsImportApp): string {
   if (app === 'claude' && (platform === 'anthropic' || platform === 'antigravity')) return ''
   if (app === 'gemini' || app === 'agy') return GEMINI_CC_SWITCH_MODEL

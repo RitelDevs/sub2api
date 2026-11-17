@@ -1373,8 +1373,16 @@ func normalizeOpenAIOAuthResponsesCompatibilityBody(body []byte) ([]byte, bool, 
 }
 
 func normalizeGPT6ResponsesSampling(body []byte, model string) ([]byte, bool, error) {
-	isGPT61 := openai.IsGPT61SolModelSpelling(model)
+	requiresReasoning := openai.IsGPT61SolModelSpelling(model) || openai.IsGPT62ModelSpelling(model)
 	isTerra := openai.IsGPT61TerraModelSpelling(model)
+	if openai.IsGPT62ModelSpelling(model) {
+		for _, path := range []string{"reasoning.effort", "reasoning_effort"} {
+			effort := openai.NormalizeReasoningEffortForModel(model, gjson.GetBytes(body, path).String())
+			if err := openai.ValidateReasoningEffortForModel(model, effort); err != nil {
+				return body, false, err
+			}
+		}
+	}
 	if isTerra {
 		for _, path := range []string{"reasoning.effort", "reasoning_effort"} {
 			if err := openai.ValidateGPT61TerraReasoningEffort(model, gjson.GetBytes(body, path).String()); err != nil {
@@ -1382,28 +1390,28 @@ func normalizeGPT6ResponsesSampling(body []byte, model string) ([]byte, bool, er
 			}
 		}
 	}
-	if !isGPT61 && !isTerra && (!openai.IsGPT6SolOrLunaModelSpelling(model) || gjson.GetBytes(body, "reasoning.effort").String() == "none") {
+	if !requiresReasoning && !isTerra && (!openai.IsGPT6SolOrLunaModelSpelling(model) || gjson.GetBytes(body, "reasoning.effort").String() == "none") {
 		return body, false, nil
 	}
 	out := body
 	changed := false
-	if isGPT61 || isTerra {
+	if requiresReasoning || isTerra {
 		if gjson.GetBytes(out, "prompt_cache_retention").Exists() {
 			var err error
 			if !gjson.GetBytes(out, "prompt_cache_options.ttl").Exists() {
 				out, err = sjson.SetBytes(out, "prompt_cache_options.ttl", "30m")
 				if err != nil {
-					return body, false, fmt.Errorf("normalize GPT-6.1 prompt cache ttl: %w", err)
+					return body, false, fmt.Errorf("normalize GPT-6 prompt cache ttl: %w", err)
 				}
 			}
 			out, err = sjson.DeleteBytes(out, "prompt_cache_retention")
 			if err != nil {
-				return body, false, fmt.Errorf("remove GPT-6.1 prompt cache retention: %w", err)
+				return body, false, fmt.Errorf("remove GPT-6 prompt cache retention: %w", err)
 			}
 			changed = true
 		}
 	}
-	if isGPT61 {
+	if requiresReasoning {
 		for _, path := range []string{"reasoning.effort", "reasoning_effort"} {
 			effort := strings.ToLower(strings.TrimSpace(gjson.GetBytes(out, path).String()))
 			if effort != "none" && effort != "minimal" {
@@ -1412,7 +1420,7 @@ func normalizeGPT6ResponsesSampling(body []byte, model string) ([]byte, bool, er
 			var err error
 			out, err = sjson.SetBytes(out, path, "low")
 			if err != nil {
-				return body, false, fmt.Errorf("normalize GPT-6.1 reasoning effort: %w", err)
+				return body, false, fmt.Errorf("normalize GPT-6 reasoning effort: %w", err)
 			}
 			changed = true
 		}
@@ -1575,7 +1583,7 @@ func normalizeOpenAIResponsesCompatibilityBodyWithOptions(body []byte, account *
 		normalized = sanitized
 		changed = true
 	}
-	if account != nil && account.IsOpenAI() && (account.IsOAuth() || (openai.IsGPT61SolModelSpelling(account.GetMappedModel(gjson.GetBytes(normalized, "model").String())) || openai.IsGPT61TerraModelSpelling(account.GetMappedModel(gjson.GetBytes(normalized, "model").String())))) {
+	if account != nil && account.IsOpenAI() && (account.IsOAuth() || openai.RequiresResponsesForToolCalls(account.GetMappedModel(gjson.GetBytes(normalized, "model").String()))) {
 		if reasoningBody, reasoningChanged, err := normalizeOpenAIResponsesReasoningMode(normalized, account.GetMappedModel(gjson.GetBytes(normalized, "model").String())); err != nil {
 			return body, false, err
 		} else if reasoningChanged {
@@ -2659,7 +2667,7 @@ func normalizeOpenAIReasoningEffort(raw string) string {
 }
 
 func normalizeOpenAIReasoningEffortForModel(raw, model string) string {
-	if openai.IsGPT61SolModelSpelling(model) {
+	if openai.IsGPT61SolModelSpelling(model) || openai.IsGPT62ModelSpelling(model) {
 		switch strings.ToLower(strings.TrimSpace(raw)) {
 		case "none", "minimal":
 			return "low"
@@ -2707,19 +2715,19 @@ func validateGPT61CompatRequest(body []byte, model string) error {
 }
 
 func validateGPT61RawEffort(body []byte, model string) error {
-	if !openai.IsGPT61SolModelSpelling(model) && !openai.IsGPT61TerraModelSpelling(model) {
+	if !openai.RequiresResponsesForToolCalls(model) {
 		return nil
 	}
 	for _, path := range []string{"reasoning.effort", "reasoning_effort", "output_config.effort"} {
-		effort := openai.NormalizeGPT61SolReasoningEffort(model, gjson.GetBytes(body, path).String())
-		if err := openai.ValidateGPT61ReasoningEffort(model, effort); err != nil {
+		effort := openai.NormalizeReasoningEffortForModel(model, gjson.GetBytes(body, path).String())
+		if err := openai.ValidateReasoningEffortForModel(model, effort); err != nil {
 			return err
 		}
 	}
 	requestedModel := openai.CanonicalizeOpenAIModelAliasSpelling(gjson.GetBytes(body, "model").String())
 	for _, effort := range []string{"none", "minimal"} {
 		if strings.HasSuffix(strings.ToLower(requestedModel), "-"+effort) {
-			return openai.ValidateGPT61ReasoningEffort(model, openai.NormalizeGPT61SolReasoningEffort(model, effort))
+			return openai.ValidateReasoningEffortForModel(model, openai.NormalizeReasoningEffortForModel(model, effort))
 		}
 	}
 	return nil

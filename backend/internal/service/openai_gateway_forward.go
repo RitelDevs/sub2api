@@ -331,7 +331,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			body = sanitizedToolBody
 		}
 	}
-	if account.IsOpenAIOAuthLike() || (account.IsOpenAI() && (openai.IsGPT61SolModelSpelling(account.GetMappedModel(gjson.GetBytes(body, "model").String())) || openai.IsGPT61TerraModelSpelling(account.GetMappedModel(gjson.GetBytes(body, "model").String())))) {
+	if account.IsOpenAIOAuthLike() || (account.IsOpenAI() && openai.RequiresResponsesForToolCalls(account.GetMappedModel(gjson.GetBytes(body, "model").String()))) {
 		reasoningBody, reasoningChanged, reasoningErr := normalizeOpenAIResponsesReasoningMode(body, account.GetMappedModel(gjson.GetBytes(body, "model").String()))
 		if reasoningErr != nil {
 			return nil, fmt.Errorf("normalize OpenAI Responses reasoning.mode: %w", reasoningErr)
@@ -922,8 +922,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			markPatchDelete("max_completion_tokens")
 		}
 		for _, unsupportedField := range []string{"prompt_cache_retention", "safety_identifier", "prompt_cache_options"} {
-			if account.IsOpenAIApiKey() && (openai.IsGPT61SolModelSpelling(upstreamModel) || openai.IsGPT61TerraModelSpelling(upstreamModel)) && (unsupportedField == "prompt_cache_options" || unsupportedField == "prompt_cache_retention") {
-				continue // Standard API GPT-6.1 accepts ttl; the Codex OAuth endpoint does not.
+			if account.IsOpenAIApiKey() && openai.RequiresResponsesForToolCalls(upstreamModel) && (unsupportedField == "prompt_cache_options" || unsupportedField == "prompt_cache_retention") {
+				continue // Standard API GPT-6.1/6.2 accepts ttl; the Codex OAuth endpoint does not.
 			}
 			if gjson.GetBytes(body, unsupportedField).Exists() {
 				markPatchDelete(unsupportedField)
@@ -1032,9 +1032,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			requestView = newOpenAIRequestView(body)
 		}
 	}
-	// Resolve the final mapped model before enforcing the GPT-6.1 contract,
+	// Resolve the final mapped model before enforcing the GPT-6.1/6.2 contract,
 	// including API-key accounts and channel mappings applied after ingress.
-	if openai.IsGPT61SolModelSpelling(upstreamModel) || openai.IsGPT61TerraModelSpelling(upstreamModel) {
+	if openai.RequiresResponsesForToolCalls(upstreamModel) {
 		normalizedBody, changed, normalizeErr := normalizeGPT6ResponsesSampling(body, upstreamModel)
 		if normalizeErr != nil {
 			return nil, normalizeErr

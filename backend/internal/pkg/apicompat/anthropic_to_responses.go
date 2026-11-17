@@ -37,8 +37,8 @@ func AnthropicToResponsesWithOptions(req *AnthropicRequest, opts AnthropicToResp
 	requestedEffort := anthropicReasoningEffort(req)
 	effort := requestedEffort
 	if !opts.DeferReasoningEffortValidation {
-		effort = openai.NormalizeGPT61SolReasoningEffort(req.Model, effort)
-		if err := openai.ValidateGPT61ReasoningEffort(req.Model, effort); err != nil {
+		effort = openai.NormalizeReasoningEffortForModel(req.Model, effort)
+		if err := openai.ValidateReasoningEffortForModel(req.Model, effort); err != nil {
 			return nil, err
 		}
 	}
@@ -88,7 +88,7 @@ func AnthropicToResponsesWithOptions(req *AnthropicRequest, opts AnthropicToResp
 
 	// An explicit thinking disable takes precedence over output_config.effort,
 	// even though GPT-6.1 Sol upgrades that legacy value to low.
-	if (openai.IsGPT61SolModelSpelling(req.Model) || openai.IsGPT61TerraModelSpelling(req.Model)) && req.OutputConfig != nil && req.OutputConfig.Effort == "max" && requestedEffort != "none" {
+	if openai.RequiresResponsesForToolCalls(req.Model) && req.OutputConfig != nil && req.OutputConfig.Effort == "max" && requestedEffort != "none" {
 		effort = "max"
 	}
 	out.Reasoning = &ResponsesReasoning{

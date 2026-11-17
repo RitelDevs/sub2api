@@ -203,7 +203,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 		}
 		ctx := context.WithValue(c.Request.Context(), ctxkey.UserID, apiKey.User.ID)
 		c.Request = c.Request.WithContext(ctx)
-		billingInfoRequest := c.Request.URL.Path == "/v1/sub2api/billing"
+		billingInfoRequest := c.Request.URL.Path == "/v1/sub2api/billing" || service.IsAPIKeyRequestBillingPath(c.Request.Method, c.Request.URL.Path)
 		pelicanReadRequest := (c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead) &&
 			isPublicPelicanShowcasePath(c.Request.URL.Path)
 		// Showcase reads are free but still require an unexpired site API key,

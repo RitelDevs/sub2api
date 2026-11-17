@@ -48,7 +48,7 @@ func (r *keyBillingRouteRateRepo) GetDeniedModelsByUserAndGroup(context.Context,
 	return nil, nil
 }
 
-func newKeyBillingRouteTestRouter(runMode string) (*gin.Engine, *keyBillingRouteRateRepo, string) {
+func newKeyBillingRouteTestRouter(runMode string, configure ...func(*service.APIKey)) (*gin.Engine, *keyBillingRouteRateRepo, string) {
 	gin.SetMode(gin.TestMode)
 	group := &service.Group{
 		ID:               42,
@@ -73,6 +73,9 @@ func newKeyBillingRouteTestRouter(runMode string) (*gin.Engine, *keyBillingRoute
 		User:    user,
 		GroupID: groupID,
 		Group:   apiKeyGroup,
+	}
+	for _, apply := range configure {
+		apply(apiKey)
 	}
 	cfg := &config.Config{RunMode: runMode}
 	rateRepo := &keyBillingRouteRateRepo{}
@@ -174,4 +177,24 @@ func TestGatewayRoutesKeyBillingInfoEndToEnd(t *testing.T) {
 		}`, w.Body.String())
 		require.Zero(t, rateRepo.lookupCalls)
 	})
+}
+
+func TestGatewayRoutesKeyRequestBillingAuthenticatesWithoutRequiringNewCredit(t *testing.T) {
+	router, _, key := newKeyBillingRouteTestRouter(config.RunModeStandard, func(k *service.APIKey) {
+		k.User.Balance = 0
+		k.Quota = 1
+		k.QuotaUsed = 1
+		k.Status = service.StatusAPIKeyQuotaExhausted
+	})
+	anonymous := httptest.NewRecorder()
+	router.ServeHTTP(anonymous, httptest.NewRequest(http.MethodGet, "/v1/sub2api/billing/requests/child-1", nil))
+	require.Equal(t, http.StatusUnauthorized, anonymous.Code)
+	req := httptest.NewRequest(http.MethodGet, "/v1/sub2api/billing/requests/child-1", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	authenticated := httptest.NewRecorder()
+	router.ServeHTTP(authenticated, req)
+	// This fixture deliberately lacks the receipt repository; reaching the handler
+	// with no remaining credit must be 503, not a billing admission rejection.
+	require.Equal(t, http.StatusServiceUnavailable, authenticated.Code)
+	require.Contains(t, authenticated.Body.String(), "Billing receipt is unavailable")
 }

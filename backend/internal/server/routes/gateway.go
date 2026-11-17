@@ -257,6 +257,7 @@ func RegisterGatewayRoutes(
 	gateway.Use(captureTraffic)
 	gateway.Use(imageAdmission)
 	gateway.GET("/sub2api/billing", h.Gateway.KeyBillingInfo)
+	gateway.GET("/sub2api/billing/requests/:clientRequestId", h.Gateway.KeyRequestBilling)
 	gateway.Use(groupModelAllowlist, apiKeyModelPolicy)
 	gateway.Use(groupCodexCLIOnly, groupBlockSubagents)
 	gateway.Use(groupAntiDistillation, groupStreamOnly)

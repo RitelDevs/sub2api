@@ -132,6 +132,18 @@ func (h *OpenAIGatewayHandler) runDeepSeekRecovery(c *gin.Context, in deepSeekRe
 			}
 			return
 		}
+		// Receipt clients need the server-owned pointer before any upstream call.
+		// Flush only after admission so a failed write has an account for its zero
+		// receipt. The comment is neither an attempt nor business output.
+		if attempts == 0 && in.stream && c.GetHeader("X-Sub2API-Billing-Receipt") == "1" {
+			if err := sink.Heartbeat(); err != nil {
+				if release != nil {
+					release()
+				}
+				lastErr, lastAccount, finalContext = err, account, child
+				break
+			}
+		}
 		attempts++
 		requesttiming.BeginOperationAttempt(c.Request.Context(), attempts)
 		attemptCtx, attempt := service.NewDeepSeekRecoveryAttempt(child.Request.Context())

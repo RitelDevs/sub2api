@@ -506,3 +506,155 @@ func TestDeepSeekFinalFailurePersistsZeroReceipt(t *testing.T) {
 		})
 	}
 }
+
+func TestDeepSeekRecoveryReceiptPreludeFlushesBeforeUpstreamAndCancellationBillsZero(t *testing.T) {
+	for _, protocol := range []string{"chat", "messages"} {
+		t.Run(protocol, func(t *testing.T) {
+			b := &deepSeekRecoveryBilling{}
+			h, fixture, _, _ := deepSeekHandlerFixture(t, protocol, &deepSeekRecoveryTestUpstream{}, b)
+			h.cfg.RunMode = "standard"
+			key, _ := middleware2.GetAPIKeyFromContext(fixture)
+			body, err := io.ReadAll(fixture.Request.Body)
+			require.NoError(t, err)
+			requestID := "receipt-early-" + protocol
+			entered, done := make(chan struct{}), make(chan struct{})
+			calls := 0
+			var business, tool bool
+			router := gin.New()
+			router.Use(func(c *gin.Context) {
+				c.Set(string(middleware2.ContextKeyAPIKey), key)
+				c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), ctxkey.ClientRequestID, requestID))
+				c.Next()
+			}, middleware2.GatewayErrorPrivacy())
+			router.POST(fixture.Request.URL.Path, func(c *gin.Context) {
+				defer close(done)
+				h.runDeepSeekRecovery(c, deepSeekRecoveryRequest{apiKey: key, model: "deepseek-flash", forwardModel: "deepseek-flash", protocol: protocol, stream: true, body: body,
+					forward: func(ctx context.Context, child *gin.Context, _ *service.Account) (*service.OpenAIForwardResult, error) {
+						calls++
+						sink := child.Writer.(*deepSeekRecoveryStream)
+						business, tool = sink.BusinessStarted(), sink.ToolExposed()
+						close(entered)
+						<-ctx.Done()
+						return &service.OpenAIForwardResult{Model: "deepseek-flash", UsageUnavailable: true}, ctx.Err()
+					}}, zap.NewNop())
+			})
+			server := httptest.NewServer(router)
+			defer server.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+fixture.Request.URL.Path, bytes.NewReader(body))
+			require.NoError(t, err)
+			req.Header.Set("X-Sub2API-Billing-Receipt", "1")
+			response, err := server.Client().Do(req)
+			require.NoError(t, err, "receipt headers must arrive while the upstream has produced nothing")
+			defer response.Body.Close()
+			require.Equal(t, requestID, response.Header.Get("X-Sub2API-Billing-ID"))
+			require.Equal(t, "text/event-stream", response.Header.Get("Content-Type"))
+			prelude := make([]byte, len(": keep-alive\n\n"))
+			_, err = io.ReadFull(response.Body, prelude)
+			require.NoError(t, err)
+			require.Equal(t, ": keep-alive\n\n", string(prelude))
+			select {
+			case <-entered:
+			case <-ctx.Done():
+				t.Fatal("upstream did not start after receipt prelude")
+			}
+			cancel()
+			_ = response.Body.Close()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("canceled request did not finish its zero receipt")
+			}
+			require.False(t, business)
+			require.False(t, tool)
+			require.Equal(t, 1, calls)
+			require.Len(t, b.events, 1)
+			require.Equal(t, 1, b.applications)
+			cmd := b.events[0].Command
+			require.Equal(t, "client:"+requestID, cmd.RequestID)
+			require.Zero(t, cmd.BalanceCost)
+			require.NotNil(t, cmd.QuotedActualCost)
+			require.Zero(t, *cmd.QuotedActualCost)
+		})
+	}
+}
+
+func TestDeepSeekRecoveryReceiptPreludePreservesRetryAndDefault(t *testing.T) {
+	for _, protocol := range []string{"chat", "messages"} {
+		for _, optIn := range []bool{false, true} {
+			t.Run(fmt.Sprint(protocol, "/", optIn), func(t *testing.T) {
+				var rec *httptest.ResponseRecorder
+				var firstFlushed bool
+				var firstBody string
+				u := &deepSeekRecoveryTestUpstream{response: func(n int, _ *http.Request) (int, string) {
+					if n == 1 {
+						firstFlushed, firstBody = rec.Flushed, rec.Body.String()
+						return 503, `{"error":{"message":"overloaded"}}`
+					}
+					return 200, deepSeekSuccess()
+				}}
+				b := &deepSeekRecoveryBilling{}
+				h, c, recorder, _ := deepSeekHandlerFixture(t, protocol, u, b)
+				rec = recorder
+				h.cfg.RunMode = "standard"
+				if optIn {
+					c.Request.Header.Set("X-Sub2API-Billing-Receipt", "1")
+				}
+				key, _ := middleware2.GetAPIKeyFromContext(c)
+				body, err := io.ReadAll(c.Request.Body)
+				require.NoError(t, err)
+				ctx, at := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), key.GroupID)
+				c.Request = c.Request.WithContext(ctx)
+				h.runDeepSeekRecovery(c, deepSeekRecoveryRequest{apiKey: key, model: "deepseek-flash", forwardModel: "deepseek-flash", protocol: protocol, stream: true, body: body, pricingAt: at,
+					forward: func(ctx context.Context, child *gin.Context, a *service.Account) (*service.OpenAIForwardResult, error) {
+						if protocol == "messages" {
+							return h.gatewayService.ForwardAsAnthropic(ctx, child, a, body, "", "")
+						}
+						return h.gatewayService.ForwardAsChatCompletions(ctx, child, a, body, "", "")
+					}}, zap.NewNop())
+				require.Equal(t, optIn, firstFlushed)
+				if optIn {
+					require.Equal(t, ": keep-alive\n\n", firstBody)
+					require.Equal(t, 1, strings.Count(rec.Body.String(), ": keep-alive\n\n"))
+				} else {
+					require.Empty(t, firstBody)
+					require.NotContains(t, rec.Body.String(), ": keep-alive")
+				}
+				require.Len(t, u.ids, 2)
+				require.NotEqual(t, u.ids[0], u.ids[1])
+				require.Contains(t, rec.Body.String(), "SUCCESS")
+				require.NotContains(t, rec.Body.String(), "正在重新生成")
+				require.Len(t, b.events, 1)
+				require.Equal(t, 1, b.applications)
+				require.Equal(t, u.ids[1], b.events[0].Command.AccountID)
+				require.Equal(t, 3, b.events[0].Command.OutputTokens)
+			})
+		}
+	}
+}
+
+func TestDeepSeekRecoveryReceiptPreludeWriteFailureNeverCallsUpstream(t *testing.T) {
+	b := &deepSeekRecoveryBilling{}
+	h, c, _, _ := deepSeekHandlerFixture(t, "chat", &deepSeekRecoveryTestUpstream{}, b)
+	h.cfg.RunMode = "standard"
+	c.Request.Header.Set("X-Sub2API-Billing-Receipt", "1")
+	broken := &recoverySinkBrokenWriter{ResponseWriter: c.Writer}
+	c.Writer = broken
+	key, _ := middleware2.GetAPIKeyFromContext(c)
+	body, err := io.ReadAll(c.Request.Body)
+	require.NoError(t, err)
+	calls := 0
+	h.runDeepSeekRecovery(c, deepSeekRecoveryRequest{apiKey: key, model: "deepseek-flash", forwardModel: "deepseek-flash", protocol: "chat", stream: true, body: body,
+		forward: func(context.Context, *gin.Context, *service.Account) (*service.OpenAIForwardResult, error) {
+			calls++
+			return nil, io.ErrClosedPipe
+		}}, zap.NewNop())
+	require.Zero(t, calls)
+	require.Equal(t, 1, broken.writes)
+	require.Len(t, b.events, 1)
+	require.Equal(t, 1, b.applications)
+	require.Zero(t, b.events[0].Command.BalanceCost)
+	require.NotNil(t, b.events[0].Command.QuotedActualCost)
+	require.Zero(t, *b.events[0].Command.QuotedActualCost)
+}

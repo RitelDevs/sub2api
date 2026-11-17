@@ -470,3 +470,39 @@ func TestDeepSeekRecoveryHandlersAccept192TextPlaceholders(t *testing.T) {
 		})
 	}
 }
+
+func TestDeepSeekFinalFailurePersistsZeroReceipt(t *testing.T) {
+	for _, cancelRequest := range []bool{false, true} {
+		t.Run(fmt.Sprint(cancelRequest), func(t *testing.T) {
+			u := &deepSeekRecoveryTestUpstream{}
+			b := &deepSeekRecoveryBilling{}
+			h, c, _, _ := deepSeekHandlerFixture(t, "chat", u, b)
+			h.cfg.RunMode = "standard"
+			key, _ := middleware2.GetAPIKeyFromContext(c)
+			ctx, cancel := context.WithCancel(c.Request.Context())
+			defer cancel()
+			c.Request = c.Request.WithContext(ctx)
+			body, _ := io.ReadAll(c.Request.Body)
+			h.runDeepSeekRecovery(c, deepSeekRecoveryRequest{apiKey: key, model: "deepseek-flash", forwardModel: "deepseek-flash", protocol: "chat", stream: true, body: body,
+				forward: func(_ context.Context, child *gin.Context, _ *service.Account) (*service.OpenAIForwardResult, error) {
+					if cancelRequest {
+						sink := child.Writer.(*deepSeekRecoveryStream)
+						sink.mu.Lock()
+						sink.clientGone = true
+						sink.mu.Unlock()
+						cancel()
+						return &service.OpenAIForwardResult{Model: "deepseek-flash", UsageUnavailable: true}, context.Canceled
+					}
+					return nil, &service.UpstreamFailoverError{StatusCode: 502}
+				}}, logger.FromContext(ctx))
+			require.Len(t, b.events, 1)
+			require.Equal(t, 1, b.applications)
+			cmd := b.events[0].Command
+			require.Equal(t, "client:deepseek-recovery-test", cmd.RequestID)
+			require.Equal(t, int64(99), cmd.APIKeyID)
+			require.Zero(t, cmd.BalanceCost)
+			require.NotNil(t, cmd.QuotedActualCost)
+			require.Zero(t, *cmd.QuotedActualCost)
+		})
+	}
+}

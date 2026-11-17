@@ -250,8 +250,27 @@ func (h *OpenAIGatewayHandler) runDeepSeekRecovery(c *gin.Context, in deepSeekRe
 	// Only an attempt that exposed a tool or whose downstream disconnected
 	// retains the existing partial-usage contract. Recoverable failed text
 	// attempts never occupy the final customer billing key.
-	if finalContext != nil && lastResult != nil && (sink.ToolExposed() || sink.ClientGone()) {
+	// A canceled pre-output attempt may return a non-nil placeholder with
+	// unknown usage. No business output and no known usage is the customer's
+	// existing failed-text no-charge policy; provider cost remains unknown.
+	canceledBeforeBusiness := !sink.BusinessStarted() && !sink.ToolExposed() &&
+		lastResult != nil && lastResult.UsageUnavailable && lastResult.Usage == (service.OpenAIUsage{})
+	if finalContext != nil && lastResult != nil && (sink.ToolExposed() || sink.ClientGone()) && !canceledBeforeBusiness {
 		h.submitDeepSeekRecoveryUsage(c, finalContext, in, lastAccount, lastResult, log)
+	} else if lastAccount != nil {
+		// This is the final customer policy decision, after all attempts and after
+		// ruling out the partial/tool/disconnect charge branch. Persist a zero
+		// receipt through the normal durable journal so an external wallet can
+		// settle the reservation without interpreting HTTP status or missing logs.
+		h.submitMandatoryUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
+			if err := h.gatewayService.RecordConfirmedUnbilledDeepSeek(ctx, &service.OpenAIRecordUsageInput{
+				Result: &service.OpenAIForwardResult{Model: in.model}, APIKey: in.apiKey, User: in.apiKey.User,
+				Account: lastAccount, RequestPayloadHash: service.HashUsageRequestPayload(in.body), APIKeyService: h.apiKeyService,
+				InboundEndpoint: GetInboundEndpoint(c), UpstreamEndpoint: resolveOpenAIUpstreamEndpoint(finalContext, lastAccount, lastResult),
+			}); err != nil {
+				log.Error("deepseek.unbilled_receipt_pending", zap.Error(err))
+			}
+		})
 	}
 	log.Warn("deepseek.recovery_exhausted", zap.Int("attempts", attempts), zap.Bool("tool_exposed", sink.ToolExposed()), zap.Error(lastErr))
 }

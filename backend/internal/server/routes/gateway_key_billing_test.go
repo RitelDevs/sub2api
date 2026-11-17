@@ -198,3 +198,31 @@ func TestGatewayRoutesKeyRequestBillingAuthenticatesWithoutRequiringNewCredit(t 
 	require.Equal(t, http.StatusServiceUnavailable, authenticated.Code)
 	require.Contains(t, authenticated.Body.String(), "Billing receipt is unavailable")
 }
+
+func TestGatewayRoutesReceiptPointerSurvivesPrivacyOnlyWhenOptedIn(t *testing.T) {
+	router, _, key := newKeyBillingRouteTestRouter(config.RunModeStandard)
+	for _, want := range []bool{false, true} {
+		req := httptest.NewRequest(http.MethodGet, "/v1/sub2api/billing/requests/child-1", nil)
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("X-Client-Request-ID", "caller-cannot-choose-billing-dedup")
+		if want {
+			req.Header.Set("X-Sub2API-Billing-Receipt", "1")
+		}
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusServiceUnavailable, w.Code)
+		require.Empty(t, w.Header().Get("X-Client-Request-ID"))
+		if want {
+			require.NotEmpty(t, w.Header().Get("X-Sub2API-Billing-ID"))
+			require.NotEqual(t, "caller-cannot-choose-billing-dedup", w.Header().Get("X-Sub2API-Billing-ID"))
+		} else {
+			require.Empty(t, w.Header().Get("X-Sub2API-Billing-ID"))
+		}
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/sub2api/billing/requests/child-1", nil)
+	req.Header.Set("X-Sub2API-Billing-Receipt", "1")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.Empty(t, w.Header().Get("X-Sub2API-Billing-ID"))
+}

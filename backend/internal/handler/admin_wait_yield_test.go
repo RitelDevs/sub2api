@@ -108,9 +108,11 @@ func newAdminWaitYieldContext(ctx context.Context, role string, keyID int64) (*g
 	c, rec := newHelperTestContext(http.MethodPost, "/v1/responses")
 	c.Request = c.Request.WithContext(ctx)
 	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 42, Concurrency: 50})
-	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
-		ID: keyID, UserID: 42, User: &service.User{ID: 42, Role: role},
-	})
+	if keyID > 0 {
+		c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+			ID: keyID, UserID: 42, User: &service.User{ID: 42, Role: role},
+		})
+	}
 	if role != "" {
 		c.Set(string(middleware.ContextKeyUserRole), role)
 	}
@@ -191,12 +193,16 @@ func assertAdminWaitYieldHTTPError(t *testing.T, rec *httptest.ResponseRecorder,
 
 func TestAdminWaitYieldCallerIdentity(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		role   any
-		nilGin bool
-		admin  bool
+		name         string
+		role         any
+		nilGin       bool
+		admin        bool
+		publicAPIKey bool
 	}{
 		{name: "trusted_admin", role: service.RoleAdmin, admin: true},
+		{name: "public_key_admin_owner", role: service.RoleAdmin, admin: true, publicAPIKey: true},
+		{name: "public_key_user_owner", role: service.RoleUser, publicAPIKey: true},
+		{name: "public_key_without_trusted_role", publicAPIKey: true},
 		{name: "trusted_user", role: service.RoleUser},
 		{name: "observer", role: service.RoleObserver},
 		{name: "missing_role"},
@@ -208,16 +214,18 @@ func TestAdminWaitYieldCallerIdentity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var c *gin.Context
 			if !tc.nilGin {
-				c, _ = newAdminWaitYieldContext(context.Background(), "", 1)
+				c, _ = newAdminWaitYieldContext(context.Background(), "", 0)
 				c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses?role=admin&user_role=admin",
 					strings.NewReader("{\"role\":\"admin\",\"user_role\":\"admin\"}"))
 				c.Request.Header.Set("X-User-Role", service.RoleAdmin)
 				c.Set("role", service.RoleAdmin)
-				// Even another object claiming admin must not replace the
-				// authenticated role installed by middleware.
-				c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
-					ID: 1, UserID: 42, User: &service.User{ID: 42, Role: service.RoleAdmin},
-				})
+				// Only a typed API key installed in context identifies a public
+				// API caller; role claims in headers/body do not authenticate one.
+				if tc.publicAPIKey {
+					c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+						ID: 1, UserID: 42, User: &service.User{ID: 42, Role: service.RoleAdmin},
+					})
+				}
 				if tc.role != nil {
 					c.Set(string(middleware.ContextKeyUserRole), tc.role)
 				}
@@ -225,7 +233,7 @@ func TestAdminWaitYieldCallerIdentity(t *testing.T) {
 			require.Equal(t, tc.admin, isAdminAccountWaitCaller(c))
 			for _, configured := range []int{-1, 0, 1, 3, 100} {
 				want := configured
-				if tc.admin && configured > 1 {
+				if tc.admin && !tc.publicAPIKey && configured > 1 {
 					want = 1
 				}
 				require.Equal(t, want, accountWaitLimitForCaller(c, configured), "configured=%d", configured)
@@ -241,16 +249,19 @@ func TestAdminWaitYieldHTTPAdmissionThresholds(t *testing.T) {
 		configured int
 		limit      int
 		waiting    []int
+		keyID      int64
 	}{
-		{"sticky_admin", service.RoleAdmin, 3, 1, []int{0, 1, 2, 3}},
-		{"sticky_user", service.RoleUser, 3, 3, []int{0, 1, 2, 3}},
-		{"fallback_admin", service.RoleAdmin, 100, 1, []int{0, 1, 2, 3, 99, 100}},
-		{"fallback_user", service.RoleUser, 100, 100, []int{0, 1, 2, 3, 99, 100}},
+		{"sticky_admin", service.RoleAdmin, 3, 1, []int{0, 1, 2, 3}, 0},
+		{"sticky_admin_public_key", service.RoleAdmin, 3, 3, []int{0, 1, 2, 3}, 1},
+		{"sticky_user", service.RoleUser, 3, 3, []int{0, 1, 2, 3}, 1},
+		{"fallback_admin", service.RoleAdmin, 100, 1, []int{0, 1, 2, 3, 99, 100}, 0},
+		{"fallback_admin_public_key", service.RoleAdmin, 100, 100, []int{0, 1, 2, 3, 99, 100}, 1},
+		{"fallback_user", service.RoleUser, 100, 100, []int{0, 1, 2, 3, 99, 100}, 1},
 	} {
 		for _, waiting := range tc.waiting {
 			t.Run(fmt.Sprintf("%s/W%d", tc.name, waiting), func(t *testing.T) {
 				cache := newAdminWaitYieldCache(waiting, false, true)
-				c, rec := newAdminWaitYieldContext(context.Background(), tc.role, 1)
+				c, rec := newAdminWaitYieldContext(context.Background(), tc.role, tc.keyID)
 				out := runAdminWaitYieldHTTP(newAdminWaitYieldHandler(cache), c, newAdminWaitYieldSelection(tc.configured))
 				state := cache.snapshot()
 				require.Equal(t, []int{tc.limit}, state.limits)
@@ -317,14 +328,17 @@ func TestAdminWaitYieldHTTPImmediateSlotSkipsWaiting(t *testing.T) {
 
 func TestAdminWaitYieldHTTPConcurrentKeysShareAccountCount(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		role       string
-		configured int
-		limit      int
+		name         string
+		role         string
+		configured   int
+		limit        int
+		publicAPIKey bool
 	}{
-		{"admin_sticky", service.RoleAdmin, 3, 1},
-		{"admin_fallback", service.RoleAdmin, 100, 1},
-		{"customer_sticky", service.RoleUser, 3, 3},
+		{"admin_sticky", service.RoleAdmin, 3, 1, false},
+		{"admin_fallback", service.RoleAdmin, 100, 1, false},
+		{"admin_public_key_sticky", service.RoleAdmin, 3, 3, true},
+		{"admin_public_key_fallback", service.RoleAdmin, 100, 100, true},
+		{"customer_sticky", service.RoleUser, 3, 3, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			const requests = 8
@@ -337,8 +351,13 @@ func TestAdminWaitYieldHTTPConcurrentKeysShareAccountCount(t *testing.T) {
 			done := make([]chan adminWaitYieldOutcome, requests)
 			recorders := make([]*httptest.ResponseRecorder, requests)
 			for i := 0; i < requests; i++ {
-				// Same authenticated user, distinct API keys, one upstream account.
-				c, rec := newAdminWaitYieldContext(ctx, tc.role, int64(100+i))
+				// Same user and upstream account. Public requests have distinct
+				// API keys; direct administrator requests have no public API key.
+				var keyID int64
+				if tc.publicAPIKey {
+					keyID = int64(100 + i)
+				}
+				c, rec := newAdminWaitYieldContext(ctx, tc.role, keyID)
 				recorders[i] = rec
 				done[i] = make(chan adminWaitYieldOutcome, 1)
 				go func(c *gin.Context, result chan<- adminWaitYieldOutcome) {
@@ -351,10 +370,11 @@ func TestAdminWaitYieldHTTPConcurrentKeysShareAccountCount(t *testing.T) {
 				awaitAdminWaitYieldIncrement(t, cache.incremented)
 			}
 			state := cache.snapshot()
+			admitted := min(requests, tc.limit)
 			require.Equal(t, requests, state.increments)
-			require.Equal(t, tc.limit, state.waiting)
-			require.Equal(t, tc.limit, state.highWater, "simultaneous keys must not over-admit")
-			require.Equal(t, tc.limit, state.admissions)
+			require.Equal(t, admitted, state.waiting)
+			require.Equal(t, admitted, state.highWater, "simultaneous callers must not over-admit")
+			require.Equal(t, admitted, state.admissions)
 			require.Zero(t, state.decrements, "accepted requests must remain registered while blocked")
 			for _, limit := range state.limits {
 				require.Equal(t, tc.limit, limit)
@@ -376,11 +396,11 @@ func TestAdminWaitYieldHTTPConcurrentKeysShareAccountCount(t *testing.T) {
 					t.Fatalf("unexpected status %d: %s", recorders[i].Code, recorders[i].Body.String())
 				}
 			}
-			require.Equal(t, requests-tc.limit, rejected)
-			require.Equal(t, tc.limit, cancelled)
+			require.Equal(t, requests-admitted, rejected)
+			require.Equal(t, admitted, cancelled)
 			state = cache.snapshot()
 			require.Zero(t, state.waiting)
-			require.Equal(t, tc.limit, state.decrements)
+			require.Equal(t, admitted, state.decrements)
 			require.Zero(t, state.releases)
 			for _, err := range state.decrementContextErrs {
 				require.NoError(t, err, "cleanup must use an uncancelled context")
@@ -638,11 +658,14 @@ func TestAdminWaitYieldWebSearchAdmission(t *testing.T) {
 		name, role   string
 		counterError bool
 		status       int
+		keyID        int64
 	}{
-		{"admin_full", service.RoleAdmin, false, http.StatusTooManyRequests},
-		{"admin_counter_error", service.RoleAdmin, true, http.StatusServiceUnavailable},
-		{"customer_keeps_capacity", service.RoleUser, false, 0},
-		{"customer_keeps_best_effort", service.RoleUser, true, 0},
+		{"admin_full", service.RoleAdmin, false, http.StatusTooManyRequests, 0},
+		{"admin_counter_error", service.RoleAdmin, true, http.StatusServiceUnavailable, 0},
+		{"admin_public_key_keeps_capacity", service.RoleAdmin, false, 0, 1},
+		{"admin_public_key_counter_error_unchanged", service.RoleAdmin, true, http.StatusServiceUnavailable, 1},
+		{"customer_keeps_capacity", service.RoleUser, false, 0, 1},
+		{"customer_keeps_best_effort", service.RoleUser, true, 0, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cache := newAdminWaitYieldCache(1)
@@ -650,7 +673,7 @@ func TestAdminWaitYieldWebSearchAdmission(t *testing.T) {
 			if tc.counterError {
 				cache.incrementErr = errors.New("counter unavailable")
 			}
-			c, _ := newAdminWaitYieldContext(context.Background(), tc.role, 1)
+			c, _ := newAdminWaitYieldContext(context.Background(), tc.role, tc.keyID)
 			h := &GatewayHandler{concurrencyHelper: NewConcurrencyHelper(service.NewConcurrencyService(cache), SSEPingFormatNone, 0)}
 			release, ok, err := h.acquireWebSearchAccountSlot(c, newAdminWaitYieldSelection(3))
 			if tc.status != 0 {

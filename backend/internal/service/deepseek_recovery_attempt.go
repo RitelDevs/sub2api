@@ -33,21 +33,28 @@ type DeepSeekRecoveryUsage struct {
 // UsageUnknown remains true until both input and output counts were observed;
 // observed counts are a lower bound when an upstream stream was interrupted.
 type DeepSeekRecoveryOutcome struct {
-	ObservedFinishReason string                `json:"observed_finish_reason,omitempty"`
-	HTTPStatus           int                   `json:"http_status,omitempty"`
-	UpstreamRequestID    string                `json:"upstream_request_id,omitempty"`
-	PublicErrorCode      string                `json:"public_error_code,omitempty"`
-	HTTPErrorClass       string                `json:"http_error_class,omitempty"`
-	Protocol             string                `json:"protocol"`
-	FinishReason         string                `json:"finish_reason,omitempty"`
-	Semantic             bool                  `json:"semantic"`
-	Answer               bool                  `json:"answer"`
-	ToolCall             bool                  `json:"tool_call"`
-	Refusal              bool                  `json:"refusal"`
-	Terminal             bool                  `json:"terminal"`
-	Usage                DeepSeekRecoveryUsage `json:"usage"`
-	UsageUnknown         bool                  `json:"usage_unknown"`
-	CyberPolicy          *CyberPolicyMark      `json:"cyber_policy,omitempty"`
+	ObservedFinishReason  string                `json:"observed_finish_reason,omitempty"`
+	HTTPStatus            int                   `json:"http_status,omitempty"`
+	UpstreamRequestID     string                `json:"upstream_request_id,omitempty"`
+	PublicErrorCode       string                `json:"public_error_code,omitempty"`
+	HTTPErrorClass        string                `json:"http_error_class,omitempty"`
+	HTTPErrorReason       string                `json:"http_error_reason,omitempty"`
+	HTTPErrorCode         string                `json:"http_error_code,omitempty"`
+	HTTPErrorType         string                `json:"http_error_type,omitempty"`
+	HTTPErrorParam        string                `json:"http_error_param,omitempty"`
+	HTTPErrorMessageHash  string                `json:"http_error_message_sha256,omitempty"`
+	HTTPErrorMessageChars int                   `json:"http_error_message_chars,omitempty"`
+	HTTPErrorMessageHints []string              `json:"http_error_message_hints,omitempty"`
+	Protocol              string                `json:"protocol"`
+	FinishReason          string                `json:"finish_reason,omitempty"`
+	Semantic              bool                  `json:"semantic"`
+	Answer                bool                  `json:"answer"`
+	ToolCall              bool                  `json:"tool_call"`
+	Refusal               bool                  `json:"refusal"`
+	Terminal              bool                  `json:"terminal"`
+	Usage                 DeepSeekRecoveryUsage `json:"usage"`
+	UsageUnknown          bool                  `json:"usage_unknown"`
+	CyberPolicy           *CyberPolicyMark      `json:"cyber_policy,omitempty"`
 }
 
 type deepSeekRecoveryTimeouts struct{ firstSemantic, stall, attempt time.Duration }
@@ -93,6 +100,7 @@ func (a *DeepSeekRecoveryAttempt) Outcome() DeepSeekRecoveryOutcome {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	out := a.out
+	out.HTTPErrorMessageHints = append([]string(nil), out.HTTPErrorMessageHints...)
 	if out.CyberPolicy != nil {
 		mark := *out.CyberPolicy
 		out.CyberPolicy = &mark
@@ -375,10 +383,7 @@ func (s *OpenAIGatewayService) doDeepSeekRecoveryUpstream(req *http.Request, pro
 		if s.rateLimitService != nil && a.Outcome().CyberPolicy == nil {
 			s.handleOpenAIAccountUpstreamError(a.parent, account, resp.StatusCode, resp.Header, policyPayload, policyModel)
 		}
-		category, _ := classifyAccountOpsFailure(account.Platform, resp.StatusCode, resp.Header, policyPayload)
-		a.mu.Lock()
-		a.out.HTTPErrorClass = category
-		a.mu.Unlock()
+		a.observeHTTPError(account.Platform, policyPayload, resp.StatusCode, resp.Header)
 		closeBody()
 		stopBody()
 		cleanup()

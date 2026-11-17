@@ -6,12 +6,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// accountWaitLimitForCaller makes authenticated administrators yield earlier
-// only when a selected account needs waiting. Immediate slot acquisition and
-// customer limits are unchanged. The limit is compared with the account-wide
-// wait count, so separate API keys cannot create separate waiting allowances.
+// accountWaitLimitForCaller makes administrators without a public API key yield
+// earlier only when a selected account needs waiting. Authenticated public API
+// keys use the configured limit even when their owner is an administrator.
+// The limit is compared with the account-wide wait count, so separate API keys
+// cannot create separate waiting allowances.
 func accountWaitLimitForCaller(c *gin.Context, configured int) int {
 	if configured > 1 && isAdminAccountWaitCaller(c) {
+		if apiKey, ok := middleware.GetAPIKeyFromContext(c); ok && apiKey != nil {
+			return configured
+		}
 		return 1
 	}
 	return configured

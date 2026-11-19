@@ -81,6 +81,8 @@ func TestReloginBudgetStopsOnConfirmedInteractiveChallenge(t *testing.T) {
 	}{
 		{"local_protocol_failed stage=starting reason=security_check elapsed_ms=10 exit=1", true},
 		{"local_protocol_failed stage=email_verification reason=email_otp_required elapsed_ms=10 exit=1", true},
+		{"local_protocol_failed stage=web_login reason=interaction_required elapsed_ms=10 exit=1", true},
+		{"invalid diagnostic containing reason=interaction_required", false},
 		{"session_studio_failed stage=terminal_result reason=security_check elapsed_ms=10 http_status=0", true},
 		{"session_studio_failed stage=http_request reason=http_rejected elapsed_ms=10 http_status=403", false},
 		{"local_protocol_failed stage=starting reason=transport_error elapsed_ms=10 exit=1", false},

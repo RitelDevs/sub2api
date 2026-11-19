@@ -93,7 +93,7 @@ func TestAccountReadableSnapshot_DenylistTripwire(t *testing.T) {
 	// InitialQualityPlan / SchedulerCredentialSHA256 = internal admission state,
 	// not readable plugin metadata.
 	stripped := map[string]struct{}{
-		"Credentials": {}, "Groups": {}, "AccountGroups": {}, "InitialQualityPlan": {}, "SchedulerCredentialSHA256": {}, "InitialAdmissionPlan": {},
+		"Credentials": {}, "Groups": {}, "AccountGroups": {}, "InitialQualityPlan": {}, "SchedulerCredentialSHA256": {}, "InitialAdmissionPlan": {}, "InitialAPIKeyDisposition": {},
 	}
 	// Fields intentionally exposed as readable metadata (incl. Extra and Proxy —
 	// the proxy password is already handed out via ResolveOutboundIdentity's URL).
@@ -129,6 +129,7 @@ func TestAccountReadableSnapshot_DenylistTripwire(t *testing.T) {
 	// The raw Credentials blob must never serialize; Extra and the proxy ARE released.
 	acct := &Account{
 		ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive,
+		InitialAPIKeyDisposition:  &OAuthAPIKeyDispositionConfig{AccountIDs: []int64{71}},
 		PerformancePaused:         true,
 		SchedulerCredentialSHA256: "PRIVATE-SCHEDULER-CREDENTIAL-HASH",
 		InitialQualityPlan:        &ScheduledTestPlan{PelicanConfig: &PelicanTestConfig{Prompt: "PRIVATE-INITIAL-QUALITY-PROMPT"}},
@@ -143,6 +144,8 @@ func TestAccountReadableSnapshot_DenylistTripwire(t *testing.T) {
 	assert.Equal(t, true, m["PerformancePaused"])
 	assert.NotContains(t, string(snap), "LEAK-REFRESH", "raw Credentials must never appear in metadata")
 	assert.NotContains(t, string(snap), "private-ticket-state")
+	assert.NotContains(t, m, "InitialAPIKeyDisposition")
+	require.Equal(t, []int64{71}, acct.InitialAPIKeyDisposition.AccountIDs, "snapshot must not mutate creation-only policy")
 	assert.NotContains(t, m, "InitialQualityPlan")
 	assert.NotContains(t, m, "scheduler_credential_sha256")
 	assert.NotContains(t, string(snap), "PRIVATE-SCHEDULER-CREDENTIAL-HASH")

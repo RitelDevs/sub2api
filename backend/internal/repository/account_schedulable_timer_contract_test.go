@@ -71,7 +71,7 @@ func TestAccountTimerRepositoryImmediateSwitchCancelsWithinOutboxTransaction(t *
 		t.Run(fmt.Sprintf("outbox_failure_%t", outboxFails), func(t *testing.T) {
 			repo, m := timerContractRepository(t, sqlmock.QueryMatcherRegexp)
 			m.ExpectBegin()
-			m.ExpectQuery("SELECT status, expires_at, deleted_at FROM accounts").WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"status", "expires_at", "deleted_at"}).AddRow(service.StatusActive, nil, nil))
+			m.ExpectQuery(`SELECT status, expires_at, deleted_at, .*deepseek_balance_pause_reason.* FROM accounts .* FOR UPDATE`).WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"status", "expires_at", "deleted_at", "balance_paused"}).AddRow(service.StatusActive, nil, nil, false))
 			m.ExpectExec("WITH cancelled AS").WithArgs(int64(7), int64(19), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 2))
 			m.ExpectExec("UPDATE accounts SET schedulable").WithArgs(false, sqlmock.AnyArg(), int64(7)).WillReturnResult(sqlmock.NewResult(0, 1))
 			event := m.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox"))

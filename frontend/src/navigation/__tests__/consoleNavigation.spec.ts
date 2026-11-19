@@ -5,20 +5,20 @@ const item = (path: string, label = path): ConsoleNavItem => ({ path, label, ico
 describe('console navigation organization', () => {
   it('places every granted leaf once, merges flagged groups and keeps extensions last', () => {
     const custom = { ...item('/custom/custom-1'), iconSvg: '<svg />' }
-    const smartOps = { ...item('/admin/smart-ops', 'Smart ops'), expandOnly: true, mergeTabs: true, children: [item('/admin/token-guard'), { ...item('/admin/token-guard-v2'), badge: () => 2 }] }
+    const smartOps = { ...item('/admin/smart-ops', 'Smart ops'), expandOnly: true, mergeTabs: true, children: [item('/admin/account-ops'), { ...item('/admin/token-guard-v2'), badge: () => 2 }] }
     const source = [custom, item('/admin/accounts'), item('/admin/dashboard'), smartOps, { ...item('/admin/orders'), expandOnly: true, children: [item('/admin/orders'), item('/admin/orders/plans')] }, item('/keys'), item('/admin/settings')]
     const sections = arrangeConsoleSections(source, 'management', consoleNavigationText('en'))
     expect(sections.map(section => section.key)).toEqual(['overview', 'resources', 'operations', 'revenue', 'system', 'extensions'])
     expect(sections.find(section => section.key === 'resources')?.tabs.map(tab => tab.path)).toEqual(['/admin/accounts', '/keys'])
     const operations = sections.find(section => section.key === 'operations')!
     expect(operations.tabs).toHaveLength(1)
-    expect(operations.tabs[0]).toMatchObject({ label: 'Smart ops', path: '/admin/token-guard', matches: ['/admin/token-guard', '/admin/token-guard-v2'] })
+    expect(operations.tabs[0]).toMatchObject({ label: 'Smart ops', path: '/admin/account-ops', matches: ['/admin/account-ops', '/admin/token-guard-v2'] })
     expect(tabBadge(operations.tabs[0]!)).toBe(2)
     expect(operations.badge?.()).toBe(2)
     expect(sections.at(-1)?.tabs[0]?.item.iconSvg).toBe('<svg />')
     const entries = buildFeatureSearchEntries(consoleSearchTree(sections))
-    expect(entries.map(entry => entry.path).sort()).toEqual(['/admin/dashboard', '/admin/accounts', '/admin/token-guard', '/admin/token-guard-v2', '/admin/orders', '/admin/orders/plans', '/keys', '/admin/settings', '/custom/custom-1'].sort())
-    expect(entries.find(entry => entry.path === '/admin/token-guard')?.group).toBe('Operations / Smart ops')
+    expect(entries.map(entry => entry.path).sort()).toEqual(['/admin/dashboard', '/admin/accounts', '/admin/account-ops', '/admin/token-guard-v2', '/admin/orders', '/admin/orders/plans', '/keys', '/admin/settings', '/custom/custom-1'].sort())
+    expect(entries.find(entry => entry.path === '/admin/account-ops')?.group).toBe('Operations / Smart ops')
   })
   it('groups the personal workspace, resolves the active tab and searches multilingual aliases', () => {
     const source = ['/profile', '/usage?view=records', '/keys', '/purchase', '/dashboard', '/usage?view=analysis', '/model-plaza?embedded=1', '/redeem'].map(path => item(path))

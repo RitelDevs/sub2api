@@ -5,6 +5,21 @@ import path from 'node:path';
 import test from 'node:test';
 import {createProtocolDiagnostics, validateCodexCallback, credentialOperationReason, parseOperationJSON, observeProtocolResponse, prepareCodexProxy} from './openai_codex_diagnostics.mjs';
 
+test('email verification remains distinct from TOTP in the private diagnostic', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-email-test-'));
+  try {
+    const file = path.join(root, 'diagnostic.json');
+    const channel = createProtocolDiagnostics(file, 7);
+    channel.mark('email_verification');
+    channel.fail(new Error('email_otp_required'));
+    const value = JSON.parse(fs.readFileSync(file));
+    assert.equal(value.stage, 'email_verification');
+    assert.equal(value.reason, 'email_otp_required');
+    channel.fail(new Error('email_otp_required synthetic-private'));
+    assert.equal(JSON.parse(fs.readFileSync(file)).reason, 'protocol_error');
+  } finally { fs.rmSync(root, {recursive: true, force: true}); }
+});
+
 test('actual error envelopes classify only codes and full allowlisted messages', () => {
   const fixtures = JSON.parse(fs.readFileSync(new URL('./fixtures/credential-operation-errors.json', import.meta.url)));
   for (const {name, payload, code} of fixtures) {
@@ -82,7 +97,6 @@ test('private snapshots contain only bounded enums, time and the task binding', 
   } finally { fs.rmSync(root, {recursive: true, force: true}); }
 });
 
-
 test('proxy preflight classifies only an observed challenge and preserves the rejection', async () => {
   for (const [headers, expected] of [
     [{'cf-mitigated': 'challenge'}, 'security_check'],
@@ -111,4 +125,33 @@ test('proxy preflight classifies only an observed challenge and preserves the re
   const successfulRequest = transport.request;
   assert.equal(await prepareCodexProxy(transport, null, 'https://example.test/'), 'original-result');
   assert.equal(transport.request, successfulRequest);
+});
+
+test('only explicit 400/401 OTP rejection permits another factor', async () => {
+ const {isTotpRejectionResponse}=await import('./openai_codex_diagnostics.mjs');
+ const response=(status,error)=>({res:{status},text:JSON.stringify({error})});
+ assert.equal(isTotpRejectionResponse(response(400,{code:'invalid_otp'})),true);
+ assert.equal(isTotpRejectionResponse(response(401,{message:'invalid totp'})),false);
+ for (const value of [response(429,{code:'invalid_otp'}),response(500,{code:'invalid_otp'}),response(400,{code:'unknown',message:'invalid totp'}),response(400,{message:'nested invalid otp data'})]) {
+  assert.equal(isTotpRejectionResponse(value),false);
+ }
+});
+
+test('an explicit challenge ends preflight and takes priority over an OTP error', async () => {
+  const {isTotpRejectionResponse} = await import('./openai_codex_diagnostics.mjs');
+  const headers = {'cf-mitigated': 'challenge'};
+  const result = {res: new Response('', {status: 400, headers}), text: '{"error":{"code":"invalid_otp"}}'};
+  assert.equal(isTotpRejectionResponse(result), false);
+  assert.throws(() => observeProtocolResponse(result), {message: 'security_check'});
+  let attempts = 0;
+  const request = async () => { attempts++; return new Response('', {status: 200, headers}); };
+  const transport = {request, async prepareProxy() {
+    // Even a preflight that swallows the transport error must not send again or return success.
+    await assert.rejects(this.request(), {message: 'security_check'});
+    await assert.rejects(this.request(), {message: 'security_check'});
+    return 'ready';
+  }};
+  await assert.rejects(prepareCodexProxy(transport, null, 'https://example.test'), {message: 'security_check'});
+  assert.equal(attempts, 1);
+  assert.equal(transport.request, request);
 });

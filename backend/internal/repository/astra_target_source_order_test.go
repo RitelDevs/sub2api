@@ -3,12 +3,10 @@ package repository
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,90 +16,12 @@ func targetSourceOrderFixture(t *testing.T, sources []int64) (*astraRoutingUpstr
 	settings := wrapper.cfg.AstraRouting(t.Context())
 	settings.CookiePool.SourceAccountIDs = sources
 	wrapper.cfg.SetAstraRoutingLoader(func(context.Context) config.AstraRoutingSettings { return settings })
-	pool := wrapper.current(t.Context())
+	settings.CookiePool.QualityMode = settings.QualityMode
+	pool := &codexGatewayPinUpstream{config: settings.CookiePool, routingSettings: settings, rotationCache: &wrapper.rotationCache}
 	for _, source := range sources {
 		accountBorrowAdd(t, pool, source, fmt.Sprintf("cookie-%d", source), 220*time.Second)
 	}
 	return wrapper, pool
-}
-
-func TestAutomaticBorrowTargetExploresNextSourceAfterOverloadQuiet(t *testing.T) {
-	wrapper, pool := targetSourceOrderFixture(t, []int64{299, 298})
-	calls, healthyShots := 0, 0
-	wrapper.delegate = gatewayPinDelegate{call: func(req *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
-		calls++
-		cookie, _ := req.Cookie("__oailb")
-		if cookie.Value == pool.routes[299].cookie.Value {
-			return overloadProbeResponse("server_is_overloaded"), nil
-		}
-		healthyShots++
-		return accountBorrowResponse("gpt-6-astra", "21"), nil
-	}}
-	req := accountBorrowRequest(t, "gpt-6-astra", "")
-	require.EqualError(t, wrapper.VerifyAstraGatewayTarget(t.Context(), req, "exit", 300, 1), "target_probe_overloaded")
-	require.Equal(t, 1, calls)
-	require.EqualError(t, wrapper.VerifyAstraGatewayTarget(t.Context(), req, "exit", 300, 1), "target_probe_overloaded")
-	require.Equal(t, 1, calls, "different donor cannot evade active account/exit overload quiet")
-	// Simulate only elapsed provider quiet, retaining the actual source attempts.
-	wrapper.quotaMu.Lock()
-	for key, wait := range wrapper.quotaBackoff {
-		wait.until = time.Now().Add(-time.Second)
-		wrapper.quotaBackoff[key] = wait
-	}
-	wrapper.quotaMu.Unlock()
-	pool.targetMu.Lock()
-	pool.targetRouteFailures = nil
-	pool.targetMu.Unlock()
-	require.NoError(t, wrapper.VerifyAstraGatewayTarget(t.Context(), req, "exit", 300, 1), "after quiet expires an untried donor gets the next bounded probe")
-	require.Equal(t, 5, calls)
-	require.Equal(t, 4, healthyShots)
-	pool.targetMu.Lock()
-	check, _ := pool.targetCheck(300, "gpt-6-astra")
-	pool.targetMu.Unlock()
-	require.Equal(t, int64(298), check.sourceID)
-}
-
-func TestAutomaticBorrowForcedRenewalPrefersProvenTargetSource(t *testing.T) {
-	wrapper, pool := targetSourceOrderFixture(t, []int64{299, 298})
-	calls := []string{}
-	wrapper.delegate = gatewayPinDelegate{call: func(req *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
-		cookie, _ := req.Cookie("__oailb")
-		calls = append(calls, cookie.Value)
-		if cookie.Value == pool.routes[299].cookie.Value {
-			return overloadProbeResponse("server_is_overloaded"), nil
-		}
-		return accountBorrowResponse("gpt-6-astra", "21"), nil
-	}}
-	request := accountBorrowRequest(t, "gpt-6-astra", "")
-	pool.mu.Lock()
-	selected := autoBorrowRouteSelection{298, pool.routes[298]}
-	pool.mu.Unlock()
-	_, _, _, release, err := wrapper.targetRouteOnce(request.Clone(context.WithValue(request.Context(), autoBorrowRouteKey{}, selected)), "exit", 300, 1, nil)
-	release()
-	require.NoError(t, err)
-	require.Len(t, calls, 4)
-	accountBorrowAdd(t, pool, 298, "renewed-proven-cookie", 220*time.Second)
-	calls = nil
-	require.NoError(t, wrapper.VerifyAstraGatewayTarget(t.Context(), request, "exit", 300, 1), "forced warm must renew this target's successful pair before exploring config-first donor")
-	require.Equal(t, []string{"renewed-proven-cookie"}, calls)
-}
-
-func TestAutomaticBorrowSourceAttemptOrderIsCredentialAndTargetScoped(t *testing.T) {
-	wrapper, pool := targetSourceOrderFixture(t, []int64{299, 298})
-	calls := []string{}
-	wrapper.delegate = gatewayPinDelegate{call: func(req *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
-		cookie, _ := req.Cookie("__oailb")
-		calls = append(calls, cookie.Value)
-		return overloadProbeResponse("server_is_overloaded"), nil
-	}}
-	req := accountBorrowRequest(t, "gpt-6-astra", "")
-	require.Error(t, wrapper.VerifyAstraGatewayTarget(t.Context(), req, "exit", 300, 1))
-	first := pool.routes[299].cookie.Value
-	require.Equal(t, []string{first}, calls)
-	changed := accountBorrowRequest(t, "gpt-6-astra", "")
-	changed.Header.Set("Authorization", "Bearer new-credential")
-	require.Error(t, wrapper.VerifyAstraGatewayTarget(t.Context(), changed, "exit", 300, 1))
-	require.Equal(t, []string{first, first}, calls, "a changed credential starts its own target exploration scope")
 }
 
 func TestAutomaticBorrowSourceOrderScopeAndBoundedMemory(t *testing.T) {

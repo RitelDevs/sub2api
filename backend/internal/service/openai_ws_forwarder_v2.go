@@ -225,9 +225,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		return nil, fmt.Errorf("build ws headers: %w", buildHdrErr)
 	}
 
-	if anchor != nil && anchor.cookie != "" {
-		replaceCodexWSAnchorCookie(wsHeaders, anchor.cookie)
-	}
 	logOpenAIWSModeDebug(
 		"acquire_start account_id=%d account_type=%s transport=%s preferred_conn_id=%s has_previous_response_id=%v session_hash=%s has_turn_state=%v turn_state_len=%d has_turn_metadata=%v turn_metadata_len=%d store_disabled=%v store_disabled_conn_mode=%s retry_last_reason=%s force_new_conn=%v header_user_agent=%s header_openai_beta=%s header_originator=%s header_accept_language=%s header_session_id=%s header_conversation_id=%s session_id_source=%s conversation_id_source=%s has_prompt_cache_key=%v has_chatgpt_account_id=%v has_authorization=%v has_session_id=%v has_conversation_id=%v proxy_enabled=%v",
 		account.ID,
@@ -266,6 +263,16 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		defer s.holdCodexTicketChat(account)()
 	}
 
+	if _, required := GatewayBorrowRequiredModelFromContext(ctx); required || IsAstraSourceAcquisition(ctx) || account.RequiresGatewayBorrowUpstream(mappedModel) {
+		return nil, denyOpenAITurn("gateway_borrow_retired")
+	}
+	if policy, ok := s.httpUpstream.(interface {
+		CheckRetiredAstraWSRoute(context.Context, int64, string) error
+	}); ok {
+		if err := policy.CheckRetiredAstraWSRoute(ctx, account.ID, mappedModel); err != nil {
+			return nil, err
+		}
+	}
 	proxyURL, releaseHarvest, pinErr := s.pinCodexTicketWSAcquire(acquireCtx, wsHeaders, account)
 	if pinErr != nil {
 		return nil, wrapOpenAIWSFallback("codex_ticket_unavailable", pinErr)
@@ -277,24 +284,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	}
 	defer releaseBorrow()
 	proxyURL = borrowProxy
-	// A bound native/self-harvest ticket already pins its complete bundle.
-	if anchor != nil && !account.RequiresGatewayBorrowUpstream(mappedModel) && anchor.connID == "" &&
-		(!s.UnifiedAstraTicketsEnabled(ctx) || s.boundCodexTicketFromHeader(ctx, wsHeaders, account) == nil) {
-		if pool, ok := s.httpUpstream.(interface {
-			CodexGatewayPinWSRequest(context.Context, http.Header, string, int64, int) (string, string, func(), error)
-		}); ok {
-			route, effectiveProxy, releaseRoute, err := pool.CodexGatewayPinWSRequest(ctx, wsHeaders, proxyURL, account.ID, account.Concurrency)
-			if err != nil {
-				return nil, s.astraRouteFailover(ctx, account, err)
-			}
-			defer releaseRoute()
-			proxyURL = effectiveProxy
-			anchor.cookie = route
-			if route != "" {
-				replaceCodexWSAnchorCookie(wsHeaders, route)
-			}
-		}
-	}
 
 	if anchor != nil {
 		if anchor.connID != "" && !account.RequiresGatewayBorrowUpstream(mappedModel) {
@@ -339,11 +328,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 					err,
 				)
 				return nil, err
-			}
-			if account.RequiresGatewayBorrowUpstream(mappedModel) {
-				replaceCodexWSAnchorCookie(headers, gatewayBorrowCookie(wsHeaders))
-			} else if anchor != nil && anchor.cookie != "" {
-				replaceCodexWSAnchorCookie(headers, anchor.cookie)
 			}
 			if err := s.checkGatewayBorrowWSHeaders(factoryCtx, latest, mappedModel, headers); err != nil {
 				return nil, err
@@ -542,6 +526,15 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	}
 	if !isControlledExperiment(ctx) {
 		if err := s.performOpenAIWSGeneratePrewarm(ctx, lease, decision, payload, previousResponseID, reqBody, account, stateStore, groupID); err != nil {
+			var modelErr *openAIWSModelRejectionError
+			if errors.As(err, &modelErr) {
+				// Prewarm was rejected; the generation payload has not been sent.
+				if wsHeaders.Get(openAIWSTurnStateHeader) == "" && openAIWSModelFailureCanReplay(ctx, payloadAsJSONBytes(payload)) {
+					return nil, s.newOpenAIWSModelFailoverError(account, modelErr.payload)
+				}
+				c.Data(openAIWSModelFailureStatus(account, modelErr.payload), "application/json", modelErr.payload)
+				return nil, err
+			}
 			cleanExit = errors.Is(err, errOpenAIWSSSEPayloadTooLarge)
 			return nil, err
 		}
@@ -993,7 +986,13 @@ readLoop:
 				flushBufferedStreamEvents("error_event")
 			}
 			eventCtx := openAIWSForwardStreamPhaseContext(openAI429LeaseObservation(ctx, lease), wsOutputStarted, message)
-			s.handleOpenAIWSErrorEventTransientFailure(eventCtx, account, mappedModel, lease.HandshakeHeaders(), message)
+			modelUnavailable := s.handleOpenAIWSErrorEventTransientFailure(eventCtx, account, mappedModel, lease.HandshakeHeaders(), message)
+			// Legacy SSE can buffer response.created/tool events before client output.
+			// Their presence must not grant a new model-error replay opportunity.
+			if modelUnavailable && !wroteDownstream && len(bufferedStreamEvents) == 0 && wsHeaders.Get(openAIWSTurnStateHeader) == "" && openAIWSModelFailureCanReplay(ctx, payloadAsJSONBytes(payload)) {
+				lease.MarkBroken()
+				return nil, s.newOpenAIWSModelFailoverError(account, message)
+			}
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
 			s.persistOpenAIWSRateLimitSignal(eventCtx, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw, mappedModel)
 			errMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(errMsgRaw))
@@ -1070,6 +1069,9 @@ readLoop:
 					},
 				})
 			}
+			if openAIWSModelFailureStatus(account, message) != 0 {
+				return nil, ErrOpenAIWSModelUnavailable
+			}
 			return nil, fmt.Errorf("openai ws error event: %s", errMsg)
 		}
 
@@ -1121,6 +1123,18 @@ readLoop:
 				markOpenAIWSClientVisibleFailure(c, eventType, message)
 			}
 			upstreamTerminalEvent = s.handleOpenAIWSTerminalTransientFailure(openAIWSForwardStreamPhaseContext(openAI429LeaseObservation(ctx, lease), wsOutputStarted, message), account, mappedModel, lease.HandshakeHeaders(), message)
+			if openAIWSModelFailureStatus(account, message) != 0 {
+				lease.MarkBroken()
+				flushStreamWriter(true)
+				if !reqStream {
+					c.Data(openAIWSModelFailureStatus(account, message), "application/json", message)
+				}
+				result := resultWithUsage()
+				result.ObservedUsageOnError = true
+				result.ImageCount = imageCounter.Count()
+				result.ImageOutputSizes = imageCounter.Sizes()
+				return result, ErrOpenAIWSModelUnavailable
+			}
 			// A terminal event must be the final JSON document in its WS message.
 			// Ignore any tail for the completed client turn, but never reuse the
 			// ambiguous upstream connection for another request.

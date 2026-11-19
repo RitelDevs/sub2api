@@ -987,7 +987,7 @@ type CircuitBreakerConfig struct {
 }
 
 type ConcurrencyConfig struct {
-	// PingInterval: 并发等待期间的 SSE ping 间隔（秒）
+	// PingInterval: 并发等待期间的 SSE ping 间隔（秒），0 禁用 ping
 	PingInterval int `mapstructure:"ping_interval"`
 }
 
@@ -1662,6 +1662,12 @@ type GatewayOpenAIWSConfig struct {
 	ClientReadLimitBytes int64 `mapstructure:"client_read_limit_bytes"`
 	// HTTPBridgeEnabled: 首包过大时，保持客户端 WS，改用 HTTP Responses 上游。
 	HTTPBridgeEnabled bool `mapstructure:"http_bridge_enabled"`
+	// Explicit operator opt-in: unreadable provider state may be detached while
+	// caller-supplied completed tool history is carried as inert, unverified data.
+	ClientHistoryRecoveryEnabled bool `mapstructure:"client_history_recovery_enabled"`
+	// Explicit destructive compatibility mode for HTTP and WS: discard opaque
+	// provider state and carry tool history only as caller-supplied text.
+	LossyHistoryRestartEnabled bool `mapstructure:"lossy_history_restart_enabled"`
 	// HTTPBridgeThresholdBytes: 触发 HTTP bridge 的入站 WS payload 阈值。
 	HTTPBridgeThresholdBytes int64 `mapstructure:"http_bridge_threshold_bytes"`
 	// SSEAccelerationMaxPayloadBytes bounds the encoded HTTP-to-WS request, including its JSON newline.
@@ -2920,6 +2926,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.smart_protocol.large_output_threshold", 2000)
 	viper.SetDefault("gateway.openai_ws.smart_protocol.long_context_bytes", 200000)
 	viper.SetDefault("gateway.openai_ws.http_bridge_enabled", true)
+	viper.SetDefault("gateway.openai_ws.client_history_recovery_enabled", false)
+	viper.SetDefault("gateway.openai_ws.lossy_history_restart_enabled", false)
 	viper.SetDefault("gateway.openai_ws.http_bridge_threshold_bytes", 15*1024*1024)
 	viper.SetDefault("gateway.openai_ws.sse_acceleration_max_payload_bytes", 15*1024*1024)
 	viper.SetDefault("gateway.openai_ws.responses_websockets", false)
@@ -4310,8 +4318,8 @@ func (c *Config) Validate() error {
 	if c.Ops.Cleanup.Enabled && strings.TrimSpace(c.Ops.Cleanup.Schedule) == "" {
 		return fmt.Errorf("ops.cleanup.schedule is required when ops.cleanup.enabled=true")
 	}
-	if c.Concurrency.PingInterval < 5 || c.Concurrency.PingInterval > 30 {
-		return fmt.Errorf("concurrency.ping_interval must be between 5-30 seconds")
+	if c.Concurrency.PingInterval != 0 && (c.Concurrency.PingInterval < 5 || c.Concurrency.PingInterval > 30) {
+		return fmt.Errorf("concurrency.ping_interval must be 0 (disabled) or between 5-30 seconds")
 	}
 	if c.Gateway.Grok.FreeQuotaSoftGateEnabled {
 		if c.Gateway.Grok.FreeQuotaTokenLimit <= 0 {
@@ -4483,4 +4491,12 @@ func warnIfInsecureURL(field, raw string) {
 	if strings.EqualFold(u.Scheme, "http") {
 		slog.Warn("url uses http scheme; use https in production to avoid token leakage", "field", field)
 	}
+}
+
+func (c *Config) OpenAIWSClientHistoryRecoveryEnabled() bool {
+	return c != nil && c.Gateway.OpenAIWS.ClientHistoryRecoveryEnabled
+}
+
+func (c *Config) OpenAILossyHistoryRestartEnabled() bool {
+	return c != nil && c.Gateway.OpenAIWS.LossyHistoryRestartEnabled
 }

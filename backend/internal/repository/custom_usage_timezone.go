@@ -35,11 +35,12 @@ func (z configuredTimezone) startOfDay(at time.Time) time.Time {
 }
 
 func (z configuredTimezone) groupUsageTodayStart(at time.Time) time.Time {
-	return z.startOfDay(at).UTC()
+	year, month, day := at.In(z.timezoneLocation()).Date()
+	return timezone.CalendarDayStart(year, month, day, z.timezoneLocation()).UTC()
 }
 
 func (z configuredTimezone) groupUsageYesterdayStart(at time.Time) time.Time {
-	return z.startOfDay(at).AddDate(0, 0, -1).UTC()
+	return z.groupUsageTodayStart(z.groupUsageTodayStart(at).Add(-12 * time.Hour))
 }
 
 func (z configuredTimezone) groupUsageDate(at time.Time) string {
@@ -47,7 +48,12 @@ func (z configuredTimezone) groupUsageDate(at time.Time) string {
 }
 
 func (z configuredTimezone) parseGroupUsageDate(value string) (time.Time, error) {
-	return time.ParseInLocation("2006-01-02", value, z.timezoneLocation())
+	date, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		return time.Time{}, err
+	}
+	year, month, day := date.Date()
+	return timezone.CalendarDayStart(year, month, day, z.timezoneLocation()), nil
 }
 
 func (z configuredTimezone) userTimezone(ctx context.Context) string {

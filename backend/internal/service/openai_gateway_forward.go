@@ -272,6 +272,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return s.forwardSIWC(ctx, c, account, body, startTime)
 	}
 	if !account.IsExcelOAuth() && account.IsPrismBrowserEnabledForModel(modelForBPS) && s.prismBrowserGloballyEnabled(ctx) {
+		if account.OpenAIRequestProxyEnabled() {
+			return nil, writeOpenAIRequestProxyError(c, "openai_proxy_route_unsupported", "Request proxy routing is unavailable for Prism")
+		}
 		return s.forwardPrismBrowser(withOpenAITransportMode(ctx, "prism_browser"), c, account, body, startTime)
 	}
 	// Astra's gateway readiness describes the native route. Apply it only after
@@ -282,6 +285,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			return nil, err
 		}
 	}
+	proxyCtx, releaseProxy, proxyErr := s.beginOpenAIRequestProxy(ctx, c, account)
+	if proxyErr != nil {
+		return nil, proxyErr
+	}
+	defer releaseProxy()
+	ctx = proxyCtx
 
 	// Readable recovery validates the caller's frozen controls before applying
 	// this native compatibility change inside prepareOpenAI409OAuthReplay.
@@ -362,6 +371,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
 	// HTTP SSE may opt into the native WS pool on ordinary OAuth accounts.
 	wsDecision = s.resolveOpenAIHTTPWSSSEDecision(c, account, body, wsDecision)
+	if account.OpenAIRequestProxyEnabled() {
+		wsDecision = openAIWSHTTPDecision("request_proxy_requires_http")
+	}
 	if openAIAgentRecoveryBound(ctx) {
 		// The observation was made at an actual HTTP send. Preserve that wire
 		// instead of letting a later WS preference change its continuation.
@@ -369,7 +381,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 	accelerateHTTPSSE := wsDecision.Reason == openAIOAuthWSSSEAccelerationReason
 	var anchorFinish func(*OpenAIForwardResult, error)
-	if !openAIAgentRecoveryBound(ctx) {
+	if !openAIAgentRecoveryBound(ctx) && !account.OpenAIRequestProxyEnabled() {
 		anchorCtx, finish, anchorErr := s.prepareCodexWSAnchor(ctx, c, account, body)
 		if anchorErr != nil {
 			return nil, anchorErr
@@ -835,7 +847,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		// Account namespace is orthogonal to fingerprint convergence: preserve
 		// each client's identity cardinality, but never reuse it across OAuth
 		// credentials after scheduler failover.
-		if !isCompactRequest && !harvestPins && applyCodexAccountIdentityClientMetadataMap(decoded, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c)) {
+		if !isCompactRequest && !harvestPins && applyCodexAccountIdentityClientMetadataMap(decoded, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c), codexClientSessionID(c)) {
 			markDecodedModified()
 		}
 		stageCodexFingerprintIDs(c, nil)
@@ -953,10 +965,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 
 	rawTier := requestView.ServiceTier
-	if openAIGroupForcesFast(ctx, account) {
-		rawTier = OpenAIFastTierPriority
-		if requestView.ServiceTier != OpenAIFastTierPriority {
-			markPatchSet("service_tier", OpenAIFastTierPriority)
+	if forcedTier := openAIGroupForcedServiceTier(ctx, account, upstreamModel); forcedTier != "" {
+		rawTier = forcedTier
+		if requestView.ServiceTier != forcedTier {
+			markPatchSet("service_tier", forcedTier)
 		}
 	}
 	if rawTier != "" {

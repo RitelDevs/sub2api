@@ -24,65 +24,16 @@ type AstraSetupStatus struct {
 }
 
 func (s *AccountTestService) StartPersistedAutomaticGatewayBorrow() error {
-	if s == nil || s.settingService == nil {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	settings, err := s.settingService.GetAstraRouting(ctx)
-	if err != nil {
-		return err
-	}
-	if settings.AutoQuality && settings.CookiePool.Enabled {
-		s.StartAstraAutomaticSetup(settings)
-	}
+	// Historical settings are data, not an instruction to restart a retired worker.
 	return nil
 }
 
 // A save schedules one bounded serial preparation run. Saving again cancels
 // the previous run, and revision checks prevent stale work publishing readiness.
 func (s *AccountTestService) StartAstraAutomaticSetup(settings config.AstraRoutingSettings) {
-	if s.cfg.AstraRouting(context.Background()).Revision != settings.Revision {
-		return
-	}
 	s.astraSetupMu.Lock()
-	if s.cfg.AstraRouting(context.Background()).Revision != settings.Revision {
-		s.astraSetupMu.Unlock()
-		return
-	}
-	if s.astraSetupCancel != nil {
-		s.astraSetupCancel()
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	s.astraSetupCancel = cancel
-	state := "queued"
-	if !settings.CookiePool.Enabled && !settings.WSSession.Enabled {
-		state = "disabled"
-	}
-	s.astraSetupStatus = AstraSetupStatus{Revision: settings.Revision, State: state, StartedAt: time.Now()}
-	s.astraSetupMu.Unlock()
-	if state == "disabled" {
-		cancel()
-		return
-	}
-	go func() {
-		defer cancel()
-		for {
-			cycle, stop := context.WithTimeout(ctx, 10*time.Minute)
-			s.runAstraAutomaticSetup(cycle, stop, settings)
-			if !settings.AutoQuality {
-				return
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(15 * time.Second):
-			}
-			if s.cfg.AstraRouting(ctx).Revision != settings.Revision {
-				return
-			}
-		}
-	}()
+	defer s.astraSetupMu.Unlock()
+	s.astraSetupStatus = AstraSetupStatus{Revision: settings.Revision, State: "disabled", Reason: "gateway_borrow_retired"}
 }
 func (s *AccountTestService) runAstraAutomaticSetup(ctx context.Context, cancel context.CancelFunc, settings config.AstraRoutingSettings) {
 	settings.CookiePool.QualityMode = settings.QualityMode

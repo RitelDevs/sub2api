@@ -31,63 +31,7 @@ func AccountTestUsedGatewayBorrow(c *gin.Context) bool {
 // again so model policy, proxy and workspace identity are never copied from a
 // snapshot taken before refresh.
 func (s *AccountTestService) prepareGatewayBorrowAccountIdentity(ctx context.Context, selected *Account, model string) (*Account, http.Header, *tlsfingerprint.Profile, error) {
-	if s == nil || s.openaiGatewayService == nil || s.accountRepo == nil {
-		return nil, nil, nil, denyOpenAITurn("gateway_borrow_unavailable")
-	}
-	selectedRoute := openAITurnRouteFingerprint(selected)
-	token, _, err := s.openaiGatewayService.GetAccessToken(ctx, selected)
-	if err != nil || strings.TrimSpace(token) == "" {
-		return nil, nil, nil, denyOpenAITurn("target_probe_auth_failed")
-	}
-	account, err := s.accountRepo.GetByID(ctx, selected.ID)
-	if err != nil || account == nil || account.ID != selected.ID {
-		return nil, nil, nil, denyOpenAITurn("latest_state_unavailable")
-	}
-	if openAITurnRouteFingerprint(account) != selectedRoute {
-		return nil, nil, nil, denyOpenAITurn("account_binding_changed")
-	}
-	if account.GetOpenAIAccessToken() != token {
-		// A dedicated OpenAI refresh can persist new auth while leaving the
-		// older provider-cache entry. Invalidate only this account and retry
-		// once; routing changes never enter this recovery path.
-		provider := s.openaiGatewayService.openAITokenProvider
-		if provider == nil || provider.tokenCache == nil || strings.TrimSpace(account.GetOpenAIAccessToken()) == "" {
-			return nil, nil, nil, denyOpenAITurn("account_binding_changed")
-		}
-		if err := provider.tokenCache.DeleteAccessToken(ctx, OpenAITokenCacheKey(account)); err != nil {
-			return nil, nil, nil, denyOpenAITurn("account_binding_changed")
-		}
-		fresh := account
-		freshRoute := openAITurnRouteFingerprint(fresh)
-		token, _, err = s.openaiGatewayService.GetAccessToken(ctx, fresh)
-		if err != nil || strings.TrimSpace(token) == "" {
-			return nil, nil, nil, denyOpenAITurn("target_probe_auth_failed")
-		}
-		account, err = s.accountRepo.GetByID(ctx, fresh.ID)
-		if err != nil || account == nil || account.ID != fresh.ID {
-			return nil, nil, nil, denyOpenAITurn("latest_state_unavailable")
-		}
-		if openAITurnRouteFingerprint(account) != freshRoute || account.GetOpenAIAccessToken() != token {
-			return nil, nil, nil, denyOpenAITurn("account_binding_changed")
-		}
-	}
-	headers := make(http.Header)
-	headers.Set("Content-Type", "application/json")
-	headers.Set("Accept", "text/event-stream")
-	headers.Set("OpenAI-Beta", "responses=experimental")
-	headers.Set("Authorization", "Bearer "+token)
-	if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, headers, account); err != nil {
-		return nil, nil, nil, denyOpenAITurn("target_probe_auth_failed")
-	}
-	applyOpenAICodexTicketHarvestIdentity(headers, model)
-	enforceCodexIdentityHeadersWithUA(headers, account.GetOpenAIUserAgent())
-	applyOpenAIAPIKeyIdentityHeaders(headers, account, account.GetOpenAIUserAgent())
-	account.ApplyHeaderOverrides(headers)
-	var profile *tlsfingerprint.Profile
-	if s.tlsFPProfileService != nil {
-		profile = s.tlsFPProfileService.ResolveTLSProfile(account)
-	}
-	return account, headers, profile, nil
+	return nil, nil, nil, denyOpenAITurn("gateway_borrow_retired")
 }
 
 func gatewayBorrowAccountTestErrorCode(err error) string {

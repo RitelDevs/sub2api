@@ -4423,9 +4423,7 @@
             <div class="p-6 space-y-4">
                 <RequestTimezoneSettings v-model="form.openai_request_timezone_enabled" v-model:auto="form.openai_request_timezone_auto" />
                 <div class="open-section" data-testid="codex-management-links">
-                  <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('consoleInline.manageAutomaticHarvestingModelsAndTicketPolicies_15c555') }}</p>
                   <div class="mt-3 flex flex-wrap gap-2">
-                    <router-link to="/admin/harvest-flow" class="btn btn-secondary btn-sm">{{ t('nav.harvestFlow') }}</router-link>
                     <router-link to="/admin/proxies#harvest" class="btn btn-secondary btn-sm">{{ t('consoleInline.iPManagement_0e4af9') }}</router-link>
                   </div>
                 </div>

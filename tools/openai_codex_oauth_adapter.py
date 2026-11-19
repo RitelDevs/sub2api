@@ -45,6 +45,8 @@ console.log = console.warn = console.error = () => {};''')
     source = replace_exact(source, '    await transport.prepareProxy(proxyTemplate, `${chatgptBase}/`);\n    if (args.addPassword)',
                            '    await prepareCodexProxy(transport, proxyTemplate, `${chatgptBase}/`);\n    if (args.addPassword)')
     for old, new in (
+        ('    throw new Error(`UNEXPECTED_LOGIN_PAGE: Expected password or email verification, received ${pathname}`);',
+         '    throw new Error("interaction_required");'),
         (r'''async function askEmailOtp(rl, client, authBase) {
   for (;;) {
     const value = await ask(rl, "Email OTP (r=resend, q=quit): ");

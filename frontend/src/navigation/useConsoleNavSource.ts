@@ -19,7 +19,7 @@ import {
   OpsMonitoringIcon, SmartOpsIcon, QualityOpsIcon, AccountOpsIcon,
   CredentialOpsIcon, SupportTicketIcon, SupportTicketInboxIcon,
   DashboardIcon, KeyIcon, BatchImageIcon, ChartIcon, GiftIcon, UserIcon, UsersIcon, FolderIcon,
-  ChannelIcon, CreditCardIcon, RechargeSubscriptionIcon, GlobeIcon, FlowIcon, ServerIcon,
+  ChannelIcon, CreditCardIcon, RechargeSubscriptionIcon, GlobeIcon, ServerIcon,
   PluginIcon, BellIcon, TicketIcon, CogIcon, OrderIcon, OrderListIcon, SignalIcon, GalleryIcon,
   ShieldIcon, PriceTagIcon,
 } from './consoleNavIcons'
@@ -183,7 +183,6 @@ export function provideConsoleNav() {
         { path: '/admin/account-ops', label: t('accountOps.title'), icon: AccountOpsIcon },
         { path: '/admin/token-guard-v2', label: t('tokenGuardV2.title'), icon: CredentialOpsIcon },
         { path: '/admin/ai-ops', label: t('aiOps.title'), icon: SmartOpsIcon, featureFlag: () => authStore.isAdmin },
-        { path: '/admin/harvest-flow', label: t('nav.harvestFlow'), icon: FlowIcon },
       ] },
       { path: '/admin/plugins', label: t('nav.plugins'), icon: PluginIcon, featureFlag: flagPluginManagement },
       { path: '/admin/announcements', label: t('nav.announcements'), icon: BellIcon },

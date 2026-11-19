@@ -496,6 +496,9 @@ export default {
 
     // Users Management
     users: {
+      liveUsageHint: "每分鐘重新整理當前頁。併發為當前佔用／上限；RPM 為現有用戶級限流計數／上限，每個自然分鐘重置，可能包含被限流請求。上限為 0 表示不限額（∞），仍記錄使用量；不包含在分組檢查階段被拒絕的請求。",
+      liveConcurrency: "併發",
+      liveUsageUnavailable: "暫不可用",
       title: '用戶管理',
       description: '管理用戶帳戶和權限',
       createUser: '建立用戶',
@@ -568,6 +571,7 @@ export default {
       creating: '建立中...',
       updating: '更新中...',
       columns: {
+        liveUsage: "併發 / RPM",
         user: '用戶',
         id: 'ID',
         email: '電郵',
@@ -1335,6 +1339,10 @@ export default {
         enableAnyway: '仍然開啟'
       },
       openaiFast: {
+        forceUltrafast: "強制使用 Ultra Fast（ultrafast）",
+        ultrafastHint: "對支援的模型強制設定 service_tier=ultrafast。GPT-6.2 訂閱檔位按套餐補全：Pro 200 支援 Sol，Pro 500 支援 Sol 和 Astra；其他帳號使用其目錄明確提供的檔位。不可用時，若同時開啟強制 Fast 則使用 Fast，否則跟隨客戶端。GPT-6.2 Sol/Astra 在 2027-03-01 00:00（太平洋時間）前按標準價 3 倍計費，之後恢復 6 倍；GPT-6 Astra 和 GPT-6.1 Sol 為 6 倍。渠道可單獨設定 Ultra Fast 倍率。免費 Fast 不包含 Ultra Fast，免費 UltraFast 由獨立開關控制。",
+        freeUltrafast: "免費 UltraFast",
+        freeUltrafastHint: "開啟後，最終按 ultrafast 檔位結算的請求向用戶按 Standard 價格計費（含緩存讀寫）。獨立於免費 Fast；不強制上游使用 UltraFast，帳號成本統計仍保留實際檔位。",
         title: 'OpenAI Fast 模式',
         force: '強制使用 Fast（priority）',
         hint: '開啟後，此分組的 OpenAI 請求會強制寫入 service_tier=priority；全局 Fast/Flex 策略仍可過濾或攔截。儲存後新請求立即生效，已建立的 WebSocket 會話需重連。',

@@ -35,7 +35,7 @@ export default {
     "unknown": "未知異常，原因未確認"
   },
   "actions": {
-    "complete_email_verification": "請在官方網站手動完成電郵驗證。",
+    "complete_email_verification": "本次登入要求電郵驗證碼，身份驗證器的 2FA 驗證碼不能代替。請到帳號管理中重新授權，使用瀏覽器完成電郵驗證。",
     "complete_phone_verification": "請在官方頁面人工完成手機號驗證，再檢查憑證。",
     "contact_provider": "請通過官方渠道確認帳戶狀態或聯繫支援。",
     "reauthorize": "請檢查登入配置並重新授權。",
@@ -148,7 +148,7 @@ sessionExport: {
 
   legacyEngine: "沿用已有帳戶設定",
   legacyEngineHint: "尚未統一設定引擎，已有帳戶保持原選擇，新帳戶使用本地 Worker。切換後統一應用到所有帳密 / TOTP 帳戶，電郵連結仍使用本地流程。",
-  sessionStudioGlobalHint: "所有帳密 / TOTP 帳戶的後續重登會將電郵、密碼和 TOTP 密鑰發送到憑證守護配置的 Session Studio 服務，使用服務端出口，不使用帳戶代理。電郵連結仍使用本地流程；失敗不會切換引擎。",
+  sessionStudioGlobalHint: "所有帳密 / TOTP 帳戶的後續重登會將電郵、密碼和 TOTP 密鑰發送到「憑證運營」的重登服務設定所指定的 Session Studio 服務，使用服務端出口，不使用帳戶代理。電郵連結仍使用本地流程；失敗不會切換引擎。",
   workerConcurrency: "本地 Worker 數量",
   workerConcurrencyHint: "切換即儲存，範圍 1–16；新版 Worker 約每 5 秒同步數量，減少時等待正在執行的任務完成。數量按每個 Worker 實例計算，Session Studio 任務也佔用進程；舊版 Worker 需升級後生效。",
   automation: "運行開關",
@@ -160,7 +160,7 @@ sessionExport: {
   localWorkerEngine: '本地 Worker（預設）',
   sessionStudioEngine: 'Session Studio（臨時提速）',
   localWorkerEngineHint: '在自己的 Worker 中完成登入，使用所選帳戶代理。',
-  sessionStudioEngineHint: '將此帳戶的電郵、密碼和 TOTP 密鑰發送到憑證守護中配置的重登服務。僅支持密碼 / TOTP，使用服務端出口，不使用帳戶代理；失敗不會自動切換引擎。需先升級 Worker。',
+  sessionStudioEngineHint: '將此帳戶的電郵、密碼和 TOTP 密鑰發送到「憑證運營」中設定的重登服務。僅支援密碼 / TOTP，使用服務端出口，不使用帳戶代理；失敗不會自動切換引擎。需先升級 Worker。',
   runtimeTitle: '自動重登服務',
   runtimeManaged: '由程序自動準備和管理，帳密 / 2FA 無需額外配置。',
   runtimeExternal: '當前使用已有的獨立重登服務。',

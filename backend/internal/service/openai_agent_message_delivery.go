@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ type OpenAIAgentRecoveryEpochCache interface {
 }
 
 type openAIAgentRecoveryDelivery struct {
+	discoveryBindings                                        map[string]openAIToolProofSnapshot
 	toolFinal                                                map[string]bool
 	service                                                  *OpenAIGatewayService
 	ctx                                                      context.Context
@@ -59,6 +61,7 @@ func newOpenAIAgentRecoveryDelivery(s *OpenAIGatewayService, ctx context.Context
 
 func (s *OpenAIGatewayService) awaitOpenAIAgentRecovery(ctx context.Context, shared OpenAIAgentRecoveryCache, state *openAIAgentRecoveryState, key [32]byte) (openAIAgentRecoveryBinding, bool, error) {
 	observedPending := false
+	var lastPending openAIAgentRecoveryBinding
 	for {
 		var b openAIAgentRecoveryBinding
 		var found bool
@@ -76,8 +79,11 @@ func (s *OpenAIGatewayService) awaitOpenAIAgentRecovery(ctx context.Context, sha
 			found = found && time.Now().Before(b.expiresAt)
 		}
 		if err != nil {
-			if observedPending && ctx.Err() != nil {
-				return b, false, openAIAgentRecoveryError("delivery_pending")
+			if observedPending && ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				// Retain pending diagnostics only for the wait's context error.
+				// Independent storage failures remain unavailable; found=false
+				// and the error still prohibit an ownership grant.
+				return lastPending, false, openAIAgentRecoveryError("delivery_pending")
 			}
 			return b, false, openAIAgentRecoveryError("store_unavailable")
 		}
@@ -94,6 +100,7 @@ func (s *OpenAIGatewayService) awaitOpenAIAgentRecovery(ctx context.Context, sha
 			return b, found, nil
 		}
 		observedPending = true
+		lastPending = b
 		timer := time.NewTimer(5 * time.Millisecond)
 		select {
 		case <-ctx.Done():

@@ -5,7 +5,6 @@ package service
 import (
 	"context"
 	"io"
-	"maps"
 	"net/http"
 	"strings"
 	"testing"
@@ -86,78 +85,15 @@ func TestAutomaticBorrowSourceKnownRestrictionsNeverSend(t *testing.T) {
 	}
 }
 
-func TestAutomaticBorrowSourceNewQuotaStopsRepeatedAcquisition(t *testing.T) {
-	for _, kind := range []string{"HTTP429 reset", "SSE200 quota no reset"} {
-		t.Run(kind, func(t *testing.T) {
-			s, repo, upstream := newBorrowSourceTest(t)
-			if kind == "HTTP429 reset" {
-				upstream.status = 429
-				upstream.body = "{\"error\":{\"type\":\"usage_limit_reached\",\"resets_in_seconds\":3600}}"
-			} else {
-				upstream.body = "data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"usage_limit_reached\"}}}\n\n"
-			}
-			require.ErrorContains(t, s.prepareAstraGatewaySource(context.Background(), repo.account.ID), "source_account_rate_limited")
-			require.ErrorContains(t, s.prepareAstraGatewaySource(context.Background(), repo.account.ID), "source_account_rate_limited")
-			require.Equal(t, 1, upstream.calls)
-			if kind == "HTTP429 reset" {
-				require.Equal(t, 1, repo.writes)
-				require.True(t, repo.account.RateLimitResetAt.After(time.Now().Add(50*time.Minute)))
-			} else {
-				require.Zero(t, repo.writes, "no reset metadata creates only source-local retry")
-			}
-			require.True(t, IsAstraSourceAcquisition(upstream.request.Context()))
-			_, required := GatewayBorrowRequiredModelFromContext(upstream.request.Context())
-			require.False(t, required, "a source must not enter target borrowing")
-		})
+func TestAutomaticBorrowSourceDeniedBeforeReadOrSend(t *testing.T) {
+	s, r, u := newBorrowSourceTest(t)
+	ctx := WithGatewayBorrowRequiredModel(t.Context(), "gpt-6.1-sol")
+	for _, prepare := range []func(context.Context, int64) error{s.prepareAstraGatewaySource, s.prepareAutomaticGatewayBorrowSource} {
+		require.ErrorContains(t, prepare(ctx, r.account.ID), "gateway_borrow_retired")
 	}
-}
-
-func TestAutomaticBorrowSourceChangedIdentityDoesNotSendOrReset(t *testing.T) {
-	s, repo, upstream := newBorrowSourceTest(t)
-	selected := repo.account
-	repo.onRead = func(read int) {
-		if read == 2 {
-			changed := *selected
-			id := int64(987)
-			changed.ProxyID = &id
-			repo.account = &changed
-		}
-	}
-	require.Error(t, s.prepareAstraGatewaySource(context.Background(), selected.ID))
-	require.Zero(t, upstream.calls)
-	require.Zero(t, repo.writes)
-}
-
-func TestAutomaticBorrowSourceUsesLatestProviderAuth(t *testing.T) {
-	s, repo, upstream := newBorrowSourceTest(t)
-	repo.account.Credentials = maps.Clone(repo.account.Credentials)
-	repo.account.Credentials["access_token"] = "fresh-source-token"
-	repo.account.Credentials["expires_at"] = time.Now().Add(time.Hour).Format(time.RFC3339)
-	cache := newOpenAITokenCacheStub()
-	cache.tokens[OpenAITokenCacheKey(repo.account)] = "stale-source-token"
-	s.openaiGatewayService.openAITokenProvider = NewOpenAITokenProvider(repo, cache, nil)
-	require.NoError(t, s.prepareAstraGatewaySource(context.Background(), repo.account.ID))
-	require.Equal(t, "Bearer fresh-source-token", upstream.request.Header.Get("Authorization"))
-	require.Zero(t, repo.writes)
-}
-
-func TestAutomaticBorrowSourceQuotaDoesNotShortenConcurrentLimit(t *testing.T) {
-	s, repo, upstream := newBorrowSourceTest(t)
-	original := repo.account
-	long := time.Now().Add(12 * time.Hour)
-	repo.onRead = func(read int) {
-		if read == 3 {
-			copy := *original
-			copy.RateLimitResetAt = &long
-			repo.account = &copy
-		}
-	}
-	upstream.status = 429
-	upstream.body = "{\"error\":{\"type\":\"usage_limit_reached\",\"resets_in_seconds\":300}}"
-	require.ErrorContains(t, s.prepareAstraGatewaySource(context.Background(), original.ID), "source_account_rate_limited")
-	require.Zero(t, repo.writes)
-	require.Equal(t, long, *repo.account.RateLimitResetAt)
-	require.Equal(t, 1, upstream.calls)
+	require.Zero(t, r.reads)
+	require.Zero(t, r.writes)
+	require.Zero(t, u.calls)
 }
 
 func TestAutomaticBorrowSourceRuntimeHidesBlockedCandidate(t *testing.T) {
@@ -175,23 +111,4 @@ func TestAutomaticBorrowSourceRuntimeHidesBlockedCandidate(t *testing.T) {
 	require.False(t, status.Sources[0].Active)
 	require.Zero(t, status.Sources[0].RemainingSeconds)
 	require.NotNil(t, status.Sources[0].RetryAt)
-}
-
-func TestAutomaticBorrowSourceSeparatesInheritedTargetPolicy(t *testing.T) {
-	s, repo, upstream := newBorrowSourceTest(t)
-	checks := 0
-	ctx := WithGatewayBorrowRequiredModel(t.Context(), "gpt-6.1-sol")
-	ctx = WithGatewayBorrowFinalSendCheck(ctx, func(*http.Request) error { checks++; return nil })
-	require.NoError(t, s.prepareAutomaticGatewayBorrowSource(ctx, repo.account.ID))
-	require.Equal(t, 1, upstream.calls)
-	id, bound := AstraSourceAcquisitionAccountFromContext(upstream.request.Context())
-	require.True(t, bound)
-	require.Equal(t, repo.account.ID, id)
-	_, required := GatewayBorrowRequiredModelFromContext(upstream.request.Context())
-	require.False(t, required)
-	require.NoError(t, CheckGatewayBorrowFinalSend(upstream.request))
-	require.Zero(t, checks)
-	model, parentRequired := GatewayBorrowRequiredModelFromContext(ctx)
-	require.True(t, parentRequired)
-	require.Equal(t, "gpt-6.1-sol", model)
 }

@@ -37,6 +37,8 @@ var DefaultModels = []Model{
 	{ID: "gpt-6-sol", Object: "model", Created: 1790035200, OwnedBy: "openai", Type: "model", DisplayName: "GPT-6 Sol"},
 	{ID: "gpt-6-luna", Object: "model", Created: 1790035200, OwnedBy: "openai", Type: "model", DisplayName: "GPT-6 Luna"},
 	{ID: "gpt-6-astra", Object: "model", Created: 1788480000, OwnedBy: "openai", Type: "model", DisplayName: "GPT-6 Astra"},
+	// Created records the local catalog addition date, not an upstream release date.
+	{ID: "gpt-6.2-astra-pro", Object: "model", Created: 1794787200, OwnedBy: "openai", Type: "model", DisplayName: "GPT-6.2 Astra Pro", ReasoningEfforts: []string{"low", "medium", "high", "xhigh", "max"}},
 	{ID: "codex-auto-review", Object: "model", Created: 1776902400, OwnedBy: "openai", Type: "model", DisplayName: "Codex Auto Review"},
 	{ID: "gpt-image-2", Object: "model", Created: 1738368000, OwnedBy: "openai", Type: "model", DisplayName: "GPT Image 2"},
 	{ID: "gpt-image-2.5-flare", Object: "model", Created: 1788825600, OwnedBy: "openai", Type: "model", DisplayName: "GPT Image 2.5 Flare"},
@@ -83,6 +85,14 @@ var instructionsGPT55 string
 //
 //go:embed instructions_gpt6_astra.txt
 var instructionsGPT6Astra string
+
+// GPT-6.2 descriptors from the 2026-11-17 Codex models response, client 0.169.0.
+//
+//go:embed codex_gpt62_sol.json
+var CodexGPT62SolMetadata []byte
+
+//go:embed codex_gpt62_astra.json
+var CodexGPT62AstraMetadata []byte
 
 // CodexGPT61SolMetadata is the complete official descriptor from openai/codex
 // b1e72963c3b71a9265a551e54beff078384efed9, codex-rs/models-manager/models.json.
@@ -140,6 +150,20 @@ func CanonicalizeOpenAIModelAliasSpelling(model string) string {
 	return normalized
 }
 
+// codexInstructionsTemplate returns the base prompt bundled in an official
+// Codex model descriptor.
+func codexInstructionsTemplate(descriptor []byte) string {
+	var metadata struct {
+		ModelMessages struct {
+			InstructionsTemplate string `json:"instructions_template"`
+		} `json:"model_messages"`
+	}
+	if err := json.Unmarshal(descriptor, &metadata); err != nil {
+		panic(err)
+	}
+	return metadata.ModelMessages.InstructionsTemplate
+}
+
 // CodexBaseInstructionsForModel 按模型返回最匹配的真实 Codex base instructions：
 //   - gpt-6 / gpt-6-astra（含供应商前缀与日期变体）→ GPT-6 Astra prompt
 //   - 含 "codex" 的模型（gpt-5-codex / gpt-5.x-codex / codex-max / spark 等）→ GPT-5-Codex prompt
@@ -152,6 +176,10 @@ func CanonicalizeOpenAIModelAliasSpelling(model string) string {
 func CodexBaseInstructionsForModel(model string) string {
 	canonical := CanonicalizeOpenAIModelAliasSpelling(model)
 	switch {
+	case GPT62ModelID(canonical) == "gpt-6.2-sol":
+		return codexInstructionsTemplate(CodexGPT62SolMetadata)
+	case GPT62ModelID(canonical) == "gpt-6.2-astra":
+		return codexInstructionsTemplate(CodexGPT62AstraMetadata)
 	case IsGPT61SolModelSpelling(canonical):
 		var metadata struct {
 			ModelMessages struct {
@@ -199,6 +227,9 @@ func IsGPT6SolOrLunaModelSpelling(model string) bool {
 	}
 	return false
 }
+
+// GPT62ModelID provides the canonical ID for upstream pricing and catalog callers.
+func GPT62ModelID(model string) string { return CanonicalGPT62Model(model) }
 
 // IsGPT61SolModelSpelling recognizes GPT-6.1 Sol, its local effort/compact
 // spellings, and dated model IDs without inheriting GPT-6 Sol/Luna's none support.
@@ -298,8 +329,11 @@ func ValidateGPT61SolReasoningEffort(model, effort string) error {
 }
 
 // ValidateGPT61ReasoningEffort applies the published effort scale of each
-// GPT-6.1 model.
+// GPT-6.1 and GPT-6.2 model.
 func ValidateGPT61ReasoningEffort(model, effort string) error {
+	if err := ValidateGPT62ReasoningEffort(model, effort); err != nil {
+		return err
+	}
 	if err := ValidateGPT61SolReasoningEffort(model, effort); err != nil {
 		return err
 	}
@@ -375,4 +409,15 @@ func ValidateReasoningEffortForModel(model, effort string) error {
 		}
 	}
 	return ValidateGPT61ReasoningEffort(model, effort)
+}
+
+// ValidateGPT62ReasoningEffort rejects disabled and minimal reasoning on GPT-6.2.
+func ValidateGPT62ReasoningEffort(model, effort string) error {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "none", "minimal":
+		if base := GPT62ModelID(model); base != "" {
+			return fmt.Errorf("%s does not support reasoning effort %q; use low, medium, high, xhigh or max", base, effort)
+		}
+	}
+	return nil
 }

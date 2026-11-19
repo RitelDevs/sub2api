@@ -132,9 +132,9 @@ func TestGPT61TerraPricingStandardFastAndLongContext(t *testing.T) {
 	}
 }
 
-func TestGPT61TerraDoesNotInheritSolLongContextExemption(t *testing.T) {
+func TestGPT61TerraSubscriptionLongContextExemptionByCredential(t *testing.T) {
 	for _, typ := range []string{AccountTypeOAuth, AccountTypeSetupToken, AccountTypeAPIKey} {
 		account := &Account{Platform: PlatformOpenAI, Type: typ}
-		require.False(t, openAIGPT61SolLongContextExempt(account, &OpenAIForwardResult{Model: "gpt-6.1-terra", UpstreamModel: "gpt-6.1-terra"}, UsageTokens{InputTokens: 500001}))
+		require.Equal(t, typ != AccountTypeAPIKey, openAISubscriptionLongContextExempt(account, &OpenAIForwardResult{Model: "gpt-6.1-terra", UpstreamModel: "gpt-6.1-terra"}))
 	}
 }

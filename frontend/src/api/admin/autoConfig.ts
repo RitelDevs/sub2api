@@ -12,6 +12,8 @@ import type { OpenAIAPIKeyFallbackConfig, OpenAIAPIKeyFallbackStatus } from '@/u
 export type OAuthInitialQualityRule = Pick<ScheduledTestPlan, 'model_id' | 'cron_expression' | 'enabled' | 'max_results' | 'pelican_config'>
 export interface AutoConfig {
  openai_account_defaults?: OpenAIAccountDefaultsConfig
+
+ apikey_disposition?: import('@/utils/oauthAPIKeyDisposition').OAuthAPIKeyDispositionConfig
  degradation_action?: import('@/utils/oauthDegradation').OAuthDegradationConfig
  openai_two_fa_admission?: OpenAITwoFAAdmissionConfig
  openai_totp_rotate_on_429?: boolean

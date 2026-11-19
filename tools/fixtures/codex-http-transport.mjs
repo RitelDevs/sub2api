@@ -36,11 +36,15 @@ export class TlsFingerprintTransport {
     if (route === 'GET /api/auth/csrf') return Response.json({csrfToken: 'synthetic-csrf'}, {
       headers: {'set-cookie': '__Host-next-auth.csrf-token=synthetic-csrf; Path=/; Secure'},
     });
-    if (mode === 'email-prompt') {
-      if (route === 'POST /api/auth/signin/openai') return Response.json({url: 'https://auth.openai.com/email-verification'});
-      if (route === 'GET /email-verification') return html();
+    const interactive = {'email-prompt': '/email-verification', 'login-entry': '/log-in', 'unknown-step': '/new-step'}[mode];
+    if (interactive) {
+      if (route === 'POST /api/auth/signin/openai') return Response.json({url: 'https://auth.openai.com' + interactive});
+      if (route === `GET ${interactive}`) return html();
     }
     if (route === 'POST /api/auth/signin/openai') return Response.json({url: 'https://auth.openai.com/log-in/password'});
+    if (route === 'GET /log-in/password' && mode === 'page-challenge') {
+      return new Response('', {headers: {'cf-mitigated': 'challenge'}});
+    }
     if (route === 'GET /log-in/password' || route === 'GET /log-in') return html();
     if (route === 'POST /api/accounts/password/verify') {
       assert.equal(JSON.parse(options.body).password, 'synthetic-password');

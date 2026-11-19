@@ -3,11 +3,9 @@ package service
 import (
 	"context"
 	"io"
-	"maps"
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
@@ -42,49 +40,18 @@ func (p *delayedBorrowFinalSendUpstream) DoWithTLS(req *http.Request, _ string, 
 	return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-6-astra\",\"status\":\"completed\"}}\n\n"))}, nil
 }
 
-func TestGatewayBorrowRechecksAccountAfterSlowVerification(t *testing.T) {
-	for _, change := range []string{"unchanged", "pause", "proxy", "policy", "token", "model quota", "auth header"} {
-		t.Run(change, func(t *testing.T) {
-			gateway, account, provider := borrowSafetyService()
-			latest := *account
-			latest.Credentials = maps.Clone(account.Credentials)
-			latest.Extra = maps.Clone(account.Extra)
-			repo := &finalBorrowSendRepo{account: account}
-			gateway.accountRepo = repo
-			upstream := &delayedBorrowFinalSendUpstream{borrowSafetyProvider: provider}
-			upstream.afterVerification = func() {
-				switch change {
-				case "pause":
-					latest.Schedulable = false
-				case "proxy":
-					id := int64(999)
-					latest.ProxyID = &id
-				case "policy":
-					latest.Extra[GatewayBorrowModelsKey] = []string{}
-				case "token":
-					latest.Credentials["access_token"] = "changed-fixture-token"
-				case "model quota":
-					latest.Extra[modelRateLimitsKey] = map[string]any{"gpt-6-astra": map[string]any{"rate_limit_reset_at": time.Now().Add(time.Hour).Format(time.RFC3339)}}
-				}
-				repo.account = &latest
-			}
-			gateway.httpUpstream = upstream
-			req, _ := http.NewRequestWithContext(context.Background(), "POST", "https://chatgpt.com/backend-api/codex/responses", strings.NewReader("{\"model\":\"gpt-6-astra\"}"))
-			req.Header.Set("Authorization", "Bearer "+account.GetOpenAIAccessToken())
-			if change == "auth header" {
-				req.Header.Set("Authorization", "Bearer wrong-fixture-token")
-			}
-			resp, err := gateway.doOpenAIProxyAttempt(req, account, runtimeProxyEgress{})
-			if change == "unchanged" {
-				require.NoError(t, err)
-				require.Equal(t, 1, upstream.business)
-				_ = resp.Body.Close()
-			} else {
-				require.Error(t, err)
-				require.Zero(t, upstream.business)
-			}
-		})
-	}
+func TestGatewayBorrowNeverStartsSlowVerification(t *testing.T) {
+	gateway, a, p := borrowSafetyService()
+	gateway.accountRepo = &finalBorrowSendRepo{account: a}
+	upstream := &delayedBorrowFinalSendUpstream{borrowSafetyProvider: p, afterVerification: func() { t.Fatal("retired verification invoked") }}
+	gateway.httpUpstream = upstream
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, chatgptCodexAPIURL, strings.NewReader(`{"model":"gpt-6-astra"}`))
+	require.NoError(t, err)
+	resp, err := gateway.doOpenAIProxyAttempt(req, a, runtimeProxyEgress{})
+	require.ErrorContains(t, err, "gateway_borrow_retired")
+	require.Nil(t, resp)
+	require.Zero(t, upstream.business)
+	require.Zero(t, p.calls)
 }
 
 func TestGatewayBorrowFinalCheckSkipsValidationProbe(t *testing.T) {

@@ -467,7 +467,7 @@
             <Icon name="shield" size="sm" />
             <div>
               <span class="block text-sm font-medium text-gray-900 dark:text-white">2FA</span>
-              <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('tokenGuard.twoFA.label') }}</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('openaiRelogin.twoFA.label') }}</span>
             </div>
           </button>
 
@@ -482,7 +482,7 @@
             </div>
           </button>
         </div>
-        <p v-if="isOpenAITwoFA" class="input-hint">{{ t('tokenGuard.twoFA.nameHint') }}</p>
+        <p v-if="isOpenAITwoFA" class="input-hint">{{ t('openaiRelogin.twoFA.nameHint') }}</p>
         <div v-if="isOpenAIBPSOAuth" class="mt-3 space-y-2" data-testid="bps-oauth-models">
           <p class="input-hint">{{ t('admin.accounts.oauth.openai.excelLoginHint') }}</p>
           <label class="input-label">{{ t('admin.accounts.openai.excelBPSModels') }}</label>
@@ -1301,7 +1301,7 @@
               <p class="input-hint">{{ t('admin.accounts.vertexApiKeyProjectIdHint') }}</p>
             </div>
             <div v-if="vertexProjectId.trim()">
-              <label :id="'field-' + fieldLabelScope + '-11'" class="input-label">Location</label>
+              <label :id="'field-' + fieldLabelScope + '-11'" class="input-label">Location <NewFeatureBadge v-if="authStore.user?.id != null" :notice-id="NEW_FEATURE_NOTICES.vertexMultiRegion" :user-id="authStore.user?.id" /></label>
               <select :aria-labelledby="'field-' + fieldLabelScope + '-11'"
                 v-model="vertexLocation"
                 required
@@ -1390,7 +1390,7 @@
               />
             </div>
             <div>
-              <label :id="'field-' + fieldLabelScope + '-13'" class="input-label">Location</label>
+              <label :id="'field-' + fieldLabelScope + '-13'" class="input-label">Location <NewFeatureBadge v-if="authStore.user?.id != null" :notice-id="NEW_FEATURE_NOTICES.vertexMultiRegion" :user-id="authStore.user?.id" /></label>
               <select :aria-labelledby="'field-' + fieldLabelScope + '-13'"
                 v-model="vertexLocation"
                 required
@@ -3087,7 +3087,15 @@
           <label :id="`field-${fieldLabelScope}-proxy`" class="input-label mb-0">{{ t('admin.accounts.proxy') }}</label>
           <ProxyAdBanner />
         </div>
-        <ProxySelector v-model="form.proxy_id" :proxies="proxies" :aria-labelledby="`field-${fieldLabelScope}-proxy`" />
+        <OpenAIProxySettings v-if="supportsProxyList" v-model:mode="proxyEditorMode" v-model:single-proxy-id="form.proxy_id"
+          v-model:proxy-ids="proxyList" :proxies="proxies" :loading="proxiesLoading" :load-error="proxiesLoadError"
+          role="group" :aria-labelledby="`field-${fieldLabelScope}-proxy`" :user-id="authStore.user?.id" @retry="emit('retry-proxies')" />
+        <ProxySelector v-else v-model="form.proxy_id" :proxies="proxies" :disabled="proxiesLoading || proxiesLoadError" :aria-labelledby="`field-${fieldLabelScope}-proxy`" />
+        <p v-if="isOpenAITwoFA && proxyEditorMode === 'request'" class="input-hint" role="alert" data-testid="openai-proxy-two-fa-hint">{{ t('admin.accounts.openai.proxyTwoFAFirstImport') }}</p>
+        <p v-if="proxiesLoadError && (!supportsProxyList || proxyEditorMode === 'single')" class="input-hint" role="status">
+          {{ t('admin.accounts.openai.bpsProxyLoadFailed') }}
+          <button type="button" class="btn btn-secondary btn-sm" :disabled="proxiesLoading" @click="emit('retry-proxies')">{{ t('admin.accounts.openai.bpsProxyRetry') }}</button>
+        </p>
       </div>
 
       <UpstreamRequestIdHeaderField
@@ -3192,8 +3200,23 @@
               {{ t('admin.accounts.openai.oauthPassthroughDesc') }}
             </p>
           </div>
-          <Toggle :model-value="!!openaiPassthroughEnabled" :aria-label="t('admin.accounts.openai.oauthPassthrough')" @click="openaiPassthroughEnabled = !openaiPassthroughEnabled" />
+          <Toggle data-testid="create-openai-passthrough-toggle" :model-value="!!openaiPassthroughEnabled" :aria-label="t('admin.accounts.openai.oauthPassthrough')" @click="openaiPassthroughEnabled = !openaiPassthroughEnabled" />
         </div>
+        <label v-if="openaiPassthroughEnabled" class="mt-3 flex items-start gap-2">
+          <input
+            v-model="openaiPassthroughModelFilterEnabled"
+            type="checkbox"
+            data-testid="create-openai-passthrough-model-filter"
+            class="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+          <span class="text-sm">
+            {{ t('admin.accounts.openai.passthroughModelFilter') }}
+            <NewFeatureBadge v-if="authStore.user?.id != null" :notice-id="NEW_FEATURE_NOTICES.passthroughModelFilter" :user-id="authStore.user?.id" />
+            <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.passthroughModelFilterDesc') }}
+            </span>
+          </span>
+        </label>
       </div>
 
       <OpenAIRequestTimezoneField v-if="form.platform === 'openai'" v-model="openAIRequestTimezone" />
@@ -3271,6 +3294,43 @@
             </p>
           </div>
           <Toggle :model-value="!!anthropicPassthroughEnabled" :aria-label="t('admin.accounts.anthropic.apiKeyPassthrough')" @click="anthropicPassthroughEnabled = !anthropicPassthroughEnabled" />
+        </div>
+      </div>
+
+      <!-- Anthropic API Key 按请求 TTL 计费开关 -->
+      <div
+        v-if="form.platform === 'anthropic' && accountCategory === 'apikey'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="flex items-center gap-2">
+              <label class="input-label mb-0">{{ t('admin.accounts.anthropic.cacheTtlBillingFromRequest') }}</label>
+              <NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.cacheTtlBillingFromRequest" :user-id="authStore.user?.id" />
+            </div>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.anthropic.cacheTtlBillingFromRequestDesc') }}
+            </p>
+          </div>
+          <button
+            type="button"
+            data-testid="cache-ttl-billing-from-request-toggle"
+            role="switch"
+            :aria-checked="cacheTtlBillingFromRequestEnabled"
+            :aria-label="t('admin.accounts.anthropic.cacheTtlBillingFromRequest')"
+            @click="cacheTtlBillingFromRequestEnabled = !cacheTtlBillingFromRequestEnabled"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              cacheTtlBillingFromRequestEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                cacheTtlBillingFromRequestEnabled ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
         </div>
       </div>
 
@@ -4015,7 +4075,7 @@ import { DEFAULT_ACCOUNT_COST_MULTIPLIER, isValidAccountCostMultiplier } from '@
 
 import OpenAITwoFAImport from './OpenAITwoFAImport.vue'
 import { createTokenGuardV2Account } from '@/api/admin/accountTokenGuardV2'
-import type { TokenGuardReloginAccount } from '@/api/admin/accountTokenGuard'
+import type { OpenAIReloginCredentials } from '@/api/admin/openaiRelogin'
 import { ref, reactive, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
@@ -4071,6 +4131,7 @@ import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestId
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
+import OpenAIProxySettings from './OpenAIProxySettings.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
@@ -4154,7 +4215,7 @@ const { t } = useI18n()
 const browserTimeZone = getBrowserTimeZone()
 
 const oauthStepTitle = computed(() => {
-  if (isOpenAITwoFA.value) return t('tokenGuard.twoFA.title')
+  if (isOpenAITwoFA.value) return t('openaiRelogin.twoFA.title')
   if (isOpenAIBPSOAuth.value) return t('admin.accounts.oauth.openai.excelTitle')
   if (form.platform === 'openai') return t('admin.accounts.oauth.openai.title')
   if (form.platform === 'gemini') return t('admin.accounts.oauth.gemini.title')
@@ -4239,12 +4300,15 @@ const apiKeyValuePlaceholder = computed(() => {
 interface Props {
   show: boolean
   proxies: Proxy[]
+  proxiesLoading?: boolean
+  proxiesLoadError?: boolean
   groups: AdminGroup[]
 }
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
   close: []
+  'retry-proxies': []
   created: []
 }>()
 
@@ -4319,6 +4383,34 @@ interface TempUnschedRuleForm {
 // State
 const step = ref(1)
 const openaiTwoFA = ref(false)
+const supportsProxyList = computed(() => form.platform === 'openai' && accountCategory.value === 'oauth-based')
+const proxyEditorMode = ref<'single' | 'request'>('single')
+const proxyList = ref<number[]>([])
+const usableProxy = (proxy: Proxy) => proxy.status === 'active' && (!proxy.expires_at || Date.parse(proxy.expires_at) > Date.now())
+const firstRequestProxy = () => proxyList.value.find(id => props.proxies.some(proxy => proxy.id === id && usableProxy(proxy)))
+const proxyFingerprint = (proxy: Proxy) => JSON.stringify([proxy.protocol, proxy.host, proxy.port, proxy.username ?? '', proxy.password ?? ''])
+let authorizationExit: { session: string; mode: 'single' | 'request'; id: number | null; fingerprint?: string } | null = null
+function authorizationExitMatches() {
+  const exit = authorizationExit
+  if (!exit || exit.session !== openaiOAuth.sessionId.value || exit.mode !== proxyEditorMode.value) return false
+  if (exit.mode === 'single' && form.proxy_id !== exit.id) return false
+  if (exit.id === null) return exit.mode === 'single'
+  const proxy = props.proxies.find(p => p.id === exit.id)
+  return !props.proxiesLoading && !props.proxiesLoadError && proxy && usableProxy(proxy) && proxyFingerprint(proxy) === exit.fingerprint &&
+    (exit.mode === 'single' || proxyList.value.includes(exit.id))
+}
+function discardAuthorization(message: string) {
+  authorizationExit = null
+  openaiOAuth.resetState()
+  openaiOAuth.error.value = message
+}
+function validProxyDraft(): boolean {
+  if (!supportsProxyList.value || proxyEditorMode.value !== 'request') return true
+  const error = isOpenAITwoFA.value ? 'proxyTwoFAFirstImport' : !proxyList.value.length ? 'proxyRequired'
+    : props.proxiesLoading || props.proxiesLoadError || firstRequestProxy() === undefined ? 'proxyNoUsable' : null
+  if (error) appStore.showError(t(`admin.accounts.openai.${error}`))
+  return !error
+}
 const openaiBPSOAuth = ref(false)
 const bpsOAuthModels = ref<string[]>([...DEFAULT_EXCEL_BPS_MODELS])
 const isOpenAIBPSOAuth = computed(() => form.platform === 'openai' && accountCategory.value === 'oauth-based' && openaiBPSOAuth.value)
@@ -4656,6 +4748,7 @@ const openAIRequestTimezone = ref('Asia/Singapore')
 const extraImageModels = ref('')
 const extraImageModelPrefixes = ref('')
 const openaiPassthroughEnabled = ref(false)
+const openaiPassthroughModelFilterEnabled = ref(false)
 // OpenAI Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
 const openaiFlattenNamespacesEnabled = ref(false)
 const openAILongContextBillingEnabled = ref(false)
@@ -4682,6 +4775,7 @@ const codexFingerprintModeOptions = computed(() => [
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
 const anthropicStripClaudeCodeIdentityEnabled = ref(false)
+const cacheTtlBillingFromRequestEnabled = ref(false)
 const anthropicMimicClaudeCodeEnabled = ref(false)
 const anthropicMimicClaudeCodeDeductTokens = ref(false)
 // 「模拟 Claude Code」与「抹除 Claude Code 身份」互斥：打开一个就关掉另一个
@@ -4919,7 +5013,7 @@ const openAIWSModeHintKey = computed(() =>
 )
 
 const isOpenAIModelRestrictionDisabled = computed(() =>
-  form.platform === 'openai' && (openaiPassthroughEnabled.value || copilotSDKEnabled.value)
+  form.platform === 'openai' && ((openaiPassthroughEnabled.value && !openaiPassthroughModelFilterEnabled.value) || copilotSDKEnabled.value)
 )
 
 const mixedChannelWarningMessageText = computed(() => {
@@ -5206,6 +5300,7 @@ watch(
     if (newPlatform !== 'openai') {
       copilotSDKEnabled.value = false
       openaiPassthroughEnabled.value = false
+      openaiPassthroughModelFilterEnabled.value = false
       openaiFlattenNamespacesEnabled.value = false
       openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
       openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
@@ -5217,6 +5312,7 @@ watch(
     if (newPlatform !== 'anthropic') {
       anthropicPassthroughEnabled.value = false
       anthropicStripClaudeCodeIdentityEnabled.value = false
+      cacheTtlBillingFromRequestEnabled.value = false
       anthropicMimicClaudeCodeEnabled.value = false
       anthropicMimicClaudeCodeDeductTokens.value = false
       anthropicAPIKeyAuthScheme.value = 'x_api_key'
@@ -5250,6 +5346,7 @@ watch(
     if (platform !== 'anthropic' || category !== 'apikey') {
       anthropicPassthroughEnabled.value = false
       anthropicStripClaudeCodeIdentityEnabled.value = false
+      cacheTtlBillingFromRequestEnabled.value = false
       anthropicMimicClaudeCodeEnabled.value = false
       anthropicMimicClaudeCodeDeductTokens.value = false
       anthropicAPIKeyAuthScheme.value = 'x_api_key'
@@ -5728,6 +5825,8 @@ const resetForm = () => {
   pendingChannelCreations.clear()
   step.value = 1
   openaiTwoFA.value = false
+  proxyEditorMode.value = 'single'
+  proxyList.value = []
   openaiBPSOAuth.value = false
   bpsOAuthModels.value = [...DEFAULT_EXCEL_BPS_MODELS]
   autoBPS.reset()
@@ -5797,6 +5896,7 @@ const resetForm = () => {
   autoPauseOnExpired.value = true
   copilotSDKEnabled.value = false
   openaiPassthroughEnabled.value = false
+  openaiPassthroughModelFilterEnabled.value = false
   openaiFlattenNamespacesEnabled.value = false
   openAILongContextBillingEnabled.value = false
   openAILongContextBillingTouched.value = false
@@ -5812,6 +5912,7 @@ const resetForm = () => {
   codexFingerprintMode.value = 'off'
   anthropicPassthroughEnabled.value = false
   anthropicStripClaudeCodeIdentityEnabled.value = false
+  cacheTtlBillingFromRequestEnabled.value = false
   anthropicMimicClaudeCodeEnabled.value = false
   anthropicMimicClaudeCodeDeductTokens.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
@@ -5886,6 +5987,8 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
     extra.openai_excel_bps_models = [...new Set(bpsOAuthModels.value.map(m => m.trim()).filter(Boolean))]
   }
   if (accountCategory.value === 'oauth-based') {
+    extra.openai_proxy_mode = proxyEditorMode.value
+    extra.openai_proxy_ids = [...proxyList.value]
     extra.openai_oauth_responses_websockets_v2_mode = openaiOAuthResponsesWebSocketV2Mode.value
     extra.openai_oauth_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiOAuthResponsesWebSocketV2Mode.value)
     applyAccountRPMSettings(extra, {
@@ -5915,6 +6018,11 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
   } else {
     delete extra.openai_passthrough
     delete extra.openai_oauth_passthrough
+  }
+  if (openaiPassthroughEnabled.value && openaiPassthroughModelFilterEnabled.value) {
+    extra.openai_passthrough_model_filter = true
+  } else {
+    delete extra.openai_passthrough_model_filter
   }
   // 缺省即保留 namespace，不写空值，避免 extra 里堆积默认项
   if (form.type === 'oauth' && openaiFlattenNamespacesEnabled.value) {
@@ -5975,13 +6083,17 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
   return Object.keys(extra).length > 0 ? extra : undefined
 }
 
-const buildOpenAICodexImportExtra = (): Record<string, unknown> | undefined => {
+const buildOpenAICodexImportExtra = (supportsList = true): Record<string, unknown> | undefined => {
   const extra = buildOpenAIExtra()
   if (!extra) {
     return undefined
   }
   if (!openAILongContextBillingTouched.value) {
     delete extra.openai_long_context_billing_enabled
+  }
+  if (!supportsList) {
+    delete extra.openai_proxy_mode
+    delete extra.openai_proxy_ids
   }
   return Object.keys(extra).length > 0 ? extra : undefined
 }
@@ -6001,6 +6113,11 @@ const buildAnthropicExtra = (base?: Record<string, unknown>): Record<string, unk
     extra.anthropic_strip_claude_code_identity = true
   } else {
     delete extra.anthropic_strip_claude_code_identity
+  }
+  if (cacheTtlBillingFromRequestEnabled.value) {
+    extra.cache_ttl_billing_from_request = true
+  } else {
+    delete extra.cache_ttl_billing_from_request
   }
   if (anthropicMimicClaudeCodeEnabled.value) {
     extra.anthropic_mimic_claude_code = true
@@ -6120,7 +6237,8 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 
 const handleSubmit = async () => {
   if (mixedAction.busy.value || submitting.value) return
-    if (isOpenAIBPSOAuth.value && !bpsOAuthModels.value.some(model => model.trim())) {
+  if (!validProxyDraft()) return
+  if (isOpenAIBPSOAuth.value && !bpsOAuthModels.value.some(model => model.trim())) {
     appStore.showError(t('admin.accounts.oauth.openai.excelModelsRequired'))
     return
   }
@@ -6433,8 +6551,21 @@ const goBackToBasicInfo = () => {
 }
 
 const handleGenerateUrl = async () => {
-    if (form.platform === 'openai') {
-    await openaiOAuth.generateAuthUrl(form.proxy_id, undefined, isOpenAIBPSOAuth.value ? 'excel' : 'codex')
+  if (form.platform === 'openai') {
+    if (!validProxyDraft()) return
+    const mode = proxyEditorMode.value
+    const single = form.proxy_id
+    const routing = mode === 'request' ? { mode, ids: [...proxyList.value] } : undefined
+    const fingerprints = new Map(props.proxies.filter(p => routing ? routing.ids.includes(p.id) : p.id === single).map(p => [p.id, proxyFingerprint(p)]))
+    authorizationExit = null
+    if (await openaiOAuth.generateAuthUrl(routing ? undefined : single, undefined, isOpenAIBPSOAuth.value ? 'excel' : 'codex', routing)) {
+      const selected = openaiOAuth.authorizationProxyId.value
+      const id = routing ? selected : single
+      authorizationExit = { session: openaiOAuth.sessionId.value, mode, id, fingerprint: id === null ? undefined : fingerprints.get(id) }
+      if ((!routing && selected !== null && selected !== single) || !authorizationExitMatches()) {
+        discardAuthorization(t('admin.accounts.openai.proxyAuthorizationChanged'))
+      }
+    }
   } else if (form.platform === 'gemini') {
     await geminiOAuth.generateAuthUrl(
       form.proxy_id,
@@ -6849,6 +6980,10 @@ const createdImportAccountIds = (result: CodexSessionImportResult) =>
 const handleOpenAIExchange = async (authCode: string) => {
   const oauthClient = openaiOAuth
   if (!authCode.trim() || !oauthClient.sessionId.value) return
+  if (!authorizationExitMatches()) {
+    discardAuthorization(t('admin.accounts.openai.proxyAuthorizationChanged'))
+    return
+  }
 
   oauthClient.loading.value = true
   oauthClient.error.value = ''
@@ -6861,13 +6996,20 @@ const handleOpenAIExchange = async (authCode: string) => {
       return
     }
 
+    // The single-mode session already owns its URL. In request mode validate only its bound member.
+    const exit = authorizationExit
+    authorizationExit = null
     const tokenInfo = await oauthClient.exchangeAuthCode(
       authCode.trim(),
       oauthClient.sessionId.value,
       stateToUse,
-      form.proxy_id
+      undefined,
+      exit?.mode === 'request' && exit.id !== null ? { mode: 'request', ids: [exit.id] } : undefined
     )
-    if (!tokenInfo) return
+    if (!tokenInfo) {
+      discardAuthorization(oauthClient.error.value)
+      return
+    }
 
     if (isOpenAIBPSOAuth.value && tokenInfo.client_id !== OPENAI_EXCEL_OAUTH_CLIENT_ID) {
       throw new Error(t('admin.accounts.oauth.openai.excelSessionMismatch'))
@@ -6985,7 +7127,7 @@ const isAgentIdentityImportContent = (content: string) => {
 }
 
 // Reuse Session import normalization and identity deduplication after 2FA login.
-const importTwoFACredential = async (credential: Record<string, unknown>, email: string, login: TokenGuardReloginAccount, signal?: AbortSignal): Promise<'created' | 'skipped'> => {
+const importTwoFACredential = async (credential: Record<string, unknown>, email: string, login: OpenAIReloginCredentials, signal?: AbortSignal): Promise<'created' | 'skipped'> => {
   signal?.throwIfAborted()
   const credentialExtras = buildOpenAICodexImportCredentialExtras()
   if (credentialExtras === null) throw new Error('invalid_account_settings')
@@ -7037,8 +7179,28 @@ const importTwoFACredential = async (credential: Record<string, unknown>, email:
   throw new Error('import_failed')
 }
 
+const containsUnsupportedProxyGroupIdentity = (content: string): boolean => {
+  const unsupported = (value: unknown): boolean => {
+    if (Array.isArray(value)) return value.some(unsupported)
+    if (!value || typeof value !== 'object') return false
+    const record = value as Record<string, unknown>
+    const modes = [record.auth_mode, record.authMode, record.openai_auth_mode]
+      .map(mode => String(mode ?? '').trim().toLowerCase())
+    return modes.some(mode => ['agentidentity', 'personalaccesstoken', 'personal_access_token'].includes(mode))
+      || !!(record.agent_identity ?? record.agentIdentity)
+  }
+  try {
+    return unsupported(JSON.parse(content))
+  } catch {
+    return content.split('\n').filter(line => line.trim()).some(line => {
+      try { return unsupported(JSON.parse(line)) } catch { return false }
+    })
+  }
+}
+
 const handleOpenAIImportCodexSession = async (content: string) => {
   const oauthClient = openaiOAuth
+  if (!validProxyDraft()) return
   const trimmed = content.trim()
   if (!trimmed) {
     oauthClient.error.value = t('admin.accounts.oauth.openai.codexSessionEmpty')
@@ -7048,7 +7210,11 @@ const handleOpenAIImportCodexSession = async (content: string) => {
     oauthClient.error.value = t('admin.accounts.oauth.openai.agentIdentityInvalid')
     return
   }
-
+  const supportsProxyGroup = !containsUnsupportedProxyGroupIdentity(trimmed)
+  if (proxyEditorMode.value === 'request' && !supportsProxyGroup) {
+    oauthClient.error.value = t('admin.accounts.openai.proxyUnsupportedImport')
+    return
+  }
   const credentialExtras = buildOpenAICodexImportCredentialExtras()
   if (credentialExtras === null) {
     return
@@ -7058,7 +7224,7 @@ const handleOpenAIImportCodexSession = async (content: string) => {
   oauthClient.error.value = ''
 
   try {
-    const extra = buildOpenAICodexImportExtra()
+    const extra = buildOpenAICodexImportExtra(supportsProxyGroup)
     const result = await importWithUpstream({
       content: trimmed,
       name: form.name,
@@ -7125,6 +7291,10 @@ const handleOpenAIImportCodexSession = async (content: string) => {
 
 const handleOpenAIImportCodexPAT = async (accessToken: string) => {
   const oauthClient = openaiOAuth
+  if (proxyEditorMode.value === 'request') {
+    oauthClient.error.value = t('admin.accounts.openai.proxyUnsupportedImport')
+    return
+  }
   const trimmed = accessToken.trim()
   if (!trimmed) {
     oauthClient.error.value = t('admin.accounts.oauth.openai.codexPatEmpty')
@@ -7140,7 +7310,7 @@ const handleOpenAIImportCodexPAT = async (accessToken: string) => {
   oauthClient.error.value = ''
 
   try {
-    const extra = buildOpenAICodexImportExtra()
+    const extra = buildOpenAICodexImportExtra(false)
     await createPATWithUpstream({
       access_token: trimmed,
       name: form.name,
@@ -7177,6 +7347,9 @@ const handleOpenAIImportCodexPAT = async (accessToken: string) => {
 const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string) => {
   const oauthClient = openaiOAuth
   if (!refreshTokenInput.trim()) return
+  if (!validProxyDraft()) return
+  const validationProxy = proxyEditorMode.value === 'request' ? firstRequestProxy() : form.proxy_id
+  if (proxyEditorMode.value === 'request' && validationProxy == null) return
 
   const refreshTokens = refreshTokenInput
     .split('\n')
@@ -7202,7 +7375,7 @@ const handleOpenAIBatchRT = async (refreshTokenInput: string, clientId?: string)
       try {
         const tokenInfo = await oauthClient.validateRefreshToken(
           refreshTokens[i],
-          form.proxy_id,
+          validationProxy,
           clientId
         )
         if (!tokenInfo) {

@@ -19,6 +19,38 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+func guardV2PersistedAuthFailure(account *Account) bool {
+	if account.Platform != PlatformOpenAI || !account.IsOAuth() || account.Status != StatusError {
+		return false
+	}
+	if strings.HasPrefix(account.ErrorMessage, "Token revoked (401):") ||
+		strings.HasPrefix(account.ErrorMessage, "Unauthorized (401):") {
+		return true
+	}
+	// The account test path persists the structured upstream body under this
+	// prefix. Require an explicit auth code, never a substring in its message.
+	raw, ok := strings.CutPrefix(account.ErrorMessage, "Authentication failed (401):")
+	if !ok {
+		return false
+	}
+	var result struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	return json.Unmarshal([]byte(raw), &result) == nil && guardV2PersistedAuthCode(result.Error.Code)
+}
+
+func guardV2PersistedAuthCode(code string) bool {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "auth_failed", "invalid_token", "token_invalid", "requires_relogin", "invalid_grant", "revoked",
+		"token_invalidated", "token_revoked", "refresh_token_reused", "refresh_token_invalidated":
+		return true
+	default:
+		return false
+	}
+}
+
 const (
 	AccountTokenGuardV2ProbePending   = "pending"
 	AccountTokenGuardV2ProbeOK        = "ok"
@@ -585,7 +617,7 @@ func (s *AccountTokenGuardV2Service) runProbe(ctx context.Context, record Accoun
 		// A persisted credential-level 401 plus this fresh failed models probe
 		// are two independent auth observations. Do not wait another retry
 		// interval, while keeping the normal threshold for probe-only failures.
-		if hasBudget && record.Enabled && record.AutoReloginEnabled && !record.AutoReloginExhausted && !pending && (completion.FailStreak >= rules.FailStreakThreshold || guardAccountHasAuthFailure(account)) && !cooldownActive {
+		if hasBudget && record.Enabled && record.AutoReloginEnabled && !record.AutoReloginExhausted && !pending && (completion.FailStreak >= rules.FailStreakThreshold || guardV2PersistedAuthFailure(account)) && !cooldownActive {
 			task, taskErr := s.reauth.createTaskForProfile(ctx, record.AccountID, "codex", func(createCtx context.Context, id int64, hash string) (*OpenAIOAuthReauthTaskRecord, error) {
 				return budgetRepo.CreateAutomaticRelogin(createCtx, id, hash, owner, rules, s.clockNow())
 			})

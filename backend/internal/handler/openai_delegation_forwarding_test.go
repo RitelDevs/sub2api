@@ -64,3 +64,46 @@ func TestOpenAIResponsesDelegationAfterWebSearchReachesUpstream(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenAIResponsesHeartbeatAfterToolHistoryReachesUpstream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstream := &excelBPSFailoverUpstream{answer: func(int) *http.Response { return excelBPSCompleted() }}
+	h := newOpenAIResponsesFailoverTestHandler(t, upstream)
+	c, rec := newOpenAIResponsesFailoverTestContext(t, context.Background())
+	key, _ := middleware.GetAPIKeyFromContext(c)
+	key.AllowLongContext = true
+	const heartbeat = `<heartbeat>
+  <automation_id>automation</automation_id>
+  <current_time_iso>2026-11-19T11:41:00Z</current_time_iso>
+  <instructions>Read the latest sample and record the new inspection watermark.</instructions>
+</heartbeat>`
+	body, err := json.Marshal(map[string]any{
+		"model": "gpt-6-astra", "stream": false,
+		"input": []any{
+			map[string]any{"type": "function_call", "namespace": "codex_app", "name": "automation_update", "call_id": "call_view", "arguments": `{"mode":"view"}`},
+			map[string]any{"type": "function_call_output", "namespace": "codex_app", "name": "automation_update", "call_id": "call_view", "output": "Schedule is active"},
+			map[string]any{"type": "web_search_call", "id": "ws_history", "status": "completed", "action": map[string]any{"type": "search", "query": "service status"}},
+			map[string]any{"type": "function_call_output", "id": "fco_heartbeat", "namespace": "codex_app", "name": "automation_update", "output": heartbeat},
+		},
+	})
+	require.NoError(t, err)
+	c.Request.Body = io.NopCloser(strings.NewReader(string(body)))
+	c.Request.ContentLength = int64(len(body))
+
+	h.Responses(c)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Len(t, upstream.bodies, 1)
+	input := gjson.GetBytes(upstream.bodies[0], "input").Array()
+	require.Len(t, input, 4)
+	require.Equal(t, "function_call", input[0].Get("type").String())
+	require.NotEmpty(t, input[0].Get("call_id").String())
+	require.Equal(t, input[0].Get("call_id").String(), input[1].Get("call_id").String())
+	require.Equal(t, "function_call_output", input[1].Get("type").String())
+	require.Equal(t, "Schedule is active", input[1].Get("output").String())
+	require.False(t, input[1].Get("role").Exists())
+	require.Equal(t, "web_search_call", input[2].Get("type").String())
+	require.Equal(t, "message", input[3].Get("type").String())
+	require.Equal(t, "user", input[3].Get("role").String())
+	require.Equal(t, heartbeat, input[3].Get("content.0.text").String())
+}

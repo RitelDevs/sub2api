@@ -164,7 +164,7 @@
 
           <template #cell-usage="{ row }">
             <span v-if="pendingUsageIds.has(row.id) && !usageStats[row.id]" data-test="usage-pending" class="inline-block h-3 w-14 animate-pulse rounded bg-gray-200 dark:bg-dark-600" />
-            <span v-else class="keys-quota-used" :title="t('keys.today')" data-testid="key-today-usage">{{ usageStats[row.id] ? '$' + formatDisplayAmount(usageStats[row.id].today_actual_cost, 2) : '—' }}</span>
+            <span v-else :title="`${t('keys.selectedPeriod')}: ${formatUsageCost(row.id, 'total_actual_cost')}`">{{ t('keys.today') }} <span class="keys-quota-used" data-testid="key-today-usage">{{ usageStats[row.id] ? '$' + formatDisplayAmount(usageStats[row.id].today_actual_cost, 2) : '—' }}</span></span>
           </template>
 
           <template #cell-rate_limit="{ row }">
@@ -1179,7 +1179,7 @@ const allColumns = computed<Column[]>(() => [
   { key: 'name', label: t('common.name'), sortable: true },
   { key: 'key', label: t('keys.apiKey'), sortable: false },
   { key: 'group', label: t('keys.group'), sortable: true },
-  { key: 'usage', label: t('keys.today'), sortable: false },
+  { key: 'usage', label: t('keys.usage'), sortable: true },
   { key: 'current_concurrency', label: kw.value.concurrent, sortable: true },
   { key: 'status', label: t('common.status'), sortable: true },
   { key: 'actions', label: t('common.actions'), sortable: false },
@@ -1260,6 +1260,7 @@ const onUsageDateRangeChange = (range: { startDate: string; endDate: string; pre
   usageStartDate.value = range.startDate
   usageEndDate.value = range.endDate
   usagePreset.value = range.preset
+  selectedIds.value = []
   void resetApiKeys()
 }
 const userGroupRates = ref<Record<number, number>>({})
@@ -1353,7 +1354,7 @@ const handleConcurrencyVisibility = () => {
 }
 
 const sortState = ref({
-  sort_by: 'created_at',
+  sort_by: 'usage',
   sort_order: 'desc' as 'asc' | 'desc'
 })
 
@@ -1590,18 +1591,20 @@ const {
   pageSize: 50,
   keyOf: key => key.id,
   fetchPage: async (page, signal) => {
+    const range = { start_date: usageStartDate.value, end_date: usageEndDate.value, timezone: getBrowserTimeZone() }
     const response = await keysAPI.list(page, 50, {
       search: filterSearch.value || undefined,
       status: filterStatus.value || undefined,
       group_id: filterGroupId.value === '' ? undefined : filterGroupId.value,
       sort_by: sortState.value.sort_by,
       sort_order: sortState.value.sort_order,
+      ...(sortState.value.sort_by === 'usage' ? range : {}),
     }, { signal })
     if (response.items.length && !signal.aborted) {
       const keyIds = response.items.map(key => key.id)
       for (const id of keyIds) pendingUsageIds.value.add(id)
       void usageAPI.getDashboardApiKeysUsage(keyIds, {
-        signal, start_date: usageStartDate.value, end_date: usageEndDate.value, timezone: getBrowserTimeZone()
+        signal, ...range
       }).then(stats => {
         if (!signal.aborted) usageStats.value = { ...usageStats.value, ...stats.stats }
       }).catch(error => {

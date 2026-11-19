@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"crypto/sha256"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -116,38 +115,11 @@ func (s *OpenAIGatewayService) gatewayBorrowPolicyReason(ctx context.Context, a 
 }
 
 func (s *OpenAIGatewayService) gatewayBorrowUpstreamPolicyReason(ctx context.Context, a *Account, model string, compact bool) string {
+	if a.RequiresGatewayBorrowUpstream(model) || (compact && a != nil && a.RequiresGatewayBorrowUpstream(resolveOpenAIAccountUpstreamModelForRequest(a, model, true))) {
+		return "gateway_borrow_retired"
+	}
 	if a.IsOpenAIGatewayAccountQualityPendingForUpstreamModel(model) {
 		return "gateway_borrow_initial_quality_pending"
-	}
-	requires := a.RequiresGatewayBorrowUpstream(model)
-	if compact && a != nil {
-		requires = requires || a.RequiresGatewayBorrowUpstream(resolveOpenAIAccountUpstreamModelForRequest(a, model, true))
-	}
-	if !requires {
-		return ""
-	}
-	if compact {
-		return "gateway_borrow_compact_unavailable"
-	}
-	if !a.IsOpenAIOAuth() || a.IsShadow() || a.IsOpenAIAgentIdentity() || a.IsOpenAIPersonalAccessToken() {
-		return "gateway_borrow_protocol_unavailable"
-	}
-	if a.isExcelBPSUpstreamModelEnabled(model) || a.isPrismBrowserUpstreamModelEnabled(model) {
-		return "gateway_borrow_route_conflict"
-	}
-	if s == nil || s.cfg == nil {
-		return "gateway_borrow_unavailable"
-	}
-	policy := s.cfg.AstraRouting(ctx)
-	mapped := config.CanonicalGatewayBorrowModel(normalizeExcelBPSIsolationModel(model))
-	if !policy.CookiePool.Enabled || !policy.CookiePool.TargetRequiresModel(a.ID, mapped) {
-		return "gateway_borrow_policy_unavailable"
-	}
-	if _, ok := s.httpUpstream.(gatewayBorrowWSProvider); !ok {
-		return "gateway_borrow_provider_unavailable"
-	}
-	if expiry := s.gatewayBorrowBindingExpiry(ctx, a, model); expiry.IsZero() || !time.Now().Before(expiry) {
-		return "gateway_borrow_route_not_ready"
 	}
 	return ""
 }
@@ -171,40 +143,10 @@ func gatewayBorrowEligibilityReason(ctx context.Context, a *Account, model strin
 // prepareGatewayBorrowWS authorizes this exact model and binds the upstream
 // cookie before a connection is acquired. Empty/unsupported providers fail closed.
 func (s *OpenAIGatewayService) prepareGatewayBorrowWS(ctx context.Context, a *Account, model string, headers http.Header, proxy string) (string, string, func(), error) {
-	release := func() {}
-	if !a.RequiresGatewayBorrowUpstream(model) {
-		return "", proxy, release, nil
+	if a.RequiresGatewayBorrowUpstream(model) {
+		return "", proxy, func() {}, denyOpenAITurn("gateway_borrow_retired")
 	}
-	if reason := s.gatewayBorrowUpstreamPolicyReason(ctx, a, model, false); reason != "" {
-		return "", proxy, release, denyOpenAITurn(reason)
-	}
-	mapped := config.CanonicalGatewayBorrowModel(normalizeExcelBPSIsolationModel(model))
-	provider, ok := s.httpUpstream.(gatewayBorrowWSProvider)
-	if !ok {
-		return "", proxy, func() {}, denyOpenAITurn("gateway_borrow_provider_unavailable")
-	}
-	cookie, effectiveProxy, release, err := provider.CodexGatewayPinWSRequestForModel(ctx, headers, proxy, a.ID, a.Concurrency, mapped)
-	if release == nil {
-		release = func() {}
-	}
-	if err != nil || cookie == "" {
-		release()
-		return "", proxy, func() {}, denyOpenAITurn("gateway_borrow_route_unavailable")
-	}
-	if !provider.CodexGatewayPinWSBindingValidForModel(ctx, a.ID, mapped, cookie) {
-		release()
-		return "", proxy, func() {}, denyOpenAITurn("gateway_borrow_route_expired")
-	}
-	replaceCodexWSAnchorCookie(headers, cookie)
-	policy := s.cfg.AstraRouting(ctx)
-	fingerprint := openAITurnRouteFingerprint(a)
-	expiry := provider.CodexGatewayPinWSBindingExpiryForModel(ctx, a.ID, mapped, cookie)
-	if expiry.IsZero() || !time.Now().Before(expiry) {
-		release()
-		return "", proxy, func() {}, denyOpenAITurn("gateway_borrow_route_expired")
-	}
-	scope := fmt.Sprintf("gateway-borrow:%x", sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s:%x:%x:%d:%s", policy.Revision, a.ID, mapped, fingerprint, gatewayBorrowCredentialFingerprint(a), expiry.UnixNano(), cookie))))
-	return scope, effectiveProxy, release, nil
+	return "", proxy, func() {}, nil
 }
 
 func gatewayBorrowCookie(headers http.Header) string {

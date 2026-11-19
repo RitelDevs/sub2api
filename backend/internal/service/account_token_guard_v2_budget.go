@@ -89,9 +89,12 @@ func AdvanceAccountReloginBudgetPage(record AccountTokenGuardV2Record, outcomes 
 			if !handled {
 				_, diagnostic, _ = sessionStudioError(outcome.Error)
 			}
-			// Stop only on an explicit, validated worker challenge, not a generic HTTP 403.
-			if diagnostic != nil && (diagnostic.Reason == "security_check" || diagnostic.Reason == "email_otp_required") {
-				record.AutoReloginExhausted = true
+			// Only a validated manual handoff stops automatic re-login, not a generic HTTP 403.
+			if diagnostic != nil {
+				switch diagnostic.Reason {
+				case "security_check", "email_otp_required", "interaction_required":
+					record.AutoReloginExhausted = true
+				}
 			}
 		}
 		if outcome.Status == OpenAIOAuthReauthStatusFailed ||

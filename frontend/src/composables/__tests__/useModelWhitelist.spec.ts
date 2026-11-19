@@ -5,7 +5,7 @@ vi.mock('@/api/admin/accounts', () => ({
   getAntigravityDefaultModelMapping: vi.fn()
 }))
 
-import { buildModelMappingObject, getModelsByPlatform, reconcileUpstreamModelMapping, splitModelMappingObject } from '../useModelWhitelist'
+import { buildModelMappingObject, getModelsByPlatform, getPresetMappingsByPlatform, reconcileUpstreamModelMapping, splitModelMappingObject } from '../useModelWhitelist'
 import { BUILTIN_PLATFORM_CATALOG, resetPlatformCatalog, setPlatformCatalog } from '@/constants/platformCatalog'
 
 describe('useModelWhitelist', () => {
@@ -44,6 +44,55 @@ describe('useModelWhitelist', () => {
     }
   })
 
+  it('openai 模型列表移除旧型号并包含 GPT Image 2.6', () => {
+    const models = getModelsByPlatform('openai')
+
+    expect(models).not.toContain('gpt-5.4')
+    expect(models).not.toContain('gpt-5.4-mini')
+    expect(models).not.toContain('gpt-5.4-2026-03-05')
+    expect(models).not.toContain('gpt-5.5')
+    expect(models).not.toContain('gpt-5.2')
+    expect(models).not.toContain('gpt-5.3-codex-spark')
+    expect(models).toContain('gpt-image-1.5')
+    expect(models).toContain('gpt-image-2.6-flare')
+    expect(models).toContain('gpt-image-2.6-sunburst')
+    expect(models).toContain('codex-auto-review')
+    expect(models).toContain('gpt-5.6')
+    expect(models).toContain('gpt-6')
+    expect(models).toContain('gpt-6-astra')
+    expect(models).toContain('gpt-6.2-astra')
+    expect(models).toContain('gpt-6.2-astra-pro')
+    expect(models).toContain('gpt-6.2-sol')
+    expect(models).toContain('gpt-6.1-sol')
+    expect(models).toContain('gpt-6.1-terra')
+    expect(models).toContain('gpt-6-sol')
+    expect(models).toContain('gpt-6-luna')
+  })
+
+  it('openai 预设映射包含 GPT-6 别名和 Astra', () => {
+    expect(getPresetMappingsByPlatform('openai')).toEqual(expect.arrayContaining([
+      ...['gpt-6.2-astra', 'gpt-6.2-astra-pro', 'gpt-6.2-sol'].map(model => expect.objectContaining({ from: model, to: model })),
+      expect.objectContaining({ label: 'GPT-6.2 Sol', from: 'gpt-6.2-sol', to: 'gpt-6.2-sol' }),
+      expect.objectContaining({ label: 'GPT-6.2 Astra', from: 'gpt-6.2-astra', to: 'gpt-6.2-astra' }),
+      expect.objectContaining({ label: 'GPT-6.1 Sol', from: 'gpt-6.1-sol', to: 'gpt-6.1-sol' }),
+      expect.objectContaining({ label: 'GPT-6.1 Terra', from: 'gpt-6.1-terra', to: 'gpt-6.1-terra' }),
+      expect.objectContaining({ label: 'GPT-6', from: 'gpt-6', to: 'gpt-6' }),
+      expect.objectContaining({ label: 'GPT-6 Astra', from: 'gpt-6-astra', to: 'gpt-6-astra' })
+    ]))
+  })
+
+  it('Gemini 4 Carbon exposes the official API model without invented aliases', () => {
+    const models = getModelsByPlatform('gemini')
+    expect(models).toContain('gemini-4-carbon')
+    expect(models).not.toContain('gemini-4-carbon-preview')
+    expect(getModelsByPlatform('antigravity')).toContain('gemini-4-carbon')
+    expect(getPresetMappingsByPlatform('antigravity')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ from: 'gemini-4-carbon', to: 'gemini-4-carbon' })
+    ]))
+    expect(buildModelMappingObject('whitelist', ['gemini-4-carbon'], [])).toEqual({
+      'gemini-4-carbon': 'gemini-4-carbon'
+    })
+  })
   it('whitelist 模式会忽略通配符条目', () => {
     const mapping = buildModelMappingObject('whitelist', ['claude-*', 'gemini-3.1-flash-image'], [])
     expect(mapping).toEqual({

@@ -93,11 +93,11 @@ func TestGPT62PricingPreservesOperatorCards(t *testing.T) {
 	require.Equal(t, 7e-6, *price.CacheCreation12hPricePerToken)
 }
 
-func TestGPT62DoesNotInheritGPT61SubscriptionLongContextExemption(t *testing.T) {
+func TestGPT62SubscriptionLongContextExemptionByCredential(t *testing.T) {
 	for _, model := range []string{"gpt-6.2-sol", "gpt-6.2-astra"} {
 		for _, typ := range []string{AccountTypeOAuth, AccountTypeSetupToken, AccountTypeAPIKey} {
-			require.False(t, openAIGPT61SolLongContextExempt(&Account{Platform: PlatformOpenAI, Type: typ},
-				&OpenAIForwardResult{Model: model, UpstreamModel: model}, UsageTokens{InputTokens: 300000}))
+			require.Equal(t, typ != AccountTypeAPIKey, openAISubscriptionLongContextExempt(&Account{Platform: PlatformOpenAI, Type: typ},
+				&OpenAIForwardResult{Model: model, UpstreamModel: model}))
 		}
 	}
 }

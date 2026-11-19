@@ -179,7 +179,7 @@ func TestUltrafastUsageRecordUsageCachedTokenMatrix(t *testing.T) {
 		ultrafastMultiplier        float64
 	}{
 		{"gpt-6-astra", 10e-6, 50e-6, 1e-6, 12.5e-6, 6},
-		{"gpt-6.1-sol", 2e-6, 10e-6, .1e-6, 2.5e-6, 2},
+		{"gpt-6.1-sol", 2e-6, 10e-6, .1e-6, 2.5e-6, 6},
 		{"gpt-6.1-terra", 1e-6, 5e-6, .05e-6, 1.25e-6, 2},
 	} {
 		for _, total := range []int{272000, 272001} {

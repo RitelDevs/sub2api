@@ -1,4 +1,8 @@
 export default {
+  "provider": "供應商關聯渠道",
+  "provider_url": "按網址歸入供應商",
+  "provider_import": "供應商匯入渠道",
+  "manual_unlinked": "已手動解除關聯",
   "confirmNewChannel": "確認創建此渠道：唯一標識創建後不可變；當前尚無綁定帳號。",
   "save": "保存",
   "cancel": "取消",
@@ -9,7 +13,7 @@ export default {
   "manage": "管理上游渠道",
   "accountChannel": "上游渠道歸屬",
   "accountManagement": "帳戶管理",
-  "history": "按當前顯式綁定統計，非歷史路由。未綁定帳號按有效 URL 自動歸類，無法識別時保留未知；不回寫歷史用量。",
+  "history": "此處管理當前渠道成員。變更歸屬不會改寫歷史用量；渠道歸屬不能證明請求的實際路由。",
   "search": "搜索唯一標識或名稱",
   "load": "讀取",
   "readLatest": "讀取最新版本",

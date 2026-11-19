@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"time"
 
@@ -99,16 +98,7 @@ type AstraGatewayRuntimeProvider interface {
 }
 
 func (s *AccountTestService) prepareAstraGatewaySource(ctx context.Context, id int64) error {
-	if s.cfg.AstraRouting(ctx).AutoQuality {
-		return s.prepareAutomaticGatewayBorrowSource(ctx, id)
-	}
-	account, err := s.accountRepo.GetByID(ctx, id)
-	if err != nil || account == nil || !account.IsOpenAIOAuthLike() || account.Status != StatusActive {
-		return errors.New("source_account_unavailable")
-	}
-	question := astraQuestion{Prompt: "Reply with OK only."}
-	_, err = s.runAstraQuestionHTTP(WithAstraSourceAcquisitionForAccount(ctx, id), id, question)
-	return err
+	return denyOpenAITurn("gateway_borrow_retired")
 }
 func (s *AccountTestService) AstraGatewayStatus(ctx context.Context) AstraGatewayRuntime {
 	settings := s.cfg.AstraRouting(ctx)
@@ -210,73 +200,7 @@ func (s *AccountTestService) AstraGatewayStatus(ctx context.Context) AstraGatewa
 	return result
 }
 func (s *AccountTestService) TestAstraGateway(ctx context.Context, action string, id int64, adminID int64, kinds ...string) (AstraGatewayTestResult, error) {
-	if !s.astraGatewayActionMu.TryLock() {
-		return AstraGatewayTestResult{}, errors.New("test_already_running")
-	}
-	defer s.astraGatewayActionMu.Unlock()
-	// Borrowing always uses the state probe; legacy test_kind values cannot bypass it.
-	kind := "state_probe"
-	question := astraQuestion{Prompt: "Reply with OK only."}
-
-	settings := s.cfg.AstraRouting(ctx)
-	result := AstraGatewayTestResult{Action: action, AccountID: id, CheckedAt: time.Now(), TestKind: kind, Expected: question.Expected}
-	var output string
-	start := time.Now()
-	var err error
-	switch action {
-	case "prepare":
-		if !settings.CookiePool.Enabled {
-			return result, errors.New("cookie_pool_disabled")
-		}
-		provider, ok := s.httpUpstream.(AstraGatewayRuntimeProvider)
-		if !ok {
-			return result, errors.New("runtime_unavailable")
-		}
-		err = provider.PrepareAstraGateway(ctx)
-		if err == nil {
-			for _, target := range settings.CookiePool.TargetAccountIDs {
-				if targetErr := s.verifyAstraGatewayTarget(ctx, target); targetErr != nil && err == nil {
-					err = targetErr
-				}
-			}
-		}
-		if err == nil {
-			if _, ready := astraTargetsReadyForModels(ctx, provider, settings.CookiePool); !ready {
-				err = errors.New("target_not_verified")
-			}
-		}
-	case "verify":
-		if !settings.CookiePool.Enabled || !slices.Contains(settings.CookiePool.TargetAccountIDs, id) {
-			return result, errors.New("target_not_configured")
-		}
-		err = s.verifyAstraGatewayTarget(ctx, id)
-	case "ws":
-		if !settings.WSSession.Enabled || !slices.Contains(settings.WSSession.AccountIDs, id) {
-			return result, errors.New("ws_account_not_configured")
-		}
-		output, err = s.testAstraWS(ctx, id, adminID, question)
-	default:
-		return result, errors.New("invalid_action")
-	}
-	result.OutputChars = len(output)
-	if question.HTML {
-		result.HTML = output
-	} else {
-		result.Answer = output
-	}
-	result.Success = err == nil
-	result.Reason = "success"
-	if question.HTML && err == nil {
-		result.Reason = "manual_review"
-	}
-	if err != nil {
-		result.Reason = err.Error()
-	}
-	result.DurationMS = time.Since(start).Milliseconds()
-	s.astraGatewayTestMu.Lock()
-	s.astraGatewayLastTest = &result
-	s.astraGatewayTestMu.Unlock()
-	return result, nil
+	return AstraGatewayTestResult{}, denyOpenAITurn("gateway_borrow_retired")
 }
 
 // Verify against target credentials without sending an additional business request.

@@ -80,6 +80,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		emailQueueSvc,
 		billingCacheSvc,
 		&service.UsageRecordWorkerPool{},
+		nil, // usageBillingLanes
 		&service.SubscriptionService{},
 		oauthSvc,
 		openAIOAuthSvc,
@@ -91,7 +92,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // controlledExperiment
 		nil, // accountOps
 		accountPerformanceSvc,
-		nil, // accountTokenGuard
+		nil, // openAIRelogin
 		nil, // accountTokenGuardV2
 		nil, // backupSvc
 		nil, // paymentOrderExpiry

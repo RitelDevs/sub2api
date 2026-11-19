@@ -2,8 +2,6 @@ package repository
 
 import (
 	"context"
-	"errors"
-	"io"
 	"net/http"
 	"testing"
 
@@ -48,81 +46,27 @@ func (p *unifiedAstraProvider) ApplyStoredAstraTarget(_ context.Context, h http.
 	return "http://verified-exit.invalid", func() { p.released++ }, nil
 }
 
-func TestUnifiedAstraAdapterForwardsOneCompleteBundleAndReleases(t *testing.T) {
-	for _, failure := range []bool{false, true} {
-		t.Run(map[bool]string{false: "complete", true: "transport_error"}[failure], func(t *testing.T) {
-			p := &unifiedAstraProvider{enabled: true}
-			cfg := &config.Config{}
-			cfg.Gateway.CodexGatewayPin = pinConfig()
-			calls := 0
-			s := &astraRoutingUpstream{cfg: cfg}
-			s.SetAstraTicketLifecycle(p)
-			s.delegate = gatewayPinDelegate{call: func(r *http.Request, proxy string, id int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
-				calls++
-				require.Equal(t, int64(300), id)
-				require.Equal(t, "http://verified-exit.invalid", proxy)
-				require.Equal(t, "verified-target-sse", r.Header.Get("X-Codex-Turn-State"))
-				require.Equal(t, "__cflb=target-lb; __oailb=target-route", r.Header.Get("Cookie"))
-				require.Equal(t, "Bearer target-token", r.Header.Get("Authorization"))
-				if failure {
-					return nil, errors.New("fixture failure")
-				}
-				return &http.Response{StatusCode: 200, Body: io.NopCloser(http.NoBody)}, nil
-			}}
-			// A stale legacy source must not be prepared or mixed with the bundle.
-			s.SetAstraGatewayPreparer(func(context.Context, int64) error { t.Fatal("legacy source collection ran"); return nil })
-			r := pinRequest(t)
-			r.Header.Set("Authorization", "Bearer target-token")
-			r.Header.Set("Cookie", "__cflb=old; __oailb=old")
-			response, err := s.Do(r, "old-exit", 300, 1)
-			if failure {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-				require.Zero(t, p.released)
-				require.NoError(t, response.Body.Close())
-				require.NoError(t, response.Body.Close())
-			}
-			require.Equal(t, 1, calls)
-			require.Equal(t, 1, p.calls)
-			require.Equal(t, 1, p.released)
-		})
-	}
-}
-
-func TestUnifiedAstraAdapterKeepsDiagnosticsSeparateFromForwarding(t *testing.T) {
-	p := &unifiedAstraProvider{enabled: true}
-	cfg := &config.Config{}
-	cfg.Gateway.CodexGatewayPin = pinConfig()
-	s := &astraRoutingUpstream{cfg: cfg, tickets: p, delegate: gatewayPinDelegate{call: func(*http.Request, string, int64, int, *tlsfingerprint.Profile) (*http.Response, error) {
-		return pinResponse(""), nil
-	}}}
-	require.NoError(t, s.PrepareAstraGateway(t.Context()))
-	require.Equal(t, 1, p.prepared)
-	require.NoError(t, s.VerifyAstraGatewayTarget(t.Context(), pinRequest(t), "", 300, 1))
-	require.Equal(t, 1, p.verified)
-	require.Equal(t, 1, s.AstraGatewaySnapshot(t.Context()).ReadyRoutes)
-	p.err = errors.New("target_probe_failed")
-	resp, err := s.Do(pinRequest(t), "", 300, 1)
-	consumeAffinityResponse(t, resp, err)
-	require.Zero(t, p.released)
-}
-
-func TestUnifiedAstraAdapterWebSocketReplacesWholeBundle(t *testing.T) {
+func TestUnifiedAstraDiagnosticsNeverUseProvider(t *testing.T) {
 	p := &unifiedAstraProvider{enabled: true}
 	cfg := &config.Config{}
 	cfg.Gateway.CodexGatewayPin = pinConfig()
 	s := &astraRoutingUpstream{cfg: cfg, tickets: p}
-	h := http.Header{}
-	h.Set("Cookie", "__cflb=old; __oailb=old")
-	route, proxy, release, err := s.CodexGatewayPinWSRequest(t.Context(), h, "old-exit", 300, 1)
+	ctx := t.Context()
+	require.Error(t, s.PrepareAstraGateway(ctx))
+	require.Error(t, s.VerifyAstraGatewayTarget(ctx, pinRequest(t), "fixed", 300, 1))
+	require.Zero(t, s.AstraGatewaySnapshot(ctx).ReadyRoutes)
+	h := http.Header{"Cookie": {"unrelated=keep"}}
+	before := h.Clone()
+	route, proxy, release, err := s.CodexGatewayPinWSRequest(ctx, h, "fixed", 300, 1)
 	require.NoError(t, err)
-	require.Empty(t, route, "caller must not overwrite the full bundle with a separate cookie")
-	require.Equal(t, "http://verified-exit.invalid", proxy)
-	require.Equal(t, "verified-target-websocket", h.Get("X-Codex-Turn-State"))
-	require.Equal(t, "__cflb=target-lb; __oailb=target-route", h.Get("Cookie"))
 	release()
-	require.Equal(t, 1, p.released)
+	require.Empty(t, route)
+	require.Equal(t, "fixed", proxy)
+	require.Equal(t, before, h)
+	require.Zero(t, p.calls)
+	require.Zero(t, p.prepared)
+	require.Zero(t, p.verified)
+	require.Zero(t, p.snapshots)
 }
 
 // A ready unified transport bundle cannot replace the strict account IQ path.
@@ -146,7 +90,7 @@ func TestUnifiedAstraAdapterCannotBypassRequiredBorrow(t *testing.T) {
 				business++
 				return pinResponse(""), nil
 			}}}
-			req := pinRequest(t)
+			req := pinRequest(t).WithContext(t.Context())
 			if mode == "service_scope" {
 				req = req.WithContext(service.WithGatewayBorrowRequiredModel(req.Context(), "gpt-6-astra"))
 			}

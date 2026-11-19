@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -138,6 +139,13 @@ func newAccountRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor, schedul
 func (r *accountRepository) Create(ctx context.Context, account *service.Account) error {
 	if scoped := r.accountTransactionScope(ctx); scoped != r {
 		return scoped.Create(ctx, account)
+	}
+	if account != nil && account.InitialAPIKeyDisposition != nil {
+		groups := make([]service.AccountGroup, 0, len(account.GroupIDs))
+		for _, id := range account.GroupIDs {
+			groups = append(groups, service.AccountGroup{GroupID: id, Priority: 50})
+		}
+		return r.CreateWithAccountGroups(ctx, account, groups)
 	}
 	client := r.client
 	var tx *dbent.Tx
@@ -353,6 +361,11 @@ func (r *accountRepository) CreateWithAccountGroups(ctx context.Context, account
 			builders = append(builders, builder)
 		}
 		if _, err := txClient.AccountGroup.CreateBulk(builders...).Save(ctx); err != nil {
+			return err
+		}
+	}
+	if policy := account.InitialAPIKeyDisposition; policy != nil && policy.Enabled && account.Type == service.AccountTypeOAuth {
+		if err := accounttimer.ScheduleOAuthDisposition(ctx, txClient, account.ID, account.Platform, *policy, time.Now().UTC()); err != nil {
 			return err
 		}
 	}
@@ -1086,6 +1099,18 @@ func lockAndMergeAccountProbeExtra(
 		}
 	}
 
+	if service.AccountPlatformChanging(ctx) {
+		// Quota accounting is account-wide and uses the latest locked row. Other
+		// old-platform runtime state must not be reintroduced by owner merges.
+		portable := service.AccountPlatformPortableExtra(currentExtra)
+		maps.Copy(portable, account.Extra)
+		for _, key := range []string{"quota_used", "quota_daily_used", "quota_daily_start", "quota_weekly_used", "quota_weekly_start"} {
+			if value, ok := currentExtra[key]; ok {
+				portable[key] = value
+			}
+		}
+		extra = portable
+	}
 	return extra, nil
 }
 
@@ -1831,9 +1856,37 @@ func (r *accountRepository) BatchUpdateLastUsed(ctx context.Context, updates map
 	caseSQL += " END, updated_at = NOW() WHERE id = ANY($" + itoa(idx) + ") AND deleted_at IS NULL"
 	args = append(args, pq.Array(ids))
 
-	_, err := r.sql.ExecContext(ctx, caseSQL, args...)
+	// 同一事务内先按 id 升序锁定目标行再更新，与计费合并事务锁多个账号行的顺序一致；
+	// 锁强度与更新非键列相同，不阻塞引用 accounts 的外键检查。
+	exec := r.sql
+	var tx *sql.Tx
+	if db, ok := r.sql.(*sql.DB); ok {
+		var err error
+		if tx, err = db.BeginTx(ctx, nil); err != nil {
+			return err
+		}
+		defer func() {
+			if tx != nil {
+				_ = tx.Rollback()
+			}
+		}()
+		exec = tx
+	}
+	rows, err := exec.QueryContext(ctx, "SELECT id FROM accounts WHERE id = ANY($1) AND deleted_at IS NULL ORDER BY id FOR NO KEY UPDATE", pq.Array(ids))
 	if err != nil {
 		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if _, err := exec.ExecContext(ctx, caseSQL, args...); err != nil {
+		return err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		tx = nil
 	}
 	lastUsedPayload := make(map[string]int64, len(updates))
 	for id, ts := range updates {
@@ -3187,8 +3240,11 @@ func (r *accountRepository) UpdateSessionWindow(ctx context.Context, id int64, s
 }
 
 func (r *accountRepository) UpdateSessionWindowEnd(ctx context.Context, id int64, end time.Time) error {
+	// Active five-hour quota reads must advance both bounds. Keeping the old
+	// start would charge the previous window against the new window's cost limit.
 	_, err := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
+		SetSessionWindowStart(end.Add(-5 * time.Hour)).
 		SetSessionWindowEnd(end).
 		Save(ctx)
 	if err != nil {

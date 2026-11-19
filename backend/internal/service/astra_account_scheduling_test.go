@@ -38,48 +38,17 @@ func TestAstraAccountSchedulingLifecycle(t *testing.T) {
 	repo := &astraSchedulingRepo{accounts: map[int64]*Account{299: source, 300: target}}
 	provider := &astraSetupUpstream{snapshot: AstraGatewayRuntime{Revision: "one"}}
 	svc := &AccountTestService{cfg: cfg, accountRepo: repo, httpUpstream: provider}
-	// No target pass: disable even if source has passed. No HTTP/preparation mock
-	// exists: accidentally probing would panic rather than silently pass.
-	svc.syncAstraAccountScheduling(t.Context())
-	require.False(t, target.Schedulable)
+	// Missing, ready, and stale historical evidence must never change either account.
+	for _, revision := range []string{"one", "old"} {
+		provider.snapshot.Revision = revision
+		for _, initial := range []bool{true,false} {
+			target.Schedulable = initial
+			svc.syncAstraAccountScheduling(t.Context())
+			require.Equal(t, initial, target.Schedulable)
+		}
+	}
 	require.True(t, source.Schedulable)
-	expiry := time.Now().Add(time.Minute)
-	provider.snapshot.Targets = []AstraRouteStatus{{AccountID: 300, State: "ready", Reason: "target_probe_passed", ExpiresAt: &expiry}}
-	svc.syncAstraAccountScheduling(t.Context())
-	require.True(t, target.Schedulable)
-	svc.syncAstraAccountScheduling(t.Context())
-	require.Len(t, repo.writes, 2, "unchanged state does not write")
-	expiry = time.Now().Add(-time.Second)
-	svc.syncAstraAccountScheduling(t.Context())
-	require.False(t, target.Schedulable, "expiry handled without a browser or request")
-	expiry = time.Now().Add(time.Minute)
-	svc.syncAstraAccountScheduling(t.Context())
-	require.True(t, target.Schedulable, "a new valid result restores scheduling")
-	provider.snapshot.Targets[0].State = "rejected"
-	svc.syncAstraAccountScheduling(t.Context())
-	require.False(t, target.Schedulable, "29/failure closes scheduling")
-	provider.snapshot.Targets[0].State = "ready"
-	settings.AccountScheduling = false
-	svc.syncAstraAccountScheduling(t.Context())
-	require.False(t, target.Schedulable, "off switch preserves current flags")
-	settings.AccountScheduling = true
-	provider.snapshot.Revision = "old"
-	svc.syncAstraAccountScheduling(t.Context())
-	require.False(t, target.Schedulable, "old configuration is not evidence")
-	provider.snapshot.Revision = "one"
-	repo.fail = true
-	svc.syncAstraAccountScheduling(t.Context())
-	require.False(t, target.Schedulable)
-	repo.fail = false
-	svc.syncAstraAccountScheduling(t.Context())
-	require.True(t, target.Schedulable, "failed writes retry")
-	target.Status = "error"
-	svc.syncAstraAccountScheduling(t.Context())
-	require.False(t, target.Schedulable, "inactive accounts never revived")
-	target.Status = StatusActive
-	settings.CookiePool.Enabled = false
-	svc.syncAstraAccountScheduling(t.Context())
-	require.False(t, target.Schedulable)
+	require.Empty(t, repo.writes)
 }
 
 func TestAstraSchedulingTogglePreservesRevisionAndSkipsPreparation(t *testing.T) {
@@ -166,12 +135,12 @@ func TestTicketPoolSchedulingSelfAndReuseWithoutCookiePool(t *testing.T) {
 				gateway.openaiCodexTickets.Store(openAICodexTicketKey(1, "gpt-6-astra"), &ticket)
 				svc := &AccountTestService{cfg: gateway.cfg, accountRepo: repo, openaiGatewayService: gateway}
 				svc.syncAstraAccountScheduling(t.Context())
-				require.Equal(t, []bool{true}, repo.ready)
+				require.Equal(t, []bool{acquisition == "self"}, repo.ready)
 				require.NoError(t, gateway.checkAstraSchedulingRoute(t.Context(), a))
 				ticket.ExpiresAt = time.Now().Add(-time.Second)
 				gateway.openaiCodexTickets.Store(openAICodexTicketKey(1, "gpt-6-astra"), &ticket)
 				svc.syncAstraAccountScheduling(t.Context())
-				require.Equal(t, []bool{true, false}, repo.ready)
+				require.Equal(t, []bool{acquisition == "self", false}, repo.ready)
 				require.NoError(t, gateway.checkAstraSchedulingRoute(t.Context(), a), "expired tickets must not synthesize a route 503")
 				settings.TicketPoolScheduling = false
 				svc.syncAstraAccountScheduling(t.Context())

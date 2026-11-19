@@ -1671,13 +1671,13 @@ def safe_worker_failure(exc: BaseException) -> str:
         return sanitize_error(raw)  # Whole-protocol validator; never generic prose.
     if raw.startswith("local_protocol_failed"):
         try:
-            from .openai_codex_oauth_adapter import STAGES, REASONS
+            from .openai_codex_oauth_adapter import valid_stage_reason
         except ImportError:
-            from openai_codex_oauth_adapter import STAGES, REASONS
+            from openai_codex_oauth_adapter import valid_stage_reason
         match = re.fullmatch(r"local_protocol_failed stage=([a-z_]+) reason=([a-z_]+) elapsed_ms=([0-9]{1,7}) exit=(-?[0-9]{1,3})", raw if len(raw) <= 256 else "")
         if match:
             stage, reason, elapsed, exit_code = match.groups()
-            if stage in STAGES and reason in REASONS and reason != "none" and int(elapsed) <= 3600000 and -255 <= int(exit_code) <= 255:
+            if valid_stage_reason(stage, reason) and reason != "none" and int(elapsed) <= 3600000 and -255 <= int(exit_code) <= 255:
                 return raw
         return "local protocol failed; invalid diagnostic omitted"
     if isinstance(exc, OperationWorkerError):

@@ -36,6 +36,10 @@ export class TlsFingerprintTransport {
     if (route === 'GET /api/auth/csrf') return Response.json({csrfToken: 'synthetic-csrf'}, {
       headers: {'set-cookie': '__Host-next-auth.csrf-token=synthetic-csrf; Path=/; Secure'},
     });
+    if (mode === 'email-prompt') {
+      if (route === 'POST /api/auth/signin/openai') return Response.json({url: 'https://auth.openai.com/email-verification'});
+      if (route === 'GET /email-verification') return html();
+    }
     if (route === 'POST /api/auth/signin/openai') return Response.json({url: 'https://auth.openai.com/log-in/password'});
     if (route === 'GET /log-in/password' || route === 'GET /log-in') return html();
     if (route === 'POST /api/accounts/password/verify') {

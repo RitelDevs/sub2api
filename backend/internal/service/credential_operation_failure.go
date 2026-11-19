@@ -286,6 +286,10 @@ func reauthOperationFailure(record *OpenAIOAuthReauthTaskRecord, diagnostic *Rea
 	}
 	stage, code := "unknown", credentialOperationText(record.Error)
 	if diagnostic != nil {
+		// Only the local worker can observe the interactive email prompt.
+		if diagnostic.Stage == "email_verification" && diagnostic.Reason == "email_otp_required" {
+			return &CredentialOperationFailure{Code: diagnostic.Reason, Category: diagnostic.Reason, Stage: diagnostic.Stage, Action: "complete_email_verification", OccurredAt: record.FinishedAt}
+		}
 		stage, code = diagnostic.Stage, credentialOperationCode(diagnostic.Reason)
 		if diagnostic.Reason == "http_rejected" {
 			switch {

@@ -28,7 +28,7 @@ func lockReloginBudget(ctx context.Context, tx *sql.Tx, id int64, owner string) 
 }
 
 func reconcileReloginBudgetTx(ctx context.Context, tx *sql.Tx, record *service.AccountTokenGuardV2Record, rules service.AccountTokenGuardV2Rules, probeAt time.Time, probeState string) (*service.AccountTokenGuardV2Record, bool, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT task.id, task.status, task.finished_at
+	rows, err := tx.QueryContext(ctx, `SELECT task.id, task.status, task.finished_at, COALESCE(task.error_message,'')
         FROM openai_oauth_reauth_tasks task
         WHERE task.account_id=$1 AND task.id >= $2 AND task.oauth_profile='codex'
           AND NOT EXISTS (SELECT 1 FROM openai_totp_rotations rotation WHERE rotation.task_id=task.id)
@@ -40,7 +40,7 @@ func reconcileReloginBudgetTx(ctx context.Context, tx *sql.Tx, record *service.A
 	for rows.Next() {
 		var outcome service.AccountReloginOutcome
 		var finished sql.NullTime
-		if err := rows.Scan(&outcome.ID, &outcome.Status, &finished); err != nil {
+		if err := rows.Scan(&outcome.ID, &outcome.Status, &finished, &outcome.Error); err != nil {
 			_ = rows.Close()
 			return nil, false, err
 		}

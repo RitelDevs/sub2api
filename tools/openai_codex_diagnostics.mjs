@@ -1,7 +1,7 @@
 // Private, bounded diagnostic snapshots. Never serialize exception text or URLs.
 import fs from 'node:fs';
 
-const stages = new Set(['starting', 'web_login', 'password_accepted', 'mfa_challenge',
+const stages = new Set(['starting', 'web_login', 'email_verification', 'password_accepted', 'mfa_challenge',
   'mfa_accepted', 'web_redirect', 'oauth_authorize', 'session_select',
   'workspace_select', 'callback_validation', 'token_exchange', 'oauth_output', 'completed']);
 const reasons = new Set(['none', 'protocol_error', 'password_rejected', 'totp_rejected',
@@ -109,6 +109,7 @@ export async function prepareCodexProxy(transport, proxy, validationUrl) {
 
 function reasonFor(error, stage) {
   try {
+    if (stage === 'email_verification' && error?.message === 'email_otp_required') return 'email_otp_required';
     if (reasons.has(error?.message)) return error.message;
     const text = typeof error?.message === 'string' ? error.message : '';
     if (text.startsWith('PROXY_RISK_CONTROL: ')) return 'security_check';

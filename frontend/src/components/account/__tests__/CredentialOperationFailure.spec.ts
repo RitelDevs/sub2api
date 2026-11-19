@@ -3,9 +3,19 @@ import { mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import View from '../CredentialOperationFailure.vue'
 import zh from '@/i18n/locales/zh/tokenGuardV2'
+import en from '@/i18n/locales/en/tokenGuardV2'
+import hk from '@/i18n/locales/zh-Hant-HK/tokenGuardV2'
 import { safeOperationFailure, safeDiagnosticToken } from '@/utils/credentialOperationFailure'
 
 describe('credential operation failure display', () => {
+  it.each(Object.entries({ en, zh, 'zh-Hant-HK': hk }))('renders the email prompt and manual action in %s', (locale, messages) => {
+    const failure = safeOperationFailure({ code: 'email_otp_required', stage: 'email_verification' })
+    expect(failure.action).toBe('complete_email_verification')
+    const view = mount(View, { props: { failure }, global: { plugins: [createI18n({ legacy: false, locale, messages: { [locale]: { tokenGuardV2: messages } } })] } })
+    expect(view.text()).toContain(messages.operationFailure.reasons.email_otp_required)
+    expect(view.text()).toContain(messages.operationFailure.actions.complete_email_verification)
+    expect(safeOperationFailure({ ...failure, stage: 'web_login' }).code).toBe('unknown')
+  })
   it('preserves fixed identity validation reasons and drops arbitrary identity text', () => {
     for (const reason of ['account_id_missing', 'account_id_mismatch', 'user_id_missing', 'email_missing', 'token_account_conflict', 'id_token_invalid']) {
       expect(safeDiagnosticToken(reason)).toBe(reason)

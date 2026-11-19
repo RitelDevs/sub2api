@@ -16,10 +16,10 @@ except ImportError:
     from openai_excel_oauth_adapter import replace_exact
 
 PINNED_PROTOCOL_BLOB = 'ff2db2507e401c29fa78705e44f5b40a3108a8c6'
-STAGES = frozenset(('starting', 'web_login', 'password_accepted', 'mfa_challenge',
+STAGES = frozenset(('starting', 'web_login', 'email_verification', 'password_accepted', 'mfa_challenge',
                    'mfa_accepted', 'web_redirect', 'oauth_authorize', 'session_select',
                    'workspace_select', 'callback_validation', 'token_exchange', 'oauth_output', 'completed'))
-REASONS = frozenset(('none', 'protocol_error', 'password_rejected', 'totp_rejected',
+REASONS = frozenset(('none', 'protocol_error', 'password_rejected', 'totp_rejected', 'email_otp_required',
                     'interaction_required', 'security_check', 'session_unavailable', 'workspace_mismatch',
                     'callback_missing', 'callback_invalid', 'callback_state_mismatch', 'pkce_invalid',
                     'token_exchange_failed', 'credentials_incomplete', 'transport_error', 'runtime_error',
@@ -27,6 +27,10 @@ REASONS = frozenset(('none', 'protocol_error', 'password_rejected', 'totp_reject
                     'phone_verification_required', 'account_deactivated', 'account_deleted', 'account_retired',
                     'requires_relogin', 'mfa_required', 'authorization_denied', 'rate_limited', 'service_error'))
 MAX_DIAGNOSTIC_BYTES = 1024
+
+
+def valid_stage_reason(stage, reason):
+    return stage in STAGES and reason in REASONS and (reason != 'email_otp_required' or stage == 'email_verification')
 
 
 def codex_source(source):
@@ -41,6 +45,23 @@ console.log = console.warn = console.error = () => {};''')
     source = replace_exact(source, '    await transport.prepareProxy(proxyTemplate, `${chatgptBase}/`);\n    if (args.addPassword)',
                            '    await prepareCodexProxy(transport, proxyTemplate, `${chatgptBase}/`);\n    if (args.addPassword)')
     for old, new in (
+        (r'''async function askEmailOtp(rl, client, authBase) {
+  for (;;) {
+    const value = await ask(rl, "Email OTP (r=resend, q=quit): ");
+    if (value.toLowerCase() === "q") throw new Error("Stopped before email OTP validation");
+    if (value.toLowerCase() === "r") {
+      console.log("[info] Resending email OTP...");
+      await resendEmailOtp(client, authBase);
+      console.log("[ok] Resend request accepted. Check inbox and spam folder.");
+      continue;
+    }
+    if (/^\d{6}$/.test(value)) return value;
+    console.log("[warn] Email OTP should be 6 digits, or type r to resend.");
+  }
+}''', '''async function askEmailOtp() {
+  protocolDiagnostic.mark("email_verification");
+  throw new Error("email_otp_required");
+}'''),
         ('    assertOk(result, `${method} ${url}`);', '    observeProtocolResponse(result);\n    assertOk(result, `${method} ${url}`);'),
         ('async function loginChatgptWeb(client, { chatgptBase, authBase, email, rl, password, totpSecret }) {',
          'async function loginChatgptWeb(client, { chatgptBase, authBase, email, rl, password, totpSecret }) {\n  protocolDiagnostic.mark("web_login");'),
@@ -171,7 +192,7 @@ def read_protocol_diagnostic(path: Path, task_id: int):
             raise ValueError
         if not isinstance(data['stage'], str) or data['stage'] not in STAGES:
             raise ValueError
-        if not isinstance(data['reason'], str) or data['reason'] not in REASONS:
+        if not isinstance(data['reason'], str) or not valid_stage_reason(data['stage'], data['reason']):
             raise ValueError
         if type(data['elapsed_ms']) is not int or not 0 <= data['elapsed_ms'] <= 3600000:
             raise ValueError
@@ -185,7 +206,7 @@ def protocol_failure(diagnostic, exit_code, elapsed_ms, reason=None):
     code = reason or (diagnostic['reason'] if diagnostic else 'process_failed')
     if code == 'none':
         code = 'process_failed'
-    if stage not in STAGES or code not in REASONS:
+    if not valid_stage_reason(stage, code):
         stage, code = 'starting', 'diagnostic_invalid'
     return (f'local_protocol_failed stage={stage} reason={code} '
             f'elapsed_ms={min(3600000, max(0, int(elapsed_ms)))} exit={max(-255, min(255, int(exit_code)))}')

@@ -460,7 +460,7 @@ func TestFrontendServer_ServeIndexHTML(t *testing.T) {
 
 				assert.Equal(t, http.StatusOK, w.Code)
 				assert.Contains(t, w.Header().Get("Content-Type"), "text/html")
-				assert.Equal(t, "no-cache", w.Header().Get("Cache-Control"))
+				assertNoStoreHTMLHeaders(t, w.Header())
 				assert.Contains(t, w.Body.String(), `<script nonce="`+nonce+`">`)
 				assert.Contains(t, w.Body.String(), "document.documentElement.classList.toggle('dark'")
 				assert.NotContains(t, w.Body.String(), NonceHTMLPlaceholder)

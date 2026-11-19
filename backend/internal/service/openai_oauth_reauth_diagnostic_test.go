@@ -69,6 +69,21 @@ func TestSessionStudioDiagnosticFailureUsesExistingTaskOwnership(t *testing.T) {
 	require.NotNil(t, safeReauthTask(repo.task).Diagnostic)
 }
 
+func TestLocalProtocolEmailPromptFailure(t *testing.T) {
+	const raw = "local_protocol_failed stage=email_verification reason=email_otp_required elapsed_ms=120 exit=1"
+	task := safeReauthTask(&OpenAIOAuthReauthTaskRecord{Error: raw, Status: "failed"})
+	require.Equal(t, raw, sanitizeReauthError(raw))
+	require.Equal(t, "email_otp_required", task.Diagnostic.Reason)
+	require.Equal(t, &CredentialOperationFailure{Code: "email_otp_required", Category: "email_otp_required", Stage: "email_verification", Action: "complete_email_verification"}, task.Failure)
+	for _, other := range []string{strings.Replace(raw, "email_verification", "web_login", 1), raw + " private", "email_otp_required",
+		"session_studio_failed stage=terminal_result reason=email_otp_required elapsed_ms=0 http_status=0"} {
+		task := safeReauthTask(&OpenAIOAuthReauthTaskRecord{Error: other, Status: "failed"})
+		require.Nil(t, task.Diagnostic)
+		require.Equal(t, "unknown", task.Failure.Code)
+	}
+	require.Equal(t, "unknown", credentialOperationEnvelope([]byte(`{"error":{"code":"email_otp_required"}}`)))
+}
+
 func TestLocalProtocolDiagnosticIsBoundedAndPrivate(t *testing.T) {
 	valid := "local_protocol_failed stage=callback_validation reason=callback_state_mismatch elapsed_ms=120 exit=1"
 	require.Equal(t, valid, sanitizeReauthError("WorkerError: "+valid))

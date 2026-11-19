@@ -39,7 +39,7 @@ func localProtocolError(raw string) (string, *ReauthDiagnostic, bool) {
 	exitCode, exitErr := strconv.Atoi(exit)
 	if !okStage || !okReason || !okElapsed || !okExit || elapsedErr != nil || exitErr != nil ||
 		elapsedMS < 0 || elapsedMS > 3600000 || exitCode < -255 || exitCode > 255 ||
-		!validLocalProtocolStage(stage) || !validLocalProtocolReason(reason) {
+		!validLocalProtocolStage(stage) || !validLocalProtocolReason(stage, reason) {
 		return invalid, nil, true
 	}
 	diagnostic := &ReauthDiagnostic{Stage: stage, Reason: reason, ElapsedMS: elapsedMS, ExitCode: &exitCode}
@@ -92,14 +92,17 @@ func sessionStudioError(raw string) (string, *ReauthDiagnostic, bool) {
 
 func validLocalProtocolStage(stage string) bool {
 	switch stage {
-	case "starting", "web_login", "password_accepted", "mfa_challenge", "mfa_accepted", "web_redirect",
+	case "starting", "web_login", "email_verification", "password_accepted", "mfa_challenge", "mfa_accepted", "web_redirect",
 		"oauth_authorize", "session_select", "workspace_select", "callback_validation", "token_exchange", "oauth_output", "completed":
 		return true
 	}
 	return false
 }
 
-func validLocalProtocolReason(reason string) bool {
+func validLocalProtocolReason(stage, reason string) bool {
+	if reason == "email_otp_required" {
+		return stage == "email_verification"
+	}
 	if reason != "unknown" && credentialOperationCode(reason) == reason {
 		return true
 	}

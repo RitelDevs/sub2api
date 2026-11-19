@@ -17,6 +17,7 @@ type AccountReloginOutcome struct {
 	ID         int64
 	Status     string
 	FinishedAt *time.Time
+	Error      string
 }
 
 type AccountReloginBudgetRepository interface {
@@ -83,6 +84,16 @@ func AdvanceAccountReloginBudgetPage(record AccountTokenGuardV2Record, outcomes 
 			break
 		}
 		record.LastCountedTaskID = outcome.ID
+		if outcome.Status == OpenAIOAuthReauthStatusFailed {
+			_, diagnostic, handled := localProtocolError(outcome.Error)
+			if !handled {
+				_, diagnostic, _ = sessionStudioError(outcome.Error)
+			}
+			// Stop only on an explicit, validated worker challenge, not a generic HTTP 403.
+			if diagnostic != nil && (diagnostic.Reason == "security_check" || diagnostic.Reason == "email_otp_required") {
+				record.AutoReloginExhausted = true
+			}
+		}
 		if outcome.Status == OpenAIOAuthReauthStatusFailed ||
 			(outcome.Status == OpenAIOAuthReauthStatusSucceeded && probeState == AccountTokenGuardV2ProbeAuth) {
 			record.ReloginFailStreak = min(record.ReloginFailStreak+1, 1000000)

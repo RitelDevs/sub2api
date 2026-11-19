@@ -73,6 +73,32 @@ func TestReloginBudgetFakeClockBoundariesAndIdempotence(t *testing.T) {
 	require.True(t, unchanged.AutoReloginExhausted, "raising a limit or a plain successful probe is not an explicit recovery")
 }
 
+func TestReloginBudgetStopsOnConfirmedInteractiveChallenge(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		message string
+		stop    bool
+	}{
+		{"local_protocol_failed stage=starting reason=security_check elapsed_ms=10 exit=1", true},
+		{"local_protocol_failed stage=email_verification reason=email_otp_required elapsed_ms=10 exit=1", true},
+		{"session_studio_failed stage=terminal_result reason=security_check elapsed_ms=10 http_status=0", true},
+		{"session_studio_failed stage=http_request reason=http_rejected elapsed_ms=10 http_status=403", false},
+		{"local_protocol_failed stage=starting reason=transport_error elapsed_ms=10 exit=1", false},
+		{"invalid diagnostic containing reason=security_check", false},
+	} {
+		t.Run(tc.message, func(t *testing.T) {
+			event := AccountReloginOutcome{ID: 1, Status: OpenAIOAuthReauthStatusFailed, FinishedAt: &now, Error: tc.message}
+			record, pending := AdvanceAccountReloginBudget(AccountTokenGuardV2Record{}, []AccountReloginOutcome{event}, budgetTestRules(), now, AccountTokenGuardV2ProbeAuth)
+			require.False(t, pending)
+			require.Equal(t, tc.stop, record.AutoReloginExhausted)
+			require.Equal(t, 1, record.ReloginFailStreak)
+			resumed := AccountTokenGuardV2Record{LastCountedTaskID: event.ID}
+			record, _ = AdvanceAccountReloginBudget(resumed, []AccountReloginOutcome{event}, budgetTestRules(), now, AccountTokenGuardV2ProbeAuth)
+			require.False(t, record.AutoReloginExhausted, "explicit resume must not re-pause on an old challenge")
+		})
+	}
+}
+
 func TestReloginBudgetRequiresPostSuccessProbeAndRejectsLateSuccess(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	rules := budgetTestRules()

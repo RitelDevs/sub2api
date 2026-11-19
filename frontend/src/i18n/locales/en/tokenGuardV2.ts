@@ -18,6 +18,7 @@ export default {
   "unknownTime": "Time not recorded",
   "automationBlocked": "Automation is restricted; review this failure and the re-login budget",
   "reasons": {
+    "email_otp_required": "Email verification code required",
     "phone_verification_required": "Phone verification required",
     "account_deactivated": "Account deactivated",
     "account_deleted": "Account deleted",
@@ -34,6 +35,7 @@ export default {
     "unknown": "Unknown failure; cause unconfirmed"
   },
   "actions": {
+    "complete_email_verification": "Complete email verification manually on the official site.",
     "complete_phone_verification": "Complete phone verification manually on the official site, then check credentials.",
     "contact_provider": "Confirm the account status through official support.",
     "reauthorize": "Check login settings and authorize again.",

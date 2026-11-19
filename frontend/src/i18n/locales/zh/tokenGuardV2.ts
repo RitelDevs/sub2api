@@ -18,6 +18,7 @@ export default {
   "unknownTime": "时间未记录",
   "automationBlocked": "自动操作受限，请查看本次异常与重登预算",
   "reasons": {
+    "email_otp_required": "需要邮箱验证码",
     "phone_verification_required": "需要手机号验证",
     "account_deactivated": "账号已被停用",
     "account_deleted": "账号已删除",
@@ -34,6 +35,7 @@ export default {
     "unknown": "未知异常，原因未确认"
   },
   "actions": {
+    "complete_email_verification": "请在官方网站手动完成邮箱验证。",
     "complete_phone_verification": "请在官方页面人工完成手机号验证，再检查凭证。",
     "contact_provider": "请通过官方渠道确认账号状态或联系支持。",
     "reauthorize": "请检查登录配置并重新授权。",

@@ -18,6 +18,7 @@ export default {
   "unknownTime": "時間未記錄",
   "automationBlocked": "自動操作受限，請查看本次異常與重登預算",
   "reasons": {
+    "email_otp_required": "需要電郵驗證碼",
     "phone_verification_required": "需要手機號驗證",
     "account_deactivated": "帳戶已被停用",
     "account_deleted": "帳戶已刪除",
@@ -34,6 +35,7 @@ export default {
     "unknown": "未知異常，原因未確認"
   },
   "actions": {
+    "complete_email_verification": "請在官方網站手動完成電郵驗證。",
     "complete_phone_verification": "請在官方頁面人工完成手機號驗證，再檢查憑證。",
     "contact_provider": "請通過官方渠道確認帳戶狀態或聯繫支援。",
     "reauthorize": "請檢查登入配置並重新授權。",

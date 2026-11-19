@@ -137,6 +137,27 @@ func TestReloginBudgetConcurrentObserversAndAutomaticInserts(t *testing.T) {
 	require.Error(t, guard.ResumeReloginBudget(ctx, id, rules, finished.Add(2*time.Hour)), "queued work still blocks explicit recovery")
 }
 
+func TestReloginBudgetSecurityCheckGatesNextAutomaticInsert(t *testing.T) {
+	ctx := context.Background()
+	guard, tasks, id, rules := newBudgetFixture(t)
+	task, err := tasks.CreateTask(ctx, id, "synthetic")
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	finishBudgetTask(t, task.ID, service.OpenAIOAuthReauthStatusFailed, now)
+	_, err = integrationDB.ExecContext(ctx, `UPDATE openai_oauth_reauth_tasks SET error_message=$2 WHERE id=$1`, task.ID,
+		"local_protocol_failed stage=starting reason=security_check elapsed_ms=10 exit=1")
+	require.NoError(t, err)
+	_, err = guard.CreateAutomaticRelogin(ctx, id, "synthetic", "budget-owner", rules, now.Add(time.Hour))
+	require.Equal(t, 409, infraerrors.Code(err))
+	stored, err := guard.GetAccount(ctx, id)
+	require.NoError(t, err)
+	require.True(t, stored.AutoReloginExhausted)
+	require.Equal(t, 1, stored.ReloginFailStreak)
+	var count int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM openai_oauth_reauth_tasks WHERE account_id=$1`, id).Scan(&count))
+	require.Equal(t, 1, count)
+}
+
 func TestReloginBudgetSavedCredentialsMustPassASeparateFreshProbe(t *testing.T) {
 	ctx := context.Background()
 	guard, tasks, id, rules := newBudgetFixture(t)

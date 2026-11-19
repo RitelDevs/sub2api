@@ -2358,14 +2358,14 @@ func normalizeCodexDelegationBootstrap(body []byte) ([]byte, bool) {
 	// 已有任务通过 send_message_to_thread 唤醒时会携带 previous_response_id；
 	// 完整历史回放还会带有已配对的调用项。delegation 仍是客户端注入的用户输入，
 	// 不属于这些历史调用的结果，因此允许它与可明确配对的历史上下文共存。
-	return normalizeCodexCallOutputBootstrap(body, isCodexDelegationCandidate, true)
+	return normalizeCodexCallOutputBootstrap(body, isCodexDelegationCandidate)
 }
 
 func normalizeCodexAutomationBootstrap(body []byte) ([]byte, bool) {
-	return normalizeCodexCallOutputBootstrap(body, isCodexAutomationCandidate, false)
+	return normalizeCodexCallOutputBootstrap(body, isCodexAutomationCandidate)
 }
 
-func normalizeCodexCallOutputBootstrap(body []byte, isCandidate func(map[string]any) bool, allowHistoricalContext bool) ([]byte, bool) {
+func normalizeCodexCallOutputBootstrap(body []byte, isCandidate func(map[string]any, bool) bool) ([]byte, bool) {
 	if !hasUniqueJSONMembers(body) {
 		return body, false
 	}
@@ -2375,11 +2375,13 @@ func normalizeCodexCallOutputBootstrap(body []byte, isCandidate func(map[string]
 	if err := decoder.Decode(&request); err != nil {
 		return body, false
 	}
+	hasHistory := false
 	if previousResponseID, exists := request["previous_response_id"]; exists {
 		value, ok := previousResponseID.(string)
-		if !ok || (!allowHistoricalContext && strings.TrimSpace(value) != "") {
+		if !ok {
 			return body, false
 		}
+		hasHistory = strings.TrimSpace(value) != ""
 	}
 	input, ok := request["input"].([]any)
 	if !ok {
@@ -2388,35 +2390,46 @@ func normalizeCodexCallOutputBootstrap(body []byte, isCandidate func(map[string]
 
 	// Responses built-ins follow the *_call / *_call_output naming convention,
 	// so classify by the wire type shape instead of maintaining an incomplete
-	// allowlist. Delegation may coexist with historical anchors only when their
-	// IDs make them unambiguous; automation retains the bootstrap-only boundary.
+	// allowlist. Validate historical anchors before selecting standalone inputs;
+	// bootstrap-only automation formats must not become instructions on replay.
 	for _, raw := range input {
 		item, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
 		typ := stringField(item, "type")
-		if isCandidate(item) {
+		if isCandidate(item, false) {
 			callIDValue, exists := item["call_id"]
 			callID, isString := callIDValue.(string)
-			if exists && (!isString || strings.TrimSpace(callID) != "") {
+			if exists && !isString {
 				return body, false
 			}
+			if strings.TrimSpace(callID) == "" {
+				continue
+			}
+		}
+		// A replay can also contain a standalone delegation from the other
+		// normalizer. Leave conversion to its owner, without blocking a heartbeat.
+		if _, bound := item["call_id"]; !bound && isCodexDelegationCandidate(item, false) {
+			hasHistory = true
 			continue
 		}
 		if typ == "item_reference" {
-			if allowHistoricalContext && strings.TrimSpace(stringField(item, "id")) != "" {
+			if strings.TrimSpace(stringField(item, "id")) != "" {
+				hasHistory = true
 				continue
 			}
 			return body, false
 		}
 		// Server-managed web search replays an item ID, not a client call ID.
 		// It must not disable delegation normalization on subsequent turns.
-		if allowHistoricalContext && typ == "web_search_call" && strings.TrimSpace(stringField(item, "id")) != "" {
+		if typ == "web_search_call" && strings.TrimSpace(stringField(item, "id")) != "" {
+			hasHistory = true
 			continue
 		}
 		if strings.HasSuffix(typ, "_call") || isResponsesCallOutputType(typ) {
-			if allowHistoricalContext && strings.TrimSpace(stringField(item, "call_id")) != "" {
+			if strings.TrimSpace(stringField(item, "call_id")) != "" {
+				hasHistory = true
 				continue
 			}
 			return body, false
@@ -2426,7 +2439,7 @@ func normalizeCodexCallOutputBootstrap(body []byte, isCandidate func(map[string]
 	changed := false
 	for i, raw := range input {
 		item, ok := raw.(map[string]any)
-		if !ok || !isCandidate(item) {
+		if !ok || strings.TrimSpace(stringField(item, "call_id")) != "" || !isCandidate(item, hasHistory) {
 			continue
 		}
 		output, ok := item["output"].(string)
@@ -2511,7 +2524,7 @@ func isResponsesCallOutputType(typ string) bool {
 	return strings.HasSuffix(typ, "_call_output") || typ == "tool_search_output"
 }
 
-func isCodexDelegationCandidate(item map[string]any) bool {
+func isCodexDelegationCandidate(item map[string]any, _ bool) bool {
 	if stringField(item, "type") != "function_call_output" ||
 		!isCodexDelegationTool(stringField(item, "namespace"), stringField(item, "name")) {
 		return false
@@ -2520,14 +2533,14 @@ func isCodexDelegationCandidate(item map[string]any) bool {
 	return ok && validCodexDelegationEnvelope(output)
 }
 
-func isCodexAutomationCandidate(item map[string]any) bool {
+func isCodexAutomationCandidate(item map[string]any, hasHistory bool) bool {
 	if stringField(item, "type") != "function_call_output" ||
 		stringField(item, "namespace") != "codex_app" ||
 		stringField(item, "name") != "automation_update" {
 		return false
 	}
 	output, ok := item["output"].(string)
-	return ok && (validCodexAutomationBootstrap(output) || validCodexAutomationHeartbeat(output))
+	return ok && ((!hasHistory && validCodexAutomationBootstrap(output)) || validCodexAutomationHeartbeat(output, hasHistory))
 }
 
 func stringField(item map[string]any, key string) string {
@@ -2605,7 +2618,7 @@ func validCodexAutomationLastRun(value string) bool {
 	return err == nil && runAt.UnixMilli() == epochMillis
 }
 
-func validCodexAutomationHeartbeat(value string) bool {
+func validCodexAutomationHeartbeat(value string, requireInstructions bool) bool {
 	decoder := xml.NewDecoder(strings.NewReader(value))
 	var rootSeen, automationIDSeen bool
 	var childName string
@@ -2618,7 +2631,7 @@ func validCodexAutomationHeartbeat(value string) bool {
 			id := fields["automation_id"]
 			timestamp, hasTime := fields["current_time_iso"]
 			instructions, hasInstructions := fields["instructions"]
-			if hasTime != hasInstructions {
+			if hasTime != hasInstructions || (requireInstructions && !hasInstructions) {
 				return false
 			}
 			if hasTime {

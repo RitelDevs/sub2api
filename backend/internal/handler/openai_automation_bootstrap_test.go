@@ -186,7 +186,7 @@ Read the reference index and report changes. Preserve A &amp; B and &lt;tags&gt;
 
 	for _, field := range []string{"automation_id", "current_time_iso", "instructions"} {
 		duplicate := strings.Replace(output, "</heartbeat>", "<"+field+">duplicate</"+field+"></heartbeat>", 1)
-		require.False(t, validCodexAutomationHeartbeat(duplicate), field)
+		require.False(t, validCodexAutomationHeartbeat(duplicate, false), field)
 	}
 	for _, invalid := range []string{
 		strings.Replace(output, "2026-09-09T00:33:34.775Z", "yesterday", 1),
@@ -195,15 +195,49 @@ Read the reference index and report changes. Preserve A &amp; B and &lt;tags&gt;
 		strings.Replace(output, "<instructions>", `<instructions source="other">`, 1),
 		strings.Replace(output, "<instructions>", "<instructions><nested/>", 1),
 	} {
-		require.False(t, validCodexAutomationHeartbeat(invalid))
+		require.False(t, validCodexAutomationHeartbeat(invalid, false))
 	}
 	for _, guarded := range [][]byte{
 		codexAutomationBootstrapBody(t, output, `,"call_id":"call-1"`),
-		[]byte(strings.Replace(string(body), `"model":"gpt-5"`, `"model":"gpt-5","previous_response_id":"resp-1"`, 1)),
 		[]byte(strings.Replace(string(body), `"namespace":"codex_app"`, `"namespace":"other"`, 1)),
 	} {
 		unchanged, normalized := normalizeCodexAutomationBootstrap(guarded)
 		require.False(t, normalized)
 		require.Equal(t, guarded, unchanged)
+	}
+}
+
+func TestHeartbeatOnHistoryReplay(t *testing.T) {
+	const heartbeat = "<heartbeat>\n  <automation_id>automation</automation_id>\n  <current_time_iso>2026-11-19T11:41:00Z</current_time_iso>\n  <instructions>Read the current watermark.</instructions>\n</heartbeat>"
+	for _, history := range []string{
+		`{"type":"function_call","call_id":"call_1"},{"type":"function_call_output","call_id":"call_1","namespace":"codex_app","name":"automation_update","output":"updated"}`,
+		`{"type":"web_search_call","id":"ws_1"}`,
+		`{"type":"item_reference","id":"msg_1"}`,
+		`{"type":"function_call_output","namespace":"codex_app","name":"send_message_to_thread","output":` + mustJSON(t, delegationEnvelope) + `}`,
+		"",
+	} {
+		body := codexAutomationBootstrapBody(t, heartbeat, "")
+		if history == "" {
+			body = []byte(strings.Replace(string(body), `"model":`, `"previous_response_id":"resp_1","model":`, 1))
+		} else {
+			body = []byte(strings.Replace(string(body), `"input":[`, `"input":[`+history+",", 1))
+		}
+		got, changed := normalizeCodexAutomationBootstrap(body)
+		require.True(t, changed)
+		items := gjson.GetBytes(got, "input").Array()
+		require.Equal(t, "user", items[len(items)-1].Get("role").String())
+		require.Equal(t, heartbeat, items[len(items)-1].Get("content.0.text").String())
+		before := gjson.GetBytes(body, "input").Array()
+		for i := 0; i < len(items)-1; i++ {
+			require.JSONEq(t, before[i].Raw, items[i].Raw)
+		}
+		require.Equal(t, gjson.GetBytes(body, "previous_response_id").Raw, gjson.GetBytes(got, "previous_response_id").Raw)
+	}
+	for _, output := range []string{"updated", "<heartbeat><automation_id>automation</automation_id></heartbeat>", codexAutomationBootstrap("automation", "never", "Read the watermark")} {
+		body := codexAutomationBootstrapBody(t, output, "")
+		body = []byte(strings.Replace(string(body), `"model":`, `"previous_response_id":"resp_1","model":`, 1))
+		got, changed := normalizeCodexAutomationBootstrap(body)
+		require.False(t, changed)
+		require.Equal(t, body, got)
 	}
 }

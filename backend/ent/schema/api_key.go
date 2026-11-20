@@ -48,6 +48,8 @@ func (APIKey) Fields() []ent.Field {
 		field.Int64("group_id").
 			Optional().
 			Nillable(),
+		field.Bool("force_openai_fast").
+			Default(false),
 		field.String("status").
 			MaxLen(20).
 			Default(domain.StatusActive),

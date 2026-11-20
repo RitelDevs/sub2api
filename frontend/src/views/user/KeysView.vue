@@ -476,6 +476,20 @@
           </fieldset>
         </div>
 
+        <div v-if="canForceOpenAIFast" class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label :for="`key-force-fast-${fieldLabelScope}`" class="input-label mb-0">{{ t('keys.forceOpenAIFast') }}</label>
+            <p :id="`key-force-fast-hint-${fieldLabelScope}`" class="input-hint">{{ t('keys.forceOpenAIFastHint') }}</p>
+          </div>
+          <Toggle
+            :id="`key-force-fast-${fieldLabelScope}`"
+            v-model="formData.force_openai_fast"
+            :aria-describedby="`key-force-fast-hint-${fieldLabelScope}`"
+            :disabled="submitting"
+            data-testid="key-force-openai-fast"
+          />
+        </div>
+
         <details :open="showEditModal" class="border-t border-gray-200 pt-4 dark:border-dark-700" data-testid="key-advanced-settings">
           <summary class="cursor-pointer font-medium">{{ kc.advanced }}</summary>
           <div class="mt-4 space-y-5">
@@ -1420,6 +1434,7 @@ const formData = ref({
   concurrency_limit: 0 as number | string,
   group_id: null as number | null,
   group_ids: [] as number[],
+  force_openai_fast: false,
   status: 'active' as 'active' | 'inactive',
   use_custom_key: false,
   custom_key: '',
@@ -1794,6 +1809,11 @@ const selectedFormGroupIDs = (): number[] => [...new Set([
   ...formData.value.group_ids.filter(id => id !== formData.value.group_id)
 ])]
 
+const canForceOpenAIFast = computed(() => {
+  const ids = selectedFormGroupIDs()
+  return groups.value.some(group => ids.includes(group.id) && group.platform === 'openai')
+})
+
 const editKey = (key: ApiKey) => {
   selectedKey.value = key
   const hasIPRestriction = (key.ip_whitelist?.length > 0) || (key.ip_blacklist?.length > 0)
@@ -1803,6 +1823,7 @@ const editKey = (key: ApiKey) => {
     concurrency_limit: key.concurrency_limit ?? 0,
     group_id: key.group_id,
     group_ids: (key.group_ids ?? []).filter(id => id !== key.group_id),
+    force_openai_fast: key.force_openai_fast ?? false,
     status: key.status === 'quota_exhausted' || key.status === 'expired' ? 'inactive' : key.status,
     use_custom_key: false,
     custom_key: '',
@@ -1976,6 +1997,9 @@ const handleSubmit = async () => {
       if (shouldSubmitEditStatus(selectedKey.value, formData.value.status)) {
         updates.status = formData.value.status
       }
+      if (canForceOpenAIFast.value && formData.value.force_openai_fast !== (selectedKey.value.force_openai_fast ?? false)) {
+        updates.force_openai_fast = formData.value.force_openai_fast
+      }
       await keysAPI.update(selectedKey.value.id, updates)
       appStore.showSuccess(t('keys.keyUpdatedSuccess'))
     } else {
@@ -1990,7 +2014,8 @@ const handleSubmit = async () => {
         expiresInDays,
         rateLimitData,
         concurrencyLimit,
-        selectedFormGroupIDs()
+        selectedFormGroupIDs(),
+        canForceOpenAIFast.value && formData.value.force_openai_fast ? true : undefined
       )
       // Use only the returned persisted object; keep its real group capability metadata.
       connectionKey.value = { ...createdKey, group: createdKey.group || groups.value.find((group) => group.id === createdKey.group_id) || undefined }
@@ -2046,6 +2071,7 @@ const closeModals = () => {
     concurrency_limit: 0,
     group_id: null,
     group_ids: [],
+    force_openai_fast: false,
     status: 'active',
     use_custom_key: false,
     custom_key: '',

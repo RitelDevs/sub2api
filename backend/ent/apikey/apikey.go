@@ -31,6 +31,8 @@ const (
 	FieldName = "name"
 	// FieldGroupID holds the string denoting the group_id field in the database.
 	FieldGroupID = "group_id"
+	// FieldForceOpenaiFast holds the string denoting the force_openai_fast field in the database.
+	FieldForceOpenaiFast = "force_openai_fast"
 	// FieldStatus holds the string denoting the status field in the database.
 	FieldStatus = "status"
 	// FieldModelMapping holds the string denoting the model_mapping field in the database.
@@ -113,6 +115,7 @@ var Columns = []string{
 	FieldKey,
 	FieldName,
 	FieldGroupID,
+	FieldForceOpenaiFast,
 	FieldStatus,
 	FieldModelMapping,
 	FieldReasoningEffort,
@@ -167,6 +170,8 @@ var (
 	KeyValidator func(string) error
 	// NameValidator is a validator for the "name" field. It is called by the builders before save.
 	NameValidator func(string) error
+	// DefaultForceOpenaiFast holds the default value on creation for the "force_openai_fast" field.
+	DefaultForceOpenaiFast bool
 	// DefaultStatus holds the default value on creation for the "status" field.
 	DefaultStatus string
 	// StatusValidator is a validator for the "status" field. It is called by the builders before save.
@@ -247,6 +252,11 @@ func ByName(opts ...sql.OrderTermOption) OrderOption {
 // ByGroupID orders the results by the group_id field.
 func ByGroupID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldGroupID, opts...).ToFunc()
+}
+
+// ByForceOpenaiFast orders the results by the force_openai_fast field.
+func ByForceOpenaiFast(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldForceOpenaiFast, opts...).ToFunc()
 }
 
 // ByStatus orders the results by the status field.

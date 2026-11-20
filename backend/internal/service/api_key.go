@@ -45,6 +45,7 @@ type APIKey struct {
 	// Mapping is an exact, single-step rewrite; empty policy preserves the request.
 	ModelMapping      map[string]string
 	ReasoningEffort   string
+	ForceOpenAIFast   bool
 	AllowLongContext  bool // Administrator-managed; new and migrated keys default to true.
 	ContextTokenLimit int  // Positive overrides the legacy policy; zero inherits it.
 

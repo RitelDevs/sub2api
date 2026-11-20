@@ -14,6 +14,7 @@ type APIKeyAuthSnapshot struct {
 	Status            string                   `json:"status"`
 	ModelMapping      map[string]string        `json:"model_mapping,omitempty"`
 	ReasoningEffort   string                   `json:"reasoning_effort,omitempty"`
+	ForceOpenAIFast   bool                     `json:"force_openai_fast,omitempty"`
 	ContextTokenLimit int                      `json:"context_token_limit"`
 	AllowLongContext  bool                     `json:"allow_long_context"`
 	IPWhitelist       []string                 `json:"ip_whitelist,omitempty"`

@@ -142,6 +142,7 @@ type APIKeyMutation struct {
 	addconcurrency_limit   *int
 	key                    *string
 	name                   *string
+	force_openai_fast      *bool
 	status                 *string
 	model_mapping          *map[string]string
 	reasoning_effort       *string
@@ -616,6 +617,42 @@ func (m *APIKeyMutation) GroupIDCleared() bool {
 func (m *APIKeyMutation) ResetGroupID() {
 	m.group = nil
 	delete(m.clearedFields, apikey.FieldGroupID)
+}
+
+// SetForceOpenaiFast sets the "force_openai_fast" field.
+func (m *APIKeyMutation) SetForceOpenaiFast(b bool) {
+	m.force_openai_fast = &b
+}
+
+// ForceOpenaiFast returns the value of the "force_openai_fast" field in the mutation.
+func (m *APIKeyMutation) ForceOpenaiFast() (r bool, exists bool) {
+	v := m.force_openai_fast
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldForceOpenaiFast returns the old "force_openai_fast" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldForceOpenaiFast(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldForceOpenaiFast is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldForceOpenaiFast requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldForceOpenaiFast: %w", err)
+	}
+	return oldValue.ForceOpenaiFast, nil
+}
+
+// ResetForceOpenaiFast resets all changes to the "force_openai_fast" field.
+func (m *APIKeyMutation) ResetForceOpenaiFast() {
+	m.force_openai_fast = nil
 }
 
 // SetStatus sets the "status" field.
@@ -1783,7 +1820,7 @@ func (m *APIKeyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *APIKeyMutation) Fields() []string {
-	fields := make([]string, 0, 28)
+	fields := make([]string, 0, 29)
 	if m.created_at != nil {
 		fields = append(fields, apikey.FieldCreatedAt)
 	}
@@ -1807,6 +1844,9 @@ func (m *APIKeyMutation) Fields() []string {
 	}
 	if m.group != nil {
 		fields = append(fields, apikey.FieldGroupID)
+	}
+	if m.force_openai_fast != nil {
+		fields = append(fields, apikey.FieldForceOpenaiFast)
 	}
 	if m.status != nil {
 		fields = append(fields, apikey.FieldStatus)
@@ -1892,6 +1932,8 @@ func (m *APIKeyMutation) Field(name string) (ent.Value, bool) {
 		return m.Name()
 	case apikey.FieldGroupID:
 		return m.GroupID()
+	case apikey.FieldForceOpenaiFast:
+		return m.ForceOpenaiFast()
 	case apikey.FieldStatus:
 		return m.Status()
 	case apikey.FieldModelMapping:
@@ -1957,6 +1999,8 @@ func (m *APIKeyMutation) OldField(ctx context.Context, name string) (ent.Value, 
 		return m.OldName(ctx)
 	case apikey.FieldGroupID:
 		return m.OldGroupID(ctx)
+	case apikey.FieldForceOpenaiFast:
+		return m.OldForceOpenaiFast(ctx)
 	case apikey.FieldStatus:
 		return m.OldStatus(ctx)
 	case apikey.FieldModelMapping:
@@ -2061,6 +2105,13 @@ func (m *APIKeyMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetGroupID(v)
+		return nil
+	case apikey.FieldForceOpenaiFast:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetForceOpenaiFast(v)
 		return nil
 	case apikey.FieldStatus:
 		v, ok := value.(string)
@@ -2454,6 +2505,9 @@ func (m *APIKeyMutation) ResetField(name string) error {
 		return nil
 	case apikey.FieldGroupID:
 		m.ResetGroupID()
+		return nil
+	case apikey.FieldForceOpenaiFast:
+		m.ResetForceOpenaiFast()
 		return nil
 	case apikey.FieldStatus:
 		m.ResetStatus()

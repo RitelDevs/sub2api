@@ -290,7 +290,7 @@ func (p *qqBotSiteAI) bindableGroup(ctx context.Context, user *User, id int64) (
 	if user == nil || !user.IsActive() {
 		return nil, ErrUserNotFound
 	}
-	if err := p.keys.validateAPIKeyGroups(ctx, user, []int64{id}); err != nil {
+	if _, err := p.keys.validateAPIKeyGroups(ctx, user, []int64{id}); err != nil {
 		return nil, err
 	}
 	group, err := p.keys.groupRepo.GetByID(ctx, id)

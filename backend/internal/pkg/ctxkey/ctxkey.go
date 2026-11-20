@@ -5,6 +5,9 @@ package ctxkey
 type Key string
 
 const (
+	// APIKeyForceOpenAIFast is the authenticated Key's preference for this request.
+	APIKeyForceOpenAIFast Key = "ctx_api_key_force_openai_fast"
+
 	// ForcePlatform 强制平台（用于 /antigravity 路由），由 middleware.ForcePlatform 设置
 	ForcePlatform Key = "ctx_force_platform"
 

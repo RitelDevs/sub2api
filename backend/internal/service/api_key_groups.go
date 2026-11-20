@@ -15,6 +15,8 @@ import (
 
 const maxAPIKeyGroups = 20
 
+var errAPIKeyFastRequiresOpenAIGroup = infraerrors.BadRequest("API_KEY_FAST_REQUIRES_OPENAI_GROUP", "Force Fast requires an OpenAI group")
+
 // APIKeyGroupAvailability describes a snapshot, not a reservation. The selected
 // group's normal admission and account scheduler still own the final checks.
 type APIKeyGroupAvailability struct {
@@ -63,17 +65,41 @@ func normalizeAPIKeyGroupIDs(primary *int64, ids []int64) ([]int64, error) {
 	return append([]int64(nil), ids...), nil
 }
 
-func (s *APIKeyService) validateAPIKeyGroups(ctx context.Context, user *User, ids []int64) error {
+func (s *APIKeyService) validateAPIKeyGroups(ctx context.Context, user *User, ids []int64) (bool, error) {
+	var hasOpenAIGroup bool
 	for _, id := range ids {
 		group, err := s.groupRepo.GetByID(ctx, id)
 		if err != nil {
-			return fmt.Errorf("get group: %w", err)
+			return false, fmt.Errorf("get group: %w", err)
 		}
 		if (len(ids) > 1 && !group.IsActive()) || !s.canUserBindGroup(ctx, user, group) {
-			return ErrGroupNotAllowed
+			return false, ErrGroupNotAllowed
+		}
+		hasOpenAIGroup = hasOpenAIGroup || group.Platform == PlatformOpenAI
+	}
+	return hasOpenAIGroup, nil
+}
+
+// apiKeyHasOpenAIGroup checks eligibility for a preference-only edit, where
+// group bindings are retained and therefore not validated again.
+func (s *APIKeyService) apiKeyHasOpenAIGroup(ctx context.Context, key *APIKey) (bool, error) {
+	for _, id := range key.ConfiguredGroupIDs() {
+		group := key.Group
+		if group == nil || group.ID != id {
+			var err error
+			group, err = s.groupRepo.GetByIDLite(ctx, id)
+			if errors.Is(err, ErrGroupNotFound) {
+				continue
+			}
+			if err != nil {
+				return false, fmt.Errorf("get group: %w", err)
+			}
+		}
+		if group.Platform == PlatformOpenAI {
+			return true, nil
 		}
 	}
-	return nil
+	return false, nil
 }
 
 // PinAPIKeyGroup preserves a request's chosen billing identity across queue/WS

@@ -95,6 +95,11 @@ func GroupID(v int64) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldGroupID, v))
 }
 
+// ForceOpenaiFast applies equality check predicate on the "force_openai_fast" field. It's identical to ForceOpenaiFastEQ.
+func ForceOpenaiFast(v bool) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldForceOpenaiFast, v))
+}
+
 // Status applies equality check predicate on the "status" field. It's identical to StatusEQ.
 func Status(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldStatus, v))
@@ -528,6 +533,16 @@ func GroupIDIsNil() predicate.APIKey {
 // GroupIDNotNil applies the NotNil predicate on the "group_id" field.
 func GroupIDNotNil() predicate.APIKey {
 	return predicate.APIKey(sql.FieldNotNull(FieldGroupID))
+}
+
+// ForceOpenaiFastEQ applies the EQ predicate on the "force_openai_fast" field.
+func ForceOpenaiFastEQ(v bool) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldForceOpenaiFast, v))
+}
+
+// ForceOpenaiFastNEQ applies the NEQ predicate on the "force_openai_fast" field.
+func ForceOpenaiFastNEQ(v bool) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldForceOpenaiFast, v))
 }
 
 // StatusEQ applies the EQ predicate on the "status" field.

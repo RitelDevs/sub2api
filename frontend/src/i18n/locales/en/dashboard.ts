@@ -325,6 +325,8 @@ export default {
     customKeyInvalidChars: 'Custom key can only contain letters, numbers, underscores, and hyphens',
     customKeyRequired: 'Please enter a custom key',
     ipRestriction: 'IP Restriction',
+    forceOpenAIFast: 'Force Fast (OpenAI)',
+    forceOpenAIFastHint: 'Fast may cost more and is subject to administrator policy.',
     ipWhitelist: 'IP Whitelist',
     ipWhitelistPlaceholder: '192.168.1.100\n10.0.0.0/8',
     ipWhitelistHint: 'One IP or CIDR per line. Only these IPs can use this key when set.',

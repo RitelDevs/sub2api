@@ -113,6 +113,20 @@ func (_c *APIKeyCreate) SetNillableGroupID(v *int64) *APIKeyCreate {
 	return _c
 }
 
+// SetForceOpenaiFast sets the "force_openai_fast" field.
+func (_c *APIKeyCreate) SetForceOpenaiFast(v bool) *APIKeyCreate {
+	_c.mutation.SetForceOpenaiFast(v)
+	return _c
+}
+
+// SetNillableForceOpenaiFast sets the "force_openai_fast" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableForceOpenaiFast(v *bool) *APIKeyCreate {
+	if v != nil {
+		_c.SetForceOpenaiFast(*v)
+	}
+	return _c
+}
+
 // SetStatus sets the "status" field.
 func (_c *APIKeyCreate) SetStatus(v string) *APIKeyCreate {
 	_c.mutation.SetStatus(v)
@@ -449,6 +463,10 @@ func (_c *APIKeyCreate) defaults() error {
 		v := apikey.DefaultConcurrencyLimit
 		_c.mutation.SetConcurrencyLimit(v)
 	}
+	if _, ok := _c.mutation.ForceOpenaiFast(); !ok {
+		v := apikey.DefaultForceOpenaiFast
+		_c.mutation.SetForceOpenaiFast(v)
+	}
 	if _, ok := _c.mutation.Status(); !ok {
 		v := apikey.DefaultStatus
 		_c.mutation.SetStatus(v)
@@ -538,6 +556,9 @@ func (_c *APIKeyCreate) check() error {
 		if err := apikey.NameValidator(v); err != nil {
 			return &ValidationError{Name: "name", err: fmt.Errorf(`ent: validator failed for field "APIKey.name": %w`, err)}
 		}
+	}
+	if _, ok := _c.mutation.ForceOpenaiFast(); !ok {
+		return &ValidationError{Name: "force_openai_fast", err: errors.New(`ent: missing required field "APIKey.force_openai_fast"`)}
 	}
 	if _, ok := _c.mutation.Status(); !ok {
 		return &ValidationError{Name: "status", err: errors.New(`ent: missing required field "APIKey.status"`)}
@@ -646,6 +667,10 @@ func (_c *APIKeyCreate) createSpec() (*APIKey, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Name(); ok {
 		_spec.SetField(apikey.FieldName, field.TypeString, value)
 		_node.Name = value
+	}
+	if value, ok := _c.mutation.ForceOpenaiFast(); ok {
+		_spec.SetField(apikey.FieldForceOpenaiFast, field.TypeBool, value)
+		_node.ForceOpenaiFast = value
 	}
 	if value, ok := _c.mutation.Status(); ok {
 		_spec.SetField(apikey.FieldStatus, field.TypeString, value)
@@ -928,6 +953,18 @@ func (u *APIKeyUpsert) UpdateGroupID() *APIKeyUpsert {
 // ClearGroupID clears the value of the "group_id" field.
 func (u *APIKeyUpsert) ClearGroupID() *APIKeyUpsert {
 	u.SetNull(apikey.FieldGroupID)
+	return u
+}
+
+// SetForceOpenaiFast sets the "force_openai_fast" field.
+func (u *APIKeyUpsert) SetForceOpenaiFast(v bool) *APIKeyUpsert {
+	u.Set(apikey.FieldForceOpenaiFast, v)
+	return u
+}
+
+// UpdateForceOpenaiFast sets the "force_openai_fast" field to the value that was provided on create.
+func (u *APIKeyUpsert) UpdateForceOpenaiFast() *APIKeyUpsert {
+	u.SetExcluded(apikey.FieldForceOpenaiFast)
 	return u
 }
 
@@ -1428,6 +1465,20 @@ func (u *APIKeyUpsertOne) UpdateGroupID() *APIKeyUpsertOne {
 func (u *APIKeyUpsertOne) ClearGroupID() *APIKeyUpsertOne {
 	return u.Update(func(s *APIKeyUpsert) {
 		s.ClearGroupID()
+	})
+}
+
+// SetForceOpenaiFast sets the "force_openai_fast" field.
+func (u *APIKeyUpsertOne) SetForceOpenaiFast(v bool) *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetForceOpenaiFast(v)
+	})
+}
+
+// UpdateForceOpenaiFast sets the "force_openai_fast" field to the value that was provided on create.
+func (u *APIKeyUpsertOne) UpdateForceOpenaiFast() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateForceOpenaiFast()
 	})
 }
 
@@ -2150,6 +2201,20 @@ func (u *APIKeyUpsertBulk) UpdateGroupID() *APIKeyUpsertBulk {
 func (u *APIKeyUpsertBulk) ClearGroupID() *APIKeyUpsertBulk {
 	return u.Update(func(s *APIKeyUpsert) {
 		s.ClearGroupID()
+	})
+}
+
+// SetForceOpenaiFast sets the "force_openai_fast" field.
+func (u *APIKeyUpsertBulk) SetForceOpenaiFast(v bool) *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetForceOpenaiFast(v)
+	})
+}
+
+// UpdateForceOpenaiFast sets the "force_openai_fast" field to the value that was provided on create.
+func (u *APIKeyUpsertBulk) UpdateForceOpenaiFast() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateForceOpenaiFast()
 	})
 }
 

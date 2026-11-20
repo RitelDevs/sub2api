@@ -1226,7 +1226,7 @@ describe('user KeysView column settings', () => {
     await wrapper.get('#key-form').trigger('submit')
     await flushPromises()
     expect(createKey).toHaveBeenCalledWith('new-key', 42, undefined, [], [], 0, undefined,
-      { rate_limit_5h: 0, rate_limit_1d: 0, rate_limit_7d: 0 }, Number(input), [42])
+      { rate_limit_5h: 0, rate_limit_1d: 0, rate_limit_7d: 0 }, Number(input), [42], undefined)
     await getButtonByText(wrapper, 'Create API Key').trigger('click')
     expect((wrapper.get('#key-concurrency-limit').element as HTMLInputElement).value).toBe('0')
   })
@@ -1308,7 +1308,7 @@ describe('user KeysView column settings', () => {
     await wrapper.get('#key-form').trigger('submit')
     await flushPromises()
     expect(createKey).toHaveBeenCalledWith('new-key', 42, undefined, [], [], 0, undefined,
-      { rate_limit_5h: 0, rate_limit_1d: 0, rate_limit_7d: 0 }, 2, [42])
+      { rate_limit_5h: 0, rate_limit_1d: 0, rate_limit_7d: 0 }, 2, [42], undefined)
   })
 
   it('distinguishes unknown statistics and policy from zero and still permits saving', async () => {
@@ -1933,6 +1933,34 @@ describe('user KeysView column settings', () => {
       expect(wrapper.get<HTMLInputElement>('input[value="domestic"]').element.checked).toBe(true)
       expect(wrapper.get<HTMLInputElement>('input[value="anthropic"]').element.disabled).toBe(true)
       expect(optionIds(wrapper)).toEqual([6])
+    })
+
+    it('defaults Force Fast off and submits the opt-in for an OpenAI key', async () => {
+      const wrapper = await openCreate()
+      const toggle = () => wrapper.find('[data-testid="key-force-openai-fast"]')
+      await groupSelect(wrapper).vm.$emit('update:modelValue', 1)
+      expect(toggle().exists()).toBe(false)
+      await chooseProvider(wrapper, 'openai')
+      await groupSelect(wrapper).vm.$emit('update:modelValue', 2)
+      expect(toggle().attributes('aria-checked')).toBe('false')
+      await toggle().trigger('click')
+      await wrapper.get('[data-testid="key-form-name"]').setValue('Fast key')
+      vi.mocked(keysAPI.create).mockResolvedValue({ ...createApiKey(), group_id: 2, force_openai_fast: true })
+      await wrapper.get('#key-form').trigger('submit')
+      await flushPromises()
+      expect(vi.mocked(keysAPI.create).mock.calls[0].slice(-2)).toEqual([[2], true])
+    })
+
+    it('restores and saves an explicit opt-out for an existing OpenAI key', async () => {
+      setKeys({ ...createApiKey(), group_id: 2, group: availableGroups[1] as Group, force_openai_fast: true })
+      const wrapper = await mountView()
+      await getButtonByText(wrapper, 'common.edit').trigger('click')
+      const toggle = wrapper.get('[data-testid="key-force-openai-fast"]')
+      expect(toggle.attributes('aria-checked')).toBe('true')
+      await toggle.trigger('click')
+      await wrapper.get('#key-form').trigger('submit')
+      await flushPromises()
+      expect(updateKey).toHaveBeenCalledWith(1, expect.objectContaining({ force_openai_fast: false }))
     })
 
     it('shows the empty state when no groups are available', async () => {

@@ -33,6 +33,7 @@ func NewAPIKeyHandler(apiKeyService *service.APIKeyService) *APIKeyHandler {
 
 // CreateAPIKeyRequest represents the create API key request payload
 type CreateAPIKeyRequest struct {
+	ForceOpenAIFast  bool     `json:"force_openai_fast"`
 	ConcurrencyLimit int      `json:"concurrency_limit" binding:"gte=0"`
 	Name             string   `json:"name" binding:"required"`
 	GroupIDs         []int64  `json:"group_ids"`
@@ -51,6 +52,7 @@ type CreateAPIKeyRequest struct {
 
 // UpdateAPIKeyRequest represents the update API key request payload
 type UpdateAPIKeyRequest struct {
+	ForceOpenAIFast  *bool     `json:"force_openai_fast"`
 	ConcurrencyLimit *int      `json:"concurrency_limit" binding:"omitempty,gte=0"`
 	Name             string    `json:"name"`
 	GroupIDs         *[]int64  `json:"group_ids"`
@@ -203,6 +205,7 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 
 	svcReq := service.CreateAPIKeyRequest{
 		ConcurrencyLimit: req.ConcurrencyLimit,
+		ForceOpenAIFast:  req.ForceOpenAIFast,
 		Name:             req.Name,
 		GroupIDs:         req.GroupIDs,
 		GroupID:          req.GroupID,
@@ -274,6 +277,7 @@ func (h *APIKeyHandler) Update(c *gin.Context) {
 	}
 	svcReq.GroupIDs = req.GroupIDs
 	svcReq.GroupID = req.GroupID
+	svcReq.ForceOpenAIFast = req.ForceOpenAIFast
 	if req.Status != "" {
 		svcReq.Status = &req.Status
 	}

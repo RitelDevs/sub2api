@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -53,6 +54,9 @@ func nextWithAPIKeyAdmissionOwner(c *gin.Context, apiKeyService *service.APIKeyS
 // owner/revalidation lifecycle preserves revocation and key-slot cancellation
 // without introducing the primary-backed API Key middleware.
 func nextWithAPIKeyAdmissionLookup(c *gin.Context, lookup func(context.Context, string) (*service.APIKey, error), credential string, trustedClientIP string, key *service.APIKey, googleStyle bool) {
+	if key.ForceOpenAIFast {
+		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), ctxkey.APIKeyForceOpenAIFast, true))
+	}
 	var writer *apiKeyAdmissionWriter
 	// A WS connection outlives one capacity decision: install the revalidator
 	// (and its lightweight control owner) even when the handshake key is

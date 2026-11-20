@@ -68,10 +68,12 @@ export async function create(
   expiresInDays?: number,
   rateLimitData?: { rate_limit_5h?: number; rate_limit_1d?: number; rate_limit_7d?: number },
   concurrencyLimit: number = 0,
-  groupIds?: number[]
+  groupIds?: number[],
+  forceOpenAIFast?: boolean
 ): Promise<ApiKey> {
   const payload: CreateApiKeyRequest = { name, concurrency_limit: concurrencyLimit }
   if (groupIds !== undefined) payload.group_ids = groupIds
+  if (forceOpenAIFast !== undefined) payload.force_openai_fast = forceOpenAIFast
   if (groupId !== undefined) {
     payload.group_id = groupId
   }

@@ -65,6 +65,7 @@ const (
 // 若编辑 Key 时无条件整行回写，并发累计的配额与限流计数就会被旧快照覆盖。
 // 因此调用方必须显式声明要改的列。
 type APIKeyUpdateFields struct {
+	ForceOpenAIFast bool
 	// Administrator-only policy fields have independent masks to preserve concurrent edits.
 	ModelMapping      bool
 	ReasoningEffort   bool
@@ -224,6 +225,7 @@ type APIKeyAuthCacheInvalidator interface {
 
 // CreateAPIKeyRequest 创建API Key请求
 type CreateAPIKeyRequest struct {
+	ForceOpenAIFast  bool     `json:"force_openai_fast"`
 	ConcurrencyLimit int      `json:"concurrency_limit"`
 	Name             string   `json:"name"`
 	GroupIDs         []int64  `json:"group_ids"`
@@ -244,6 +246,7 @@ type CreateAPIKeyRequest struct {
 
 // UpdateAPIKeyRequest 更新API Key请求
 type UpdateAPIKeyRequest struct {
+	ForceOpenAIFast  *bool     `json:"force_openai_fast"`
 	ConcurrencyLimit *int      `json:"concurrency_limit"` // nil = no change, 0 = no additional limit
 	Name             *string   `json:"name"`
 	GroupIDs         *[]int64  `json:"group_ids"`
@@ -548,8 +551,12 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 	if err != nil {
 		return nil, err
 	}
-	if err := s.validateAPIKeyGroups(ctx, user, groupIDs); err != nil {
+	hasOpenAIGroup, err := s.validateAPIKeyGroups(ctx, user, groupIDs)
+	if err != nil {
 		return nil, err
+	}
+	if req.ForceOpenAIFast && !hasOpenAIGroup {
+		return nil, errAPIKeyFastRequiresOpenAIGroup
 	}
 	if len(groupIDs) > 0 {
 		req.GroupID = &groupIDs[0]
@@ -599,6 +606,7 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		Key:              key,
 		Name:             html.EscapeString(req.Name),
 		GroupIDs:         groupIDs,
+		ForceOpenAIFast:  req.ForceOpenAIFast,
 		GroupID:          req.GroupID,
 		Status:           StatusActive,
 		AllowLongContext: true,
@@ -917,6 +925,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		fields.Name = true
 	}
 
+	hasOpenAIGroup := false
 	if req.GroupID != nil || req.GroupIDs != nil {
 		user, err := s.userRepo.GetByID(ctx, userID)
 		if err != nil {
@@ -930,7 +939,8 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		if err != nil {
 			return nil, err
 		}
-		if err := s.validateAPIKeyGroups(ctx, user, ids); err != nil {
+		hasOpenAIGroup, err = s.validateAPIKeyGroups(ctx, user, ids)
+		if err != nil {
 			return nil, err
 		}
 		apiKey.GroupIDs = ids
@@ -940,6 +950,24 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 			apiKey.GroupID = &ids[0]
 		}
 		fields.GroupID = true
+	}
+	if req.ForceOpenAIFast != nil {
+		if *req.ForceOpenAIFast {
+			if !fields.GroupID {
+				hasOpenAIGroup, err = s.apiKeyHasOpenAIGroup(ctx, apiKey)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if !hasOpenAIGroup {
+				return nil, errAPIKeyFastRequiresOpenAIGroup
+			}
+		}
+		apiKey.ForceOpenAIFast = *req.ForceOpenAIFast
+		fields.ForceOpenAIFast = true
+	} else if fields.GroupID && !hasOpenAIGroup && apiKey.ForceOpenAIFast {
+		apiKey.ForceOpenAIFast = false
+		fields.ForceOpenAIFast = true
 	}
 
 	if req.Status != nil {

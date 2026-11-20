@@ -811,6 +811,7 @@ export interface ApiKey {
   group_ids?: number[]
   model_mapping?: Record<string, string>
   reasoning_effort?: string
+  force_openai_fast?: boolean
   allow_long_context?: boolean
   context_token_limit?: number
 }
@@ -829,6 +830,7 @@ export interface ApiKeyConcurrencySnapshot {
 
 export interface CreateApiKeyRequest {
   name: string
+  force_openai_fast?: boolean
   concurrency_limit?: number // 0 = no additional key limit
   group_id?: number | null
   custom_key?: string // Optional custom API Key
@@ -844,6 +846,7 @@ export interface CreateApiKeyRequest {
 
 export interface UpdateApiKeyRequest {
   name?: string
+  force_openai_fast?: boolean
   concurrency_limit?: number // Omitted = no change, 0 = no additional key limit
   group_id?: number | null
   status?: 'active' | 'inactive'

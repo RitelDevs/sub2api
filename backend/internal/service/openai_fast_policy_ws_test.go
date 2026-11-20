@@ -154,6 +154,24 @@ func TestWSResponseCreate_ForcePriorityInjectsMissingTier(t *testing.T) {
 	require.Equal(t, OpenAIFastTierPriority, gjson.GetBytes(updated, "service_tier").String())
 }
 
+func TestWSResponseCreate_KeyForceOnlyAppliesToOpenAIGroup(t *testing.T) {
+	svc := newOpenAIGatewayServiceWithSettings(t, DefaultOpenAIFastPolicySettings())
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	ctx := context.WithValue(context.Background(), ctxkey.APIKeyForceOpenAIFast, true)
+	frame := []byte(`{"type":"response.create","model":"gpt-5.6-sol","service_tier":"default"}`)
+	for _, platform := range []string{PlatformOpenAI, PlatformComposite} {
+		groupCtx := context.WithValue(ctx, ctxkey.Group, &Group{ID: 7, Platform: platform, Status: StatusActive, Hydrated: true})
+		updated, blocked, err := svc.applyOpenAIFastPolicyToWSResponseCreate(groupCtx, account, "gpt-5.6-sol", frame)
+		require.NoError(t, err)
+		require.Nil(t, blocked)
+		if platform == PlatformOpenAI {
+			require.Equal(t, OpenAIFastTierPriority, gjson.GetBytes(updated, "service_tier").String())
+		} else {
+			require.Equal(t, frame, updated)
+		}
+	}
+}
+
 func TestWSResponseCreate_GroupForceDoesNotTouchOtherFrames(t *testing.T) {
 	svc := newOpenAIGatewayServiceWithSettings(t, DefaultOpenAIFastPolicySettings())
 	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}

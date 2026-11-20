@@ -53,6 +53,7 @@ func (r *apiKeyRepository) create(ctx context.Context, key *service.APIKey) erro
 	builder := clientFromContext(ctx, r.client).APIKey.Create().
 		SetUserID(key.UserID).
 		SetConcurrencyLimit(key.ConcurrencyLimit).
+		SetForceOpenaiFast(key.ForceOpenAIFast).
 		SetKey(key.Key).
 		SetName(key.Name).
 		SetStatus(key.Status).
@@ -148,6 +149,7 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 			apikey.FieldStatus,
 			apikey.FieldModelMapping,
 			apikey.FieldReasoningEffort,
+			apikey.FieldForceOpenaiFast,
 			apikey.FieldAllowLongContext,
 			apikey.FieldContextTokenLimit,
 			apikey.FieldIPWhitelist,
@@ -300,6 +302,9 @@ func (r *apiKeyRepository) update(ctx context.Context, key *service.APIKey, fiel
 	}
 	if fields.ReasoningEffort {
 		builder.SetReasoningEffort(key.ReasoningEffort)
+	}
+	if fields.ForceOpenAIFast {
+		builder.SetForceOpenaiFast(key.ForceOpenAIFast)
 	}
 	if fields.ContextTokenLimit {
 		builder.SetContextTokenLimit(key.ContextTokenLimit)
@@ -971,6 +976,7 @@ func apiKeyEntityToService(m *dbent.APIKey) *service.APIKey {
 		Status:            m.Status,
 		ModelMapping:      m.ModelMapping,
 		ReasoningEffort:   m.ReasoningEffort,
+		ForceOpenAIFast:   m.ForceOpenaiFast,
 		AllowLongContext:  m.AllowLongContext,
 		ContextTokenLimit: m.ContextTokenLimit,
 		IPWhitelist:       m.IPWhitelist,

@@ -329,6 +329,8 @@ export default {
     customKeyInvalidChars: '自定义密钥只能包含字母、数字、下划线和连字符',
     customKeyRequired: '请输入自定义密钥',
     ipRestriction: 'IP 限制',
+    forceOpenAIFast: '强制 Fast（OpenAI）',
+    forceOpenAIFastHint: 'Fast 可能增加费用，仍受管理员策略限制。',
     ipWhitelist: 'IP 白名单',
     ipWhitelistPlaceholder: '192.168.1.100\n10.0.0.0/8',
     ipWhitelistHint: '每行一个 IP 或 CIDR，设置后仅允许这些 IP 使用此密钥',

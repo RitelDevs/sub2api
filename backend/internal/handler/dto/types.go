@@ -75,6 +75,7 @@ type APIKey struct {
 
 	ModelMapping      map[string]string `json:"model_mapping"`
 	ReasoningEffort   string            `json:"reasoning_effort"`
+	ForceOpenAIFast   bool              `json:"force_openai_fast"`
 	ContextTokenLimit int               `json:"context_token_limit"`
 	AllowLongContext  bool              `json:"allow_long_context"`
 

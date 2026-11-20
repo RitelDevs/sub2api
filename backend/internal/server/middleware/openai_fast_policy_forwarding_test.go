@@ -30,7 +30,7 @@ func (r *openAIFastPolicyAdmissionRepo) GetOpenAITurnAdmission(context.Context, 
 func TestAPIKeyAuthForwardsUserScopedOpenAIFastPolicyToUpstream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	upstreamBodies := make(chan []byte, 2)
+	upstreamBodies := make(chan []byte, 1)
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -84,9 +84,12 @@ func TestAPIKeyAuthForwardsUserScopedOpenAIFastPolicyToUpstream(t *testing.T) {
 		Hydrated: true,
 	}
 	apiKeys := map[string]*service.APIKey{
-		"key-user-42": newOpenAIFastPolicyForwardingAPIKey(1, "key-user-42", 42, groupID, group),
-		"key-user-43": newOpenAIFastPolicyForwardingAPIKey(2, "key-user-43", 43, groupID, group),
+		"key-user-42":        newOpenAIFastPolicyForwardingAPIKey(1, "key-user-42", 42, groupID, group),
+		"key-user-43":        newOpenAIFastPolicyForwardingAPIKey(2, "key-user-43", 43, groupID, group),
+		"key-user-42-opt-in": newOpenAIFastPolicyForwardingAPIKey(3, "key-user-42-opt-in", 42, groupID, group),
 	}
+	apiKeys["key-user-42-opt-in"].ForceOpenAIFast = true
+	apiKeys["key-user-43"].ForceOpenAIFast = true
 	apiKeyService := service.NewAPIKeyService(&openAIFastPolicyForwardingAPIKeyRepo{apiKeys: apiKeys}, nil, nil, nil, nil, nil, cfg)
 	account := &service.Account{
 		ID:          900,
@@ -121,26 +124,28 @@ func TestAPIKeyAuthForwardsUserScopedOpenAIFastPolicyToUpstream(t *testing.T) {
 		c.Status(http.StatusOK)
 	})
 
-	send := func(apiKey string) {
+	send := func(apiKey, body string) gjson.Result {
 		request := httptest.NewRequest(
 			http.MethodPost,
 			"/v1/responses",
-			bytes.NewBufferString(`{"model":"gpt-5","stream":false,"service_tier":"priority","input":"hi"}`),
+			bytes.NewBufferString(body),
 		)
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("x-api-key", apiKey)
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, request)
 		require.Equal(t, http.StatusOK, response.Code)
+		return gjson.GetBytes(<-upstreamBodies, "service_tier")
 	}
 
-	send("key-user-42")
-	send("key-user-43")
-
-	allowedUserBody := <-upstreamBodies
-	otherUserBody := <-upstreamBodies
-	require.Equal(t, service.OpenAIFastTierPriority, gjson.GetBytes(allowedUserBody, "service_tier").String())
-	require.False(t, gjson.GetBytes(otherUserBody, "service_tier").Exists())
+	withoutTier := `{"model":"gpt-5","stream":false,"input":"hi"}`
+	standardTier := `{"model":"gpt-5","stream":false,"input":"hi","service_tier":"default"}`
+	withPriority := `{"model":"gpt-5","stream":false,"input":"hi","service_tier":"priority"}`
+	require.Equal(t, service.OpenAIFastTierPriority, send("key-user-42", withPriority).String())
+	require.False(t, send("key-user-42", withoutTier).Exists())
+	require.Equal(t, service.OpenAIFastTierPriority, send("key-user-42-opt-in", withoutTier).String())
+	require.Equal(t, service.OpenAIFastTierPriority, send("key-user-42-opt-in", standardTier).String())
+	require.False(t, send("key-user-43", standardTier).Exists(), "admin filter must still apply to an opted-in key")
 }
 
 func newOpenAIFastPolicyForwardingAPIKey(id int64, key string, userID, groupID int64, group *service.Group) *service.APIKey {

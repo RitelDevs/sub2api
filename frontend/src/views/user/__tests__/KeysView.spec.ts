@@ -26,7 +26,6 @@ const {
   getAvailableGroups,
   getUserGroupRates,
   showError,
-  showInfo,
   showSuccess,
   copyToClipboard,
   isCurrentStep,
@@ -46,7 +45,6 @@ const {
   getAvailableGroups: vi.fn(),
   getUserGroupRates: vi.fn(),
   showError: vi.fn(),
-  showInfo: vi.fn(),
   showSuccess: vi.fn(),
   copyToClipboard: vi.fn(),
   isCurrentStep: vi.fn(),
@@ -129,7 +127,6 @@ vi.mock('vue-router', () => ({ useRoute: () => routeState, useRouter: () => ({ p
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
     showError,
-    showInfo,
     showSuccess,
   }),
 }))
@@ -385,7 +382,6 @@ describe('user KeysView column settings', () => {
     getAvailableGroups.mockReset()
     getUserGroupRates.mockReset()
     showError.mockReset()
-    showInfo.mockReset()
     showSuccess.mockReset()
     copyToClipboard.mockReset()
 
@@ -685,63 +681,13 @@ describe('user KeysView column settings', () => {
     expect(wrapper.findComponent({ name: 'UseKeyModal' }).props('keyRecord').id).toBe(1)
   })
 
-  it('hands off only the clicked key and uses the configured API base independently of CCS', async () => {
-    const group = { id: 9, platform: 'openai' } as Group
-    setKeys(
-      { ...createApiKey(), group_id: group.id, group },
-      { ...createApiKey(), id: 2, name: '第二把密钥', key: 'sk-test-second+a&b', group_id: group.id, group }
-    )
-    getPublicSettings.mockResolvedValue({
-      api_base_url: 'https://gateway.example/relay/v1/',
-      site_name: '示例站',
-      hide_ccs_import_button: true
-    })
-    const open = vi.spyOn(window, 'open').mockReturnValue(null)
-    const wrapper = await mountView()
-    const buttons = wrapper.findAll('[data-testid="magpie-import-button"]')
-    expect(buttons).toHaveLength(2)
-    expect(wrapper.text()).not.toContain('keys.importToCcSwitch')
-    expect(open).not.toHaveBeenCalled()
-    await buttons[1].trigger('click')
-
-    expect(open).toHaveBeenCalledTimes(1)
-    const [href, target] = open.mock.calls[0]
-    const url = new URL(String(href))
-    expect(target).toBe('_self')
-    expect(url.origin + url.pathname).toBe('https://usemagpie.ai/import')
-    expect(url.search).toBe('')
-    expect(new URLSearchParams(url.hash.slice(1)).get('name')).toBe('第二把密钥 · 示例站')
-    expect(new URLSearchParams(url.hash.slice(1)).getAll('key')).toEqual(['sk-test-second+a&b'])
-    expect(new URLSearchParams(url.hash.slice(1)).get('responses')).toBe('https://gateway.example/relay/v1')
-    expect(showInfo).toHaveBeenCalledWith('keys.magpieImport.openHelp', 6500)
-    expect(showError).not.toHaveBeenCalled()
-  })
-
-  it('waits for API address settings before allowing the handoff', async () => {
-    const settings = deferred<{ api_base_url: string }>()
-    getPublicSettings.mockReturnValue(settings.promise)
+  it('keeps the Use action without a Magpie button in the key list', async () => {
     const group = { id: 9, platform: 'openai' } as Group
     setKeys({ ...createApiKey(), group_id: group.id, group })
-    const open = vi.spyOn(window, 'open').mockReturnValue(null)
-    const wrapper = await mountView()
-    const button = wrapper.get('[data-testid="magpie-import-button"]')
-    expect(button.attributes('disabled')).toBeDefined()
-    await button.trigger('click')
-    expect(open).not.toHaveBeenCalled()
-
-    settings.resolve({ api_base_url: 'https://gateway.example' })
-    await flushPromises()
-    expect(button.attributes('disabled')).toBeUndefined()
-    await button.trigger('click')
-    expect(new URLSearchParams(new URL(String(open.mock.calls[0][0])).hash.slice(1)).get('chat')).toBe('https://gateway.example/v1')
-  })
-
-  it('does not open Magpie for a key with no assigned group', async () => {
-    const open = vi.spyOn(window, 'open').mockReturnValue(null)
-    const wrapper = await mountView()
-    await wrapper.get('[data-testid="magpie-import-button"]').trigger('click')
-    expect(open).not.toHaveBeenCalled()
-    expect(showError).toHaveBeenCalledWith('keys.magpieImport.unsupportedGroup')
+    const wrapper = await mountView(true)
+    expect(wrapper.find('[data-testid="magpie-import-button"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="connect-key-row"]').trigger('click')
+    expect(wrapper.findComponent({ name: 'UseKeyModal' }).props('show')).toBe(true)
   })
 
   it('keeps usage available alongside risk notices', async () => {

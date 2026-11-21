@@ -757,7 +757,7 @@ func prepareOpenAI409OAuthReplay(ctx context.Context, c *gin.Context, body map[s
 			}
 		}
 		if !isOpenAIResponsesCompactPath(c) {
-			declareOpenAIWebSearchHistoryTool(body, isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)), true)
+			declareOpenAIWebSearchHistoryTool(body, responsesLite, true)
 		}
 	}
 	prepared, err := json.Marshal(body)

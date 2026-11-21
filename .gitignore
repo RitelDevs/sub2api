@@ -140,6 +140,8 @@ docs/*
 !docs/backup-integrity.md
 !docs/security-scan-remediation.md
 !docs/balance-notification-delivery.md
+!docs/account-platform-edit.md
+!docs/openai-totp-factor-recovery.md
 !docs/ai-ops-codex.md
 !docs/reauth-identity-validation.md
 !docs/openai-context-limit-errors.md
@@ -262,3 +264,8 @@ tools/local-worker/
 !/.github/scripts/free-fast-cost-evidence.py
 !/.github/scripts/test_free_fast_cost_evidence.py
 /.github/scripts/__pycache__/
+
+!docs/free-ultrafast-billing.md
+!/.github/scripts/free-ultrafast-browser.mjs
+
+!docs/smart-ops-retirement.md

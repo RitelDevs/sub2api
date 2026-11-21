@@ -112,6 +112,7 @@ func truncateAuditExtraString(value string, limit int) string {
 
 // auditSensitiveReads 需要审计的敏感 GET 读取（method+FullPath → 动作名）。
 var auditSensitiveReads = map[string]string{
+	"GET /api/v1/admin/account-ops/relogin/config":                            "admin.relogin.config.read",
 	"GET /api/v1/admin/ops/ai/actions":                                        "admin.ops.ai.actions.read",
 	"GET /api/v1/admin/ops/ai/runs":                                           "admin.ops.ai.runs.read",
 	"GET /api/v1/admin/ops/ai/runs/:id":                                       "admin.ops.ai.run.read",
@@ -181,6 +182,11 @@ var auditBodyOmittedRoutes = map[string]struct{}{
 	"POST /api/v1/auth/login/recovery":                                                     {},
 	"POST /api/v1/user/passkeys/reauth/finish":                                             {},
 	"POST /api/v1/admin/payment/squarespace/oauth/import":                                  {},
+	"POST /api/v1/usage/settled-debits":                                                    {},
+	"PUT /api/v1/admin/providers/:id/profit-channel":                                       {},
+	"POST /api/v1/admin/providers/:id/profit-charges/sync":                                 {},
+	"POST /api/v1/admin/accounts/:id/auth-connections/:connection_id/authorization-status": {},
+	"POST /api/v1/admin/accounts/:id/auth-connections/:connection_id/callback":             {},
 	"POST /api/v1/admin/upstream-channels":                                                 {},
 	"PUT /api/v1/admin/upstream-channels/:id":                                              {},
 	"DELETE /api/v1/admin/upstream-channels/:id":                                           {},
@@ -191,7 +197,8 @@ var auditBodyOmittedRoutes = map[string]struct{}{
 	"POST /api/v1/admin/accounts/:id/export-session":                                       {},
 	"PUT /api/v1/admin/account-ops/webhooks/:id":                                           {},
 	"PUT /api/v1/admin/account-ops/config":                                                 {},
-	"POST /api/v1/admin/account-ops/token-guard/two-fa-login":                              {},
+	"PUT /api/v1/admin/account-ops/relogin/config":                                         {},
+	"POST /api/v1/admin/account-ops/relogin/two-fa-login":                                  {},
 	"POST /api/v1/auth/passkey/login/finish":                                               {},
 	"POST /api/v1/user/passkeys/register/finish":                                           {},
 	"POST /api/v1/admin/accounts/import/codex-session":                                     {},
@@ -202,8 +209,6 @@ var auditBodyOmittedRoutes = map[string]struct{}{
 	"POST /api/v1/admin/prompt-audit/events/batch-delete":                                  {},
 	"POST /api/v1/admin/prompt-audit/events/delete-preview":                                {},
 	"POST /api/v1/admin/prompt-audit/events/delete-by-filter":                              {},
-	"POST /api/v1/admin/accounts/:id/auth-connections/:connection_id/authorization-status": {},
-	"POST /api/v1/admin/accounts/:id/auth-connections/:connection_id/callback":             {},
 }
 
 // NewAuditLogMiddleware 创建审计中间件。

@@ -156,11 +156,16 @@ func (s *FrontendServer) serveIndexHTML(c *gin.Context) {
 	// Check cache first
 	cached := s.cache.Get()
 	if cached != nil {
-		// A fresh CSP nonce requires a matching HTML body, not a cached body from a 304.
-		if match := c.GetHeader("If-None-Match"); nonce == "" && match == cached.ETag {
-			c.Status(http.StatusNotModified)
-			c.Abort()
-			return
+		// A matching ETag is only enough for 304 when the response has no
+		// per-request nonce. Otherwise the browser would reuse HTML carrying a
+		// stale nonce that no longer matches the CSP header of this request.
+		if nonce == "" {
+			if match := c.GetHeader("If-None-Match"); match == cached.ETag {
+				applyHTMLNoCacheHeaders(c.Writer.Header())
+				c.Status(http.StatusNotModified)
+				c.Abort()
+				return
+			}
 		}
 
 		c.Header("ETag", cached.ETag)
@@ -197,7 +202,7 @@ func (s *FrontendServer) serveIndexHTML(c *gin.Context) {
 }
 
 func serveHTMLWithNonce(c *gin.Context, html []byte, nonce string) {
-	c.Header("Cache-Control", "no-cache")
+	applyHTMLNoCacheHeaders(c.Writer.Header())
 	c.Data(http.StatusOK, "text/html; charset=utf-8", replaceNoncePlaceholder(html, nonce))
 	c.Abort()
 }

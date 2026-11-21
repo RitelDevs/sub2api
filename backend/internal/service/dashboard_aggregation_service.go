@@ -12,6 +12,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/google/uuid"
 )
 
@@ -358,6 +359,10 @@ func (s *DashboardAggregationService) aggregateRange(ctx context.Context, start,
 }
 
 func (s *DashboardAggregationService) maybeCleanupRetention(ctx context.Context, now time.Time) {
+	s.maybeCleanupRetentionInLocation(ctx, now, timezone.Location())
+}
+
+func (s *DashboardAggregationService) maybeCleanupRetentionInLocation(ctx context.Context, now time.Time, loc *time.Location) {
 	lastAny := s.lastRetentionCleanup.Load()
 	if lastAny != nil {
 		if last, ok := lastAny.(time.Time); ok && now.Sub(last) < dashboardAggregationRetentionInterval {
@@ -373,7 +378,8 @@ func (s *DashboardAggregationService) maybeCleanupRetention(ctx context.Context,
 	}
 	hourlyCutoff := now.AddDate(0, 0, -s.cfg.Retention.HourlyDays)
 	dailyCutoff := now.AddDate(0, 0, -s.cfg.Retention.DailyDays)
-	usageCutoff := now.AddDate(0, 0, -usageDays)
+	// usage_logs 按服务端配置时区整日保留，与分组日桶的日界对齐。
+	usageCutoff := groupUsageTodayStartInLocation(now.AddDate(0, 0, -usageDays), loc)
 	dedupDays := s.cfg.Retention.UsageBillingDedupDays
 	if dedupDays < 0 {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] invalid usage_billing_dedup_days: %d; skipping cleanup", dedupDays)
@@ -383,7 +389,11 @@ func (s *DashboardAggregationService) maybeCleanupRetention(ctx context.Context,
 		dedupDays = 365
 	}
 	dedupDays = max(dedupDays, usageDays)
+	// 计费去重记录的保留不短于 usage_logs。
 	dedupCutoff := now.AddDate(0, 0, -dedupDays)
+	if usageDays > 0 && dedupCutoff.After(usageCutoff) {
+		dedupCutoff = usageCutoff
+	}
 
 	var aggErr, usageErr, dedupErr error
 	// Full business history also keeps existing derived historical buckets.

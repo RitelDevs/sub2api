@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,6 +13,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/mihomo"
@@ -70,6 +72,19 @@ func acquireExcelBPSProxy(ctx context.Context, scope string, excluded ...string)
 // excelBPSAcquireFor routes the managed session to the pool the account chose.
 // Both pools share binding/scoring semantics, so callers keep one acquire shape.
 func (s *OpenAIGatewayService) excelBPSAcquireFor(account *Account) excelBPSAcquire {
+	if account.ExcelBPSRequestProxyEnabled() {
+		ids := account.ExcelBPSRequestProxyIDs()
+		return func(ctx context.Context, scope string, excluded ...string) (string, excelBPSLease, error) {
+			if route, ok := openAIRequestProxyFromContext(ctx, account.ID); ok {
+				return pinnedExcelBPSAcquire(route.proxy, route.lease)(ctx, scope, excluded...)
+			}
+			lease, err := mihomo.AcquireBPSStaticRequestLease(ctx, account.ID, ids, excluded...)
+			if err != nil {
+				return "", nil, err
+			}
+			return lease.ProxyURL, lease, nil
+		}
+	}
 	if account.ExcelBPSProxySource() == ExcelBPSProxySourceIPPool {
 		return s.acquireExcelBPSIPPoolProxy
 	}
@@ -113,14 +128,51 @@ func (s *OpenAIGatewayService) refreshExcelBPSIPPool(ctx context.Context) {
 		logger.FromContext(ctx).Warn("excel_bps.ip_pool_refresh_failed", zap.Error(err))
 		return
 	}
-	urls := make([]string, 0, len(proxies))
+	records := make([]mihomo.BPSStaticProxy, 0, len(proxies))
 	for i := range proxies {
 		if proxies[i].IsExpired(now) {
 			continue
 		}
-		urls = append(urls, proxies[i].URL())
+		records = append(records, mihomo.BPSStaticProxy{ID: proxies[i].ID, Name: proxies[i].Name, URL: proxies[i].URL(), ExpiresAt: proxies[i].ExpiresAt})
 	}
-	mihomo.SetBPSStaticProxies(urls)
+	mihomo.SetBPSStaticProxyRecords(records)
+}
+
+// Wrap the final logical response, not individual upstream attempts: repairs,
+// search continuations and attachments must retain their original exit.
+func ownExcelBPSRequestBody(ctx context.Context, body io.ReadCloser, lease excelBPSLease) io.ReadCloser {
+	if body == nil || lease == nil {
+		return body
+	}
+	b := &excelBPSRequestBody{ReadCloser: body, lease: lease}
+	b.stop = context.AfterFunc(ctx, func() { b.closeBody(); b.finish() })
+	return b
+}
+
+type excelBPSRequestBody struct {
+	io.ReadCloser
+	lease    excelBPSLease
+	done     sync.Once
+	closed   sync.Once
+	closeErr error
+	stop     func() bool
+}
+
+func (b *excelBPSRequestBody) finish()    { b.done.Do(b.lease.Release) }
+func (b *excelBPSRequestBody) closeBody() { b.closed.Do(func() { b.closeErr = b.ReadCloser.Close() }) }
+func (b *excelBPSRequestBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil {
+		b.stop()
+		b.finish()
+	}
+	return n, err
+}
+func (b *excelBPSRequestBody) Close() error {
+	b.stop()
+	b.closeBody()
+	b.finish()
+	return b.closeErr
 }
 
 // Missing trace is not evidence of safety. Standard net/http emits GetConn
@@ -144,7 +196,6 @@ func (e *excelBPSWriteEvidence) request(req *http.Request) *http.Request {
 	}
 	return req
 }
-func (e *excelBPSWriteEvidence) unsent() bool { return e.DefinitelyUnsent() }
 
 type excelBPSTrackedBody struct {
 	io.ReadCloser
@@ -158,9 +209,7 @@ func (b *excelBPSTrackedBody) Read(p []byte) (int, error) {
 	return b.ReadCloser.Read(p)
 }
 
-// At most one extra model attempt, on another healthy managed exit, and only
-// before HTTP could have written anything. The caller owns the returned lease
-// through response closure. Static account proxies retain their old behavior.
+// The caller owns the selected exit through response closure.
 func (s *OpenAIGatewayService) doExcelBPSRequest(ctx context.Context, c *gin.Context, account *Account, scope string, body []byte, token, accountID string, acquire excelBPSAcquire, guards ...func(context.Context) error) (*http.Response, excelBPSLease, string, error) {
 	build := func(ctx context.Context) (*http.Request, error) {
 		return newExcelBPSRequest(ctx, body, token, accountID)
@@ -173,81 +222,121 @@ func (s *OpenAIGatewayService) doExcelBPSRequest(ctx context.Context, c *gin.Con
 }
 
 // doExcelBPSRequestTo applies the same exit and no-replay rules to another BPS
-// endpoint; build must return a fresh request for each attempt.
+// endpoint. A transport failure never triggers a second acquisition or send.
 func (s *OpenAIGatewayService) doExcelBPSRequestTo(ctx context.Context, c *gin.Context, account *Account, scope, upstreamURL string, build func(context.Context) (*http.Request, error), acquire excelBPSAcquire, guards ...func(context.Context) error) (*http.Response, excelBPSLease, string, error) {
-	managed := account.IsExcelBPSMihomoEnabled()
-	var excluded []string
+	managed := account.IsExcelBPSMihomoEnabled() || account.ExcelBPSRequestProxyEnabled()
 	proxy := ""
 	if account.Proxy != nil {
 		proxy = account.Proxy.URL()
 	}
-	for attempt := 1; attempt <= 2; attempt++ {
-		if err := ctx.Err(); err != nil {
+	const attempt = 1
+	if err := ctx.Err(); err != nil {
+		return nil, nil, proxy, err
+	}
+	var lease excelBPSLease
+	if managed {
+		var err error
+		proxy, lease, err = acquire(ctx, scope)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, nil, proxy, ctx.Err()
+			}
+			err = &excelBPSAcquisitionFailure{cause: err}
+			recordExcelBPSTransportFailureAt(ctx, c, account, upstreamURL, scope, proxy, err, "proxy_acquisition", attempt, false)
 			return nil, nil, proxy, err
 		}
-		var lease excelBPSLease
-		if managed {
-			var err error
-			proxy, lease, err = acquire(ctx, scope, excluded...)
-			if err != nil {
-				if ctx.Err() != nil {
-					return nil, nil, proxy, ctx.Err()
+	}
+	// Acquisition may queue. Recheck admission before sending.
+	for _, guard := range guards {
+		if guard != nil {
+			if err := guard(ctx); err != nil {
+				if lease != nil {
+					lease.Release()
 				}
-				err = &excelBPSAcquisitionFailure{cause: err}
-				recordExcelBPSTransportFailureAt(ctx, c, account, upstreamURL, scope, proxy, err, "proxy_acquisition", attempt, false)
 				return nil, nil, proxy, err
 			}
 		}
-		// Acquisition may queue. Recheck after it, including the second exit attempt.
-		for _, guard := range guards {
-			if guard != nil {
-				if err := guard(ctx); err != nil {
-					if lease != nil {
-						lease.Release()
-					}
-					return nil, nil, proxy, err
-				}
-			}
-		}
-		req, err := build(ctx)
-		if err != nil {
-			if lease != nil {
-				lease.Release()
-			}
-			return nil, nil, proxy, err
-		}
-		c.Set("excel_bps_upstream_attempt", attempt)
-		if err := controlledSubmission(ctx, "bps"); err != nil {
-			if lease != nil {
-				lease.Release()
-			}
-			return nil, nil, proxy, err
-		}
-		evidence := &excelBPSWriteEvidence{}
-		resp, err := s.doPriorityObservedHTTP(evidence.request(req), proxy, account)
-		controlledHTTPResponse(ctx, resp)
-		s.rateLimitService.observeQualityResponse(req.Context(), account, resp, err)
-		if err == nil {
-			return resp, lease, proxy, nil
-		}
-		// Even an unusual response+error result makes replay unsafe.
-		retry := !isControlledExperiment(ctx) && managed && attempt == 1 && resp == nil && evidence.unsent() && ctx.Err() == nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
-		}
+	}
+	req, err := build(ctx)
+	if err != nil {
 		if lease != nil {
-			if ctx.Err() == nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-				lease.ReportFailure()
-			}
 			lease.Release()
 		}
-		recordExcelBPSTransportFailureAt(ctx, c, account, upstreamURL, scope, proxy, err, "transport", attempt, retry, evidence)
-		if !retry {
-			return nil, nil, proxy, err
-		}
-		excluded = append(excluded, proxy)
+		return nil, nil, proxy, err
 	}
-	return nil, nil, proxy, errExcelBPSProxyUnavailable
+	c.Set("excel_bps_upstream_attempt", attempt)
+	if err := controlledSubmission(ctx, "bps"); err != nil {
+		if lease != nil {
+			lease.Release()
+		}
+		return nil, nil, proxy, err
+	}
+	evidence := &excelBPSWriteEvidence{}
+	resp, err := s.doPriorityObservedHTTP(evidence.request(req), proxy, account)
+	controlledHTTPResponse(ctx, resp)
+	s.rateLimitService.observeQualityResponse(req.Context(), account, resp, err)
+	if err == nil {
+		if rejection := rejectOpenAITransportChallenge(resp); rejection != nil {
+			if lease != nil {
+				lease.Release()
+			}
+			return nil, nil, proxy, rejection
+		}
+		return resp, lease, proxy, nil
+	}
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if lease != nil {
+		if ctx.Err() == nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			lease.ReportFailure()
+		}
+		lease.Release()
+	}
+	recordExcelBPSTransportFailureAt(ctx, c, account, upstreamURL, scope, proxy, err, "transport", attempt, false, evidence)
+	return nil, nil, proxy, err
+}
+
+// Only inspect error bodies. Successful SSE and image payloads must stay streaming.
+// HTML is never a valid success response from these business API endpoints.
+func rejectOpenAITransportChallenge(resp *http.Response) error {
+	if resp == nil {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(resp.Header.Get("Cf-Mitigated")), "challenge") ||
+		strings.EqualFold(strings.TrimSpace(strings.SplitN(resp.Header.Get("Content-Type"), ";", 2)[0]), "text/html") {
+		if resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return errors.New("upstream returned a verification challenge or HTML instead of an API response")
+	}
+	if resp.StatusCode < 400 || resp.Body == nil {
+		return nil
+	}
+	// The structured verification-envelope decoder accepts up to 32 KiB.
+	const limit = 32 << 10
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	_ = resp.Body.Close()
+	if err != nil || len(body) > limit {
+		return errors.New("upstream rejection could not be verified")
+	}
+	switch credentialOperationEnvelope(body) {
+	case "security_check", "phone_verification_required", "email_otp_required", "mfa_required":
+		return errors.New("upstream verification required")
+	}
+	if isHTMLResponse(body) || isCloudflareBotBlockResponse(body) {
+		return errors.New("upstream access blocked")
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return nil
+}
+
+func finishOpenAITransportRejection(c *gin.Context, err error) error {
+	MarkResponseCommitted(c)
+	if !c.Writer.Written() {
+		c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{"type": "upstream_error", "message": err.Error()}})
+	}
+	return err
 }
 
 func excelBPSLocalProxyPort(proxy string) int {

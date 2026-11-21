@@ -530,7 +530,7 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 		descriptor.ServiceTiers = configuredCodexServiceTiersForModel(modelID)
 		if isOpenAICodexReasoningGPTModel(modelID) {
 			defaultReasoningLevel := "medium"
-			if getNormalizedCodexModel(modelID) == "gpt-5.6-sol" || openai.IsGPT61SolModelSpelling(modelID) {
+			if getNormalizedCodexModel(modelID) == "gpt-5.6-sol" || openai.IsGPT61SolModelSpelling(modelID) || normalizeOpenAIGPT62Model(modelID) == "gpt-6.2-sol" {
 				defaultReasoningLevel = "low"
 			}
 			descriptor.DefaultReasoningLevel = &defaultReasoningLevel
@@ -578,6 +578,29 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 		descriptor.MaxContextWindow = configuredCodexGPT6AstraContext
 		descriptor.Slug = modelID
 		descriptor.officialMetadata = openai.CodexGPT61SolMetadata
+		descriptor.Priority = 3
+	}
+	var metadata json.RawMessage
+	switch openai.GPT62ModelID(modelID) {
+	case "gpt-6.2-sol":
+		metadata = openai.CodexGPT62SolMetadata
+	case "gpt-6.2-astra":
+		metadata = openai.CodexGPT62AstraMetadata
+	}
+	if len(metadata) > 0 {
+		// Take presentation fields only; the local catalog owns capabilities,
+		// service tiers, context limits and prompt defaults.
+		var display struct {
+			Name        string `json:"display_name"`
+			Description string `json:"description"`
+			Priority    int    `json:"priority"`
+		}
+		if err := json.Unmarshal(metadata, &display); err != nil {
+			panic(err)
+		}
+		descriptor.DisplayName = display.Name
+		descriptor.Description = display.Description
+		descriptor.Priority = display.Priority
 	}
 	return descriptor
 }
@@ -675,7 +698,7 @@ func configuredCodexGPTReasoningLevels(modelID string) []configuredCodexReasonin
 		levels = append([]configuredCodexReasoningLevel{{Effort: "none", Description: "Disable reasoning for faster responses"}}, levels...)
 	}
 	normalized := getNormalizedCodexModel(modelID)
-	if isOpenAIGPT56Model(modelID) || isOpenAIGPT6Model(modelID) {
+	if isOpenAIGPT56Model(modelID) || isOpenAIGPT6Model(modelID) || normalizeOpenAIGPT62Model(modelID) != "" {
 		levels = append(levels, configuredCodexReasoningLevel{
 			Effort:      "max",
 			Description: "Maximum reasoning depth for complex tasks",
@@ -741,7 +764,7 @@ func isOpenAICodexGPTModel(modelID string) bool {
 
 func isOpenAICodexReasoningGPTModel(modelID string) bool {
 	normalized := canonicalizeOpenAIModelAliasSpelling(modelID)
-	return isOpenAIGPT6Model(normalized) || strings.HasPrefix(normalized, "gpt-5")
+	return isOpenAIGPT6Model(normalized) || normalizeOpenAIGPT62Model(normalized) != "" || strings.HasPrefix(normalized, "gpt-5")
 }
 
 func isOpenAICodexImageInputModel(modelID string) bool {
@@ -1549,6 +1572,8 @@ type codexModelsManifestUpstreamError struct {
 	body       []byte
 }
 
+var errOpenAIModelsVerificationRequired = infraerrors.New(http.StatusBadGateway, "OPENAI_MODELS_VERIFICATION_REQUIRED", "Model discovery stopped at the selected upstream")
+
 func (e *codexModelsManifestUpstreamError) Error() string { return e.err.Error() }
 
 func (e *codexModelsManifestUpstreamError) Unwrap() error { return e.err }
@@ -1656,6 +1681,7 @@ type openAIModelsRequest struct {
 	credentialAccount   *Account
 	accountConcurrency  int
 	useAPIKeyUpstream   bool
+	requestProxy        bool
 	// Cached bodies have already been converted to their requested format.
 	standardModelsList bool
 }
@@ -1755,7 +1781,11 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 }
 
 func (s *OpenAIGatewayService) fetchNativeCodexModelsManifest(ctx context.Context, account *Account, clientVersion, ifNoneMatch string) (*OpenAIModelsResponse, error) {
-	useCache := !isFreshOpenAICredentialProbe(ctx)
+	return s.fetchNativeCodexModelsManifestWithPolicy(ctx, account, clientVersion, ifNoneMatch, openAIModelsReadDefault)
+}
+
+func (s *OpenAIGatewayService) fetchNativeCodexModelsManifestWithPolicy(ctx context.Context, account *Account, clientVersion, ifNoneMatch string, policy openAIModelsReadPolicy) (*OpenAIModelsResponse, error) {
+	useCache := policy != openAIModelsReadWhitelist && !isFreshOpenAICredentialProbe(ctx)
 	if account == nil {
 		return nil, infraerrors.New(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_ACCOUNT_REQUIRED", "account is required")
 	}
@@ -1766,6 +1796,11 @@ func (s *OpenAIGatewayService) fetchNativeCodexModelsManifest(ctx context.Contex
 
 	if credAccount.IsExcelOAuth() {
 		return nil, errExcelOAuthRouteUnavailable
+	}
+	if policy == openAIModelsReadWhitelist && credAccount.IsOpenAIAgentIdentity() {
+		// Even building these headers can create/persist a task. Whitelist
+		// discovery never owns the agent identity task lifecycle.
+		return nil, infraerrors.BadRequest("OPENAI_MODELS_READ_ONLY_ACCOUNT_UNSUPPORTED", "Read-only model discovery does not support agent identity accounts")
 	}
 	clientVersion = strings.TrimSpace(clientVersion)
 	if clientVersion == "" {
@@ -1842,7 +1877,17 @@ func (s *OpenAIGatewayService) fetchNativeCodexModelsManifest(ctx context.Contex
 	headers.Set("Version", headerVersion)
 
 	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
+	requestProxy := account.OpenAIRequestProxyEnabled()
+	route, bound := openAIRequestProxyFromContext(ctx, account.ID)
+	if route != nil && (!bound || !requestProxy) {
+		return nil, errOpenAIRequestProxyUnavailable
+	}
+	if requestProxy {
+		proxyURL, err = resolveOpenAIMaintenanceProxy(ctx, account, s.proxyRepo)
+		if err != nil {
+			return nil, err
+		}
+	} else if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 
@@ -1855,10 +1900,16 @@ func (s *OpenAIGatewayService) fetchNativeCodexModelsManifest(ctx context.Contex
 		credentialAccount:   credAccount,
 		accountConcurrency:  account.Concurrency,
 		useAPIKeyUpstream:   useAPIKeyUpstream,
+		requestProxy:        requestProxy,
 	}
 	if !useCache {
 		request.headers.Del("If-None-Match")
 		request.headers.Set("Cache-Control", "no-cache")
+	}
+	if policy == openAIModelsReadWhitelist {
+		// Bypass the shared display cache and its detached refresh completely.
+		// Return the actual response before OAuth health handling/task recovery.
+		return s.fetchCodexModelsManifestUpstream(ctx, request, "")
 	}
 	if useAPIKeyUpstream {
 		if !useCache {
@@ -1947,7 +1998,7 @@ func (s *OpenAIGatewayService) fetchCachedOpenAIModels(ctx context.Context, requ
 	if state == openAIModelsCacheFresh {
 		return openAIModelsResponseForClient(manifest, ifNoneMatch), nil
 	}
-	if HasAPIKeyAdmissionOwner(ctx) {
+	if request.requestProxy || HasAPIKeyAdmissionOwner(ctx) {
 		// A background singleflight has no request-capacity owner. Limited
 		// callers share completed cache entries, but own and join their refresh
 		// independently so cancellation cannot strand work or cancel a peer.
@@ -1955,7 +2006,7 @@ func (s *OpenAIGatewayService) fetchCachedOpenAIModels(ctx context.Context, requ
 		defer cancel()
 		refreshed, err := s.fetchAndCacheOpenAIModels(refreshCtx, cacheKey, fetch)
 		if err != nil {
-			if refreshCtx.Err() == nil && state == openAIModelsCacheStale {
+			if !request.requestProxy && refreshCtx.Err() == nil && state == openAIModelsCacheStale && !errors.Is(err, errOpenAIModelsVerificationRequired) {
 				return openAIModelsResponseForClient(manifest, ifNoneMatch), nil
 			}
 			return nil, err
@@ -2034,6 +2085,16 @@ func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, re
 		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_REQUEST_FAILED", "create codex models request: %v", err)
 	}
 	req.Header = request.headers.Clone()
+	if scoped, bindErr := ValidateOpenAIRequestProxyEgress(reqCtx, request.accountID, request.proxyURL); scoped {
+		if bindErr != nil || !request.requestProxy {
+			return nil, errOpenAIRequestProxyUnavailable
+		}
+		route, _ := openAIRequestProxyFromContext(reqCtx, request.accountID)
+		req, err = route.bind(req)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if ifNoneMatch = strings.TrimSpace(ifNoneMatch); ifNoneMatch != "" {
 		req.Header.Set("If-None-Match", ifNoneMatch)
 	}
@@ -2047,7 +2108,9 @@ func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, re
 		resp, err = s.httpUpstream.Do(req, request.proxyURL, request.accountID, request.accountConcurrency)
 	} else {
 		handled := false
-		if s.pluginManager != nil {
+		// Account-selected proxies own this egress; external plugins can supply
+		// their own transport and cannot enforce membership in the saved group.
+		if s.pluginManager != nil && !request.requestProxy {
 			resp, handled, err = s.pluginManager.RoundTripOpenAIOAuth(reqCtx, req, request.proxyURL, request.credentialAccount)
 		}
 		if !handled {
@@ -2059,7 +2122,11 @@ func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, re
 			if clientErr != nil {
 				return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_PROXY_INVALID", "invalid proxy configuration: %v", clientErr)
 			}
-			resp, err = client.Do(req)
+			// A manifest endpoint is final. Inspect redirects rather than following
+			// a verification page, without mutating the shared client.
+			manifestClient := http.Client{Transport: client.Transport, Timeout: client.Timeout, Jar: client.Jar,
+				CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+			resp, err = manifestClient.Do(req)
 		}
 	}
 	if err != nil {
@@ -2067,6 +2134,9 @@ func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, re
 			err:       infraerrors.New(http.StatusBadGateway, "OPENAI_CODEX_MODELS_UPSTREAM_FAILED", "模型列表请求失败，请稍后重试"),
 			retryable: isRetryableCodexModelsManifestTransportError(err),
 		}
+	}
+	if rejection := rejectOpenAITransportChallenge(resp); rejection != nil {
+		return nil, errOpenAIModelsVerificationRequired
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -2105,6 +2175,10 @@ func (s *OpenAIGatewayService) fetchOpenAIModelsUpstream(ctx context.Context, re
 
 	bodyLimit := resolveModelsListReadLimit(s.cfg)
 	body, err := io.ReadAll(io.LimitReader(resp.Body, bodyLimit+1))
+	// A challenge page can arrive with a 200 and no useful Content-Type.
+	if strings.HasPrefix(http.DetectContentType(body), "text/html") {
+		return nil, errOpenAIModelsVerificationRequired
+	}
 	if err != nil {
 		return nil, &codexModelsManifestUpstreamError{
 			err:       infraerrors.New(http.StatusBadGateway, "OPENAI_CODEX_MODELS_UPSTREAM_FAILED", "无法读取模型列表响应"),
@@ -2136,6 +2210,13 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 		body = convertedBody
 	}
 	if err := validateCodexModelsManifestEnvelope(body); err != nil {
+		switch credentialOperationEnvelope(upstreamBody) {
+		case "security_check", "phone_verification_required", "email_otp_required", "mfa_required":
+			return nil, errOpenAIModelsVerificationRequired
+		}
+		if isCloudflareBotBlockResponse(upstreamBody) {
+			return nil, errOpenAIModelsVerificationRequired
+		}
 		return nil, &codexModelsManifestUpstreamError{
 			err: infraerrors.Newf(
 				http.StatusBadGateway,
@@ -2693,7 +2774,7 @@ func validateCodexModelsManifestEnvelope(body []byte) error {
 
 func buildOpenAIModelsCacheKey(request openAIModelsRequest) string {
 	hasher := sha256.New()
-	_, _ = fmt.Fprintf(hasher, "%d\n%d\n%t\n%s\n%s\n", request.accountID, request.credentialAccountID, request.standardModelsList, request.proxyURL, request.url)
+	_, _ = fmt.Fprintf(hasher, "%d\n%d\n%t\n%t\n%s\n%s\n", request.accountID, request.credentialAccountID, request.standardModelsList, request.requestProxy, request.proxyURL, request.url)
 	headerNames := make([]string, 0, len(request.headers))
 	for name := range request.headers {
 		headerNames = append(headerNames, name)

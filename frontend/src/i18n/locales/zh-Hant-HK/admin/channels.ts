@@ -153,6 +153,7 @@ export default {
         video: '視頻（按秒）'
       },
       form: {
+        ultrafastMultiplier: "Ultra Fast 倍率",
         name: '名稱',
         namePlaceholder: '輸入渠道名稱',
         description: '描述',

@@ -11,9 +11,13 @@ describe('credential operation failure display', () => {
   it.each(Object.entries({ en, zh, 'zh-Hant-HK': hk }))('renders the email prompt and manual action in %s', (locale, messages) => {
     const failure = safeOperationFailure({ code: 'email_otp_required', stage: 'email_verification' })
     expect(failure.action).toBe('complete_email_verification')
+    expect(failure.category).toBe('email_otp_required')
+    expect(safeDiagnosticToken(failure.stage)).toBe('email_verification')
+    expect(safeDiagnosticToken(failure.code)).toBe('email_otp_required')
     const view = mount(View, { props: { failure }, global: { plugins: [createI18n({ legacy: false, locale, messages: { [locale]: { tokenGuardV2: messages } } })] } })
     expect(view.text()).toContain(messages.operationFailure.reasons.email_otp_required)
     expect(view.text()).toContain(messages.operationFailure.actions.complete_email_verification)
+    expect(view.text()).not.toContain(messages.operationFailure.reasons.mfa_required)
     expect(safeOperationFailure({ ...failure, stage: 'web_login' }).code).toBe('unknown')
   })
   it('preserves fixed identity validation reasons and drops arbitrary identity text', () => {

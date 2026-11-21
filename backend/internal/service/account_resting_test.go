@@ -59,7 +59,7 @@ func TestInactiveDegradedUsageNeverProbes(t *testing.T) {
 		account.Extra["quality_candy"] = map[string]any{"state": control.state}
 		usage, err := svc.GetUsageForAccount(context.Background(), &account, true)
 		require.NoError(t, err)
-		require.Empty(t, usage.ErrorCode)
+		require.Equal(t, "quota_refresh_failed", usage.ErrorCode, "active probe exposes the synthetic 502")
 	}
 	require.EqualValues(t, 2, calls.Load())
 }

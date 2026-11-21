@@ -21,6 +21,7 @@ const AutoConfigConcurrencyExtraKey = "auto_config_concurrency"
 
 // Initial account fields, BPS defaults, model billing and concurrency upgrades are independent.
 type OAuthAutoConfig struct {
+	APIKeyDisposition                              OAuthAPIKeyDispositionConfig `json:"apikey_disposition"`
 	OpenAIAccountDefaults                          *OpenAIAccountDefaultsConfig `json:"openai_account_defaults,omitempty"`
 	OpenAIAPIKeyFallback                           OpenAIAPIKeyFallbackConfig   `json:"openai_apikey_fallback"`
 	DegradationAction                              OAuthDegradationConfig       `json:"degradation_action"`
@@ -66,11 +67,14 @@ func (c *OAuthAutoConfig) UnmarshalJSON(data []byte) error {
 
 func DefaultOAuthAutoConfig() OAuthAutoConfig {
 	wsMode, wsSSEAcceleration := OpenAIWSIngressModeCtxPool, false
-	return OAuthAutoConfig{OpenAIAPIKeyFallback: DefaultOpenAIAPIKeyFallbackConfig(), OpenAIDisableSchedulingOn4297dThresholdPercent: DefaultOpenAIDisableSchedulingOn4297dThresholdPercent, DegradationAction: DefaultOAuthDegradationConfig(), OpenAIWSMode: &wsMode, OpenAIWSSSEAcceleration: &wsSSEAcceleration, OpenAITwoFAAdmission: DefaultOpenAITwoFAAdmissionConfig(), ModelMappings: defaultOAuthModelMappings(PlatformOpenAI), ModelBilling: DefaultModelBillingConfig(), ExcelBPS: DefaultExcelBPSDefaults(), Platform: PlatformOpenAI, Priority: 50, LoadFactor: 1, Concurrency: 3, CostMultiplier: 0.07, GroupIDs: []int64{}, UpgradeGroupIDs: []int64{}, SuccessesPerStep: 20, UpgradeStep: 1, MaxConcurrency: 100, CooldownSeconds: 60}
+	return OAuthAutoConfig{APIKeyDisposition: DefaultOAuthAPIKeyDispositionConfig(), OpenAIAPIKeyFallback: DefaultOpenAIAPIKeyFallbackConfig(), OpenAIDisableSchedulingOn4297dThresholdPercent: DefaultOpenAIDisableSchedulingOn4297dThresholdPercent, DegradationAction: DefaultOAuthDegradationConfig(), OpenAIWSMode: &wsMode, OpenAIWSSSEAcceleration: &wsSSEAcceleration, OpenAITwoFAAdmission: DefaultOpenAITwoFAAdmissionConfig(), ModelMappings: defaultOAuthModelMappings(PlatformOpenAI), ModelBilling: DefaultModelBillingConfig(), ExcelBPS: DefaultExcelBPSDefaults(), Platform: PlatformOpenAI, Priority: 50, LoadFactor: 1, Concurrency: 3, CostMultiplier: 0.07, GroupIDs: []int64{}, UpgradeGroupIDs: []int64{}, SuccessesPerStep: 20, UpgradeStep: 1, MaxConcurrency: 100, CooldownSeconds: 60}
 }
 func ValidateOAuthAutoConfig(c OAuthAutoConfig) error {
 	if err := validateOpenAIAccountDefaults(c.OpenAIAccountDefaults); err != nil {
 		return err
+	}
+	if err := c.APIKeyDisposition.Validate(); err != nil {
+		return infraerrors.BadRequest("OAUTH_APIKEY_DISPOSITION_INVALID", err.Error())
 	}
 	if err := c.OpenAIAPIKeyFallback.Validate(); err != nil {
 		return err
@@ -179,6 +183,7 @@ func (s *adminServiceImpl) ApplyOAuthAutoConfig(ctx context.Context, input *Crea
 	if input == nil {
 		return ErrAccountNilInput
 	}
+	input.InitialAPIKeyDisposition = nil
 	input.InitialQualityPlan = nil
 	input.InitialAdmissionPlan = nil
 	input.Credentials = maps.Clone(input.Credentials)
@@ -235,6 +240,12 @@ func (s *adminServiceImpl) ApplyOAuthAutoConfig(ctx context.Context, input *Crea
 	plan, err := c.QualityRule.plan(c.Platform)
 	if err != nil {
 		return err
+	}
+	if c.APIKeyDisposition.Enabled {
+		policy := c.APIKeyDisposition
+		policy.AccountIDs = slices.Clone(policy.AccountIDs)
+		policy.GroupIDs = slices.Clone(policy.GroupIDs)
+		input.InitialAPIKeyDisposition = &policy
 	}
 	input.InitialQualityPlan = plan
 	if nativeDefaults {
@@ -315,6 +326,9 @@ func (s *AccountOpsService) SaveOAuthAutoConfig(ctx context.Context, c OAuthAuto
 		return c, err
 	}
 
+	if err := s.validateOAuthAPIKeyDisposition(ctx, c); err != nil {
+		return c, err
+	}
 	if c.Enabled {
 		for _, id := range c.GroupIDs {
 			g, err := s.autoGroups.GetByID(ctx, id)

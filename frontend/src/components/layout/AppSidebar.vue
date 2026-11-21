@@ -102,6 +102,7 @@ const tabNotices: Record<string, string> = {
   '/admin/auto-config': NEW_FEATURE_NOTICES.oauthInitialModelSelection,
   '/admin/account-quality': NEW_FEATURE_NOTICES.qualityRetestRest,
   '/admin/channel-operations': NEW_FEATURE_NOTICES.matureProviders,
+  '/admin/profit-operations': NEW_FEATURE_NOTICES.providerProfit,
   '/admin/qqbot/overview': NEW_FEATURE_NOTICES.qqCommunity,
 }
 

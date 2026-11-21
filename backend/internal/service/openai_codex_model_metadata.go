@@ -3,8 +3,11 @@ package service
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/url"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
@@ -90,8 +93,8 @@ func accountCodexToolCapabilities(account *Account, modelID string) map[string]j
 		applyCodexToolCapabilities(capabilities, defaults, false)
 	}
 	if account.IsOpenAI() && openai.IsGPT62ModelSpelling(modelID) && official {
-		// Only advertise public Responses capabilities. No bundled official
-		// Codex 6.2 descriptor is available to seed ChatGPT-only wire fields.
+		// Only advertise public Responses capabilities; display metadata alone
+		// does not establish ChatGPT-only wire capabilities.
 		applyCodexToolCapabilities(capabilities, map[string]json.RawMessage{
 			"supports_search_tool":  json.RawMessage("true"),
 			"apply_patch_tool_type": json.RawMessage(`"freeform"`),
@@ -115,11 +118,17 @@ func accountCodexToolCapabilities(account *Account, modelID string) map[string]j
 			capabilities["use_responses_lite"] = json.RawMessage("false")
 		}
 	}
-	// API Astra publicly supports Ultrafast. OAuth must advertise it in its
-	// account manifest; a subscription label alone does not grant the capability.
-	if account.IsOpenAIApiKey() && isOfficialOpenAIModelsBaseURL(baseURL) && isOpenAIGPT6AstraModel(modelID) {
+	// Preserve provider-declared tiers. Only fill missing official API metadata;
+	// OAuth capability data comes from the account manifest.
+	apiUltra := account.IsOpenAIApiKey() && isOfficialOpenAIModelsBaseURL(baseURL) && (openai.GPT62ModelID(modelID) != "" || isOpenAIGPT6AstraModel(modelID))
+	if apiUltra && len(capabilities["service_tiers"]) == 0 {
 		tiers := configuredCodexServiceTiersForModel(modelID)
-		tiers = append(tiers, configuredCodexServiceTier{ID: OpenAIFastTierUltrafast, Name: "Ultrafast", Description: "Lowest latency; 6x Standard token pricing."})
+		description := fmt.Sprintf("Lowest latency; %gx Standard token pricing.", openAIUltrafastMultiplier(modelID, time.Now()))
+		if i := slices.IndexFunc(tiers, func(tier configuredCodexServiceTier) bool { return tier.ID == OpenAIFastTierUltrafast }); i >= 0 {
+			tiers[i].Description = description
+		} else {
+			tiers = append(tiers, configuredCodexServiceTier{ID: OpenAIFastTierUltrafast, Name: "Ultrafast", Description: description})
+		}
 		encoded, err := json.Marshal(tiers)
 		if err != nil {
 			panic(err)

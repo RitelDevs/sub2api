@@ -2,8 +2,6 @@ package repository
 
 import (
 	"bufio"
-	"context"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -15,7 +13,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
-	"github.com/tidwall/gjson"
 )
 
 type gatewayPinDelegate struct {
@@ -45,57 +42,6 @@ func pinRequest(t *testing.T) *http.Request {
 }
 func pinConfig() config.CodexGatewayPinConfig {
 	return config.CodexGatewayPinConfig{Enabled: true, SourceAccountIDs: []int64{299, 298}, TargetAccountIDs: []int64{300}}
-}
-
-func TestCodexGatewayPinAccountIsolation(t *testing.T) {
-	source := pinRequest(t)
-	source.Header.Set("Authorization", "Bearer source-test-token")
-	source.Header.Set("ChatGPT-Account-ID", "source-test-account")
-	target := pinRequest(t)
-	target.Header.Set("Authorization", "Bearer target-test-token")
-	target.Header.Set("ChatGPT-Account-ID", "target-test-account")
-	target.Header.Set("X-Codex-Turn-State", "target-test-state")
-	target.Header.Set("Session_id", "target-test-session")
-	target.Header.Add("Cookie", "__cflb=target-cf; __oailb=old-route")
-	target.Header.Add("Cookie", "custom=keep; __oailb=duplicate-route")
-	calls := 0
-	profile := &tlsfingerprint.Profile{Name: "test"}
-	pin := &codexGatewayPinUpstream{config: pinConfig()}
-	pin.delegate = gatewayPinDelegate{call: func(r *http.Request, proxy string, id int64, concurrency int, f *tlsfingerprint.Profile) (*http.Response, error) {
-		calls++
-		require.True(t, service.HTTPUpstreamRedirectsDisabled(r.Context()))
-		if id == 299 {
-			require.Equal(t, "Bearer source-test-token", r.Header.Get("Authorization"))
-			resp := pinResponse("__oailb=source-route; Path=/; Secure; Max-Age=3600")
-			resp.Header.Add("Set-Cookie", "chatgpt_session=never-copy; Path=/; Secure")
-			resp.Header.Add("Set-Cookie", "__cf_bm=never-copy; Path=/; Secure")
-			return resp, nil
-		}
-		require.Equal(t, int64(300), id)
-		require.Equal(t, "target-proxy", proxy)
-		require.Equal(t, 10, concurrency)
-		require.Same(t, profile, f)
-		require.Equal(t, "Bearer target-test-token", r.Header.Get("Authorization"))
-		require.Equal(t, "target-test-account", r.Header.Get("ChatGPT-Account-ID"))
-		require.Equal(t, "target-test-state", r.Header.Get("X-Codex-Turn-State"))
-		require.Equal(t, "target-test-session", r.Header.Get("Session_id"))
-		require.Equal(t, "__cflb=target-cf; custom=keep; __oailb=source-route", r.Header.Get("Cookie"))
-		// A target response must never overwrite the source route.
-		return pinResponse("__oailb=target-route; Path=/; Secure; Max-Age=3600"), nil
-	}}
-	_, err := pin.Do(target, "", 300, 10)
-	require.ErrorIs(t, err, errCodexGatewayPinUnavailable)
-	require.Zero(t, calls)
-	resp, err := pin.Do(source, "", 299, 10)
-	require.NoError(t, err)
-	_, readErr := io.ReadAll(resp.Body)
-	require.NoError(t, readErr)
-	require.NoError(t, resp.Body.Close())
-	resp, err = pin.DoWithTLS(target, "target-proxy", 300, 10, profile)
-	require.NoError(t, err)
-	require.NoError(t, resp.Body.Close())
-	require.Equal(t, []string{"__cflb=target-cf; __oailb=old-route", "custom=keep; __oailb=duplicate-route"}, target.Header.Values("Cookie"))
-	require.Equal(t, "source-route", func() string { c, _ := pin.currentCookie(target.URL.Path, time.Now()); return c.Value }())
 }
 
 func TestCodexGatewayPinLifetime(t *testing.T) {
@@ -239,30 +185,6 @@ func TestCodexGatewayPinRequiresCompletedAstra(t *testing.T) {
 	}
 }
 
-func TestAstraGatewayRuntimeRevisionClearsPool(t *testing.T) {
-	cfg := &config.Config{}
-	settings := config.AstraRoutingSettings{CookiePool: pinConfig(), Revision: "one"}
-	cfg.SetAstraRoutingLoader(func(context.Context) config.AstraRoutingSettings { return settings })
-	wrapper := &astraRoutingUpstream{cfg: cfg}
-	first := wrapper.current(t.Context())
-	now := time.Now()
-	first.recordSource(299, now, &codexGatewayRoute{cookie: http.Cookie{Name: "__oailb", Value: "route", Path: "/"}, expires: now.Add(time.Minute)}, true)
-	cookie, err := wrapper.CodexGatewayPinWSHeader(300)
-	require.NoError(t, err)
-	require.Equal(t, "route", cookie)
-	settings.Revision = "two"
-	second := wrapper.current(t.Context())
-	require.NotSame(t, first, second)
-	cookie, err = wrapper.CodexGatewayPinWSHeader(300)
-	require.NoError(t, err)
-	require.Empty(t, cookie)
-	settings.CookiePool.Enabled = false
-	require.Nil(t, wrapper.current(t.Context()))
-	cookie, err = wrapper.CodexGatewayPinWSHeader(300)
-	require.NoError(t, err)
-	require.Empty(t, cookie)
-}
-
 // Account tests stop after reading the terminal data line, before the empty SSE
 // delimiter. The transport observer must not reject that complete response.
 func TestAstraGatewayAccountTestStopsAtTerminalLine(t *testing.T) {
@@ -286,61 +208,6 @@ func (r *oneByteReadCloser) Read(p []byte) (int, error) {
 }
 func (r *oneByteReadCloser) Close() error { return nil }
 
-func TestAstraGatewayMissingContentTypeAndDeltaOnlyOutput(t *testing.T) {
-	cfg := pinConfig()
-	pin := &codexGatewayPinUpstream{config: cfg}
-	stream := `data: {"type":"response.output_text.delta","delta":"21"}` + "\n\n" + `data: {"type":"response.completed","response":{"model":"gpt-6-astra","status":"completed","output":[]}}` + "\n\n"
-	pin.delegate = gatewayPinDelegate{call: func(_ *http.Request, _ string, _ int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
-		resp := pinResponse("__oailb=route; Path=/; Secure; Max-Age=3600")
-		resp.Header.Del("Content-Type")
-		resp.Body = &oneByteReadCloser{Reader: strings.NewReader(stream)}
-		return resp, nil
-	}}
-	resp, err := pin.Do(pinRequest(t), "", 299, 1)
-	require.NoError(t, err)
-	reader := bufio.NewReader(resp.Body)
-	for {
-		line, err := reader.ReadString('\n')
-		require.NoError(t, err)
-		if strings.Contains(line, "response.completed") {
-			break
-		}
-	}
-	require.NoError(t, resp.Body.Close())
-	cookie, id := pin.currentCookie("/backend-api/codex/responses", time.Now())
-	require.NotNil(t, cookie)
-	require.Equal(t, int64(299), id)
-}
-
-func TestAstraGatewayAutomaticPrepareAndCooldown(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.Gateway.CodexGatewayPin = pinConfig()
-	wrapper := &astraRoutingUpstream{cfg: cfg}
-	calls := 0
-	wrapper.SetAstraGatewayPreparer(func(_ context.Context, id int64) error {
-		calls++
-		p := wrapper.current(t.Context())
-		now := time.Now()
-		if id == 299 {
-			return errors.New("unavailable")
-		}
-		p.recordSource(id, now, &codexGatewayRoute{cookie: http.Cookie{Name: "__oailb", Value: "qualified", Path: "/"}, expires: now.Add(time.Minute)}, true)
-		return nil
-	})
-	require.NoError(t, wrapper.PrepareAstraGateway(t.Context()))
-	require.Equal(t, 2, calls)
-	status := wrapper.AstraGatewaySnapshot(t.Context())
-	require.Zero(t, status.ReadyRoutes, "source success alone is not a target-validated route")
-	require.Equal(t, "source_test_failed", status.Sources[0].Reason)
-	require.NoError(t, wrapper.PrepareAstraGateway(t.Context()))
-	require.Equal(t, 3, calls)
-	wrapper.pool = nil
-	wrapper.SetAstraGatewayPreparer(func(context.Context, int64) error { calls++; return errors.New("failed") })
-	require.Error(t, wrapper.PrepareAstraGateway(t.Context()))
-	n := calls
-	require.ErrorContains(t, wrapper.PrepareAstraGateway(t.Context()), "cooldown")
-	require.Equal(t, n, calls)
-}
 func TestAstraGatewayLifetimeConfiguration(t *testing.T) {
 	now := time.Now()
 	resp := pinResponse("__oailb=route; Path=/; Secure; Max-Age=3600")
@@ -349,66 +216,27 @@ func TestAstraGatewayLifetimeConfiguration(t *testing.T) {
 	require.Empty(t, astraRoutingHost("not-a-jwt"))
 }
 
-func TestAstraGatewayTargetPreparesSourceBeforeForwarding(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.Gateway.CodexGatewayPin = pinConfig()
-	wrapper := &astraRoutingUpstream{cfg: cfg}
-	calls, candy, business := 0, 0, 0
-	wrapper.delegate = gatewayPinDelegate{call: func(r *http.Request, _ string, id int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+func TestRetiredLegacyPoolRejectsAcquisitionAndCachedRoutes(t *testing.T) {
+	pool := &codexGatewayPinUpstream{config: pinConfig()}
+	accountBorrowAdd(t, pool, 299, "stale", time.Minute)
+	calls := 0
+	pool.delegate = gatewayPinDelegate{call: func(*http.Request, string, int64, int, *tlsfingerprint.Profile) (*http.Response, error) {
 		calls++
-		raw, readErr := io.ReadAll(r.Body)
-		require.NoError(t, readErr)
-		if service.IsOpenAICodexStateProbeRequest(r.Context()) {
-			if gjson.GetBytes(raw, "input.0.content.0.text").String() == service.GatewayBorrowCandyPrompt {
-				candy++
-			}
-		} else {
-			business++
-		}
-		require.Equal(t, int64(300), id)
-		require.Equal(t, "__oailb=ready", r.Header.Get("Cookie"))
-		return pinResponse(""), nil
+		return nil, nil
 	}}
-	wrapper.SetAstraGatewayPreparer(func(_ context.Context, id int64) error {
-		now := time.Now()
-		wrapper.current(t.Context()).recordSource(id, now, &codexGatewayRoute{cookie: http.Cookie{Name: "__oailb", Value: "ready", Path: "/"}, expires: now.Add(time.Minute)}, true)
-		return nil
-	})
-	req := pinRequest(t)
-	req = req.WithContext(service.WithGatewayBorrowRequiredModel(req.Context(), "gpt-6-astra"))
-	resp, err := wrapper.Do(req, "", 300, 1)
-	require.NoError(t, err)
-	require.NoError(t, resp.Body.Close())
-	require.Equal(t, 7, calls)
-	require.Equal(t, 4, candy, "mandatory legacy path validates route quality before the first send")
-	require.Equal(t, 1, business, "exactly one business request follows the settled probe")
-}
-
-func TestTrustedSourceAcquisitionDoesNotRequireCandyAnswer(t *testing.T) {
-	for _, controlled := range []bool{false, true} {
-		pool := &codexGatewayPinUpstream{config: pinConfig()}
-		pool.delegate = gatewayPinDelegate{call: func(r *http.Request, p string, a int64, n int, f *tlsfingerprint.Profile) (*http.Response, error) {
-			resp := pinResponse("__oailb=trusted; Path=/; Secure; Max-Age=230")
-			body, err := io.ReadAll(resp.Body)
-			require.NoError(t, err)
-			_ = resp.Body.Close()
-			resp.Body = io.NopCloser(strings.NewReader(strings.ReplaceAll(string(body), `"21"`, `"OK"`)))
-			return resp, nil
-		}}
-		ctx := context.Background()
-		if controlled {
-			ctx = service.WithAstraSourceAcquisition(ctx)
+	for _, id := range []int64{299, 300} {
+		r := pinRequest(t)
+		if id == 300 {
+			r = r.WithContext(t.Context())
 		}
-		resp, err := pool.Do(pinRequest(t).WithContext(ctx), "", 299, 1)
-		require.NoError(t, err)
-		_, err = io.Copy(io.Discard, resp.Body)
-		require.NoError(t, err)
-		require.NoError(t, resp.Body.Close())
-		cookie, _ := pool.currentCookie("/backend-api/codex/responses", time.Now())
-		if controlled {
-			require.NotNil(t, cookie)
-		} else {
-			require.Nil(t, cookie)
-		}
+		before := r.Header.Clone()
+		resp, err := pool.Do(r, "fixed", id, 1)
+		require.True(t, service.IsOpenAITurnAdmissionError(err))
+		require.Nil(t, resp)
+		require.Equal(t, before, r.Header)
 	}
+	route, err := pool.CodexGatewayPinWSHeader(300)
+	require.Error(t, err)
+	require.Empty(t, route)
+	require.Zero(t, calls)
 }

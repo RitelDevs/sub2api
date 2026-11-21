@@ -3,16 +3,18 @@ package service
 import (
 	"context"
 	"errors"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
@@ -139,6 +141,9 @@ func (s *OpenAIGatewayService) doOpenAIProxyAttempt(req *http.Request, account *
 		return nil, admissionErr
 	}
 	account = latest
+	if err := s.rejectRetiredGatewayRoute(req, account, s.httpUpstream); err != nil {
+		return nil, err
+	}
 	if req != nil {
 		req = req.WithContext(s.withRequestTimezoneEgress(req.Context(), account))
 	}
@@ -168,27 +173,10 @@ func (s *OpenAIGatewayService) doOpenAIProxyAttempt(req *http.Request, account *
 			err = &runtimeProxyEgressError{error: err, target: target}
 		}
 	}()
-	borrowModel, borrowRequired, modelErr := gatewayBorrowRequiredUpstreamRequest(req, account)
-	if modelErr != nil {
-		return nil, modelErr
-	}
-	if borrowRequired {
-		next := WithGatewayBorrowRequiredModel(req.Context(), borrowModel)
-		scope, _ := req.Context().Value(openAIFinalSendScopeKey{}).(openAIFinalSendScope)
-		if scope.previousID != "" {
-			cookie, proofErr := s.gatewayBorrowHTTPContinuation(next, account, borrowModel, scope.previousID, scope.keyID, scope.groupID)
-			if proofErr != nil {
-				return nil, proofErr
-			}
-			next = context.WithValue(next, gatewayBorrowExpectedCookieContextKey{}, cookie)
-		}
-		req = req.WithContext(next)
-		req = s.withGatewayBorrowFinalSendCheck(req, account, borrowModel)
-	}
 	if err = s.fenceAuthConnectionEgress(req.Context(), req, account); err != nil {
 		return nil, err
 	}
-	if s.pluginManager != nil && !borrowRequired && account.AuthConnectionID == "" && !s.codexTicketRequestBound(req, account) {
+	if s.pluginManager != nil && !account.OpenAIRequestProxyEnabled() && account.AuthConnectionID == "" && !s.codexTicketRequestBound(req, account) {
 		resp, handled, err := s.pluginManager.RoundTripOpenAIOAuth(req.Context(), req, target.url, account)
 		if handled {
 			if options, ok := pelicanTestOptionsFromContext(req.Context()); ok && options.nativeOAuthTransport != nil && !IsAstraSourceAcquisition(req.Context()) {
@@ -219,7 +207,7 @@ func (s *OpenAIGatewayService) doUpstreamWithProxyFallback(ctx context.Context, 
 		primary.proxyID = account.Proxy.ID
 		primary.proxyName = account.Proxy.Name
 	}
-	if isControlledExperiment(ctx) || s.codexTicketPinsEgress(req, account) || account.Proxy == nil || primaryProxyURL == "" ||
+	if account.OpenAIRequestProxyEnabled() || isControlledExperiment(ctx) || s.codexTicketPinsEgress(req, account) || account.Proxy == nil || primaryProxyURL == "" ||
 		primaryProxyURL != account.Proxy.URL() ||
 		(account.Proxy.FallbackMode != FallbackModeDirect && account.Proxy.FallbackMode != FallbackModeProxy) {
 		return s.doOpenAIProxyAttempt(req, account, primary)
@@ -246,7 +234,7 @@ func (s *OpenAIGatewayService) doUpstreamWithProxyFallback(ctx context.Context, 
 		resp, err, unsent := s.doOpenAIProxyAttemptWithTrace(attemptReq, account, target)
 		if err == nil || resp != nil || !unsent || target.proxyID == 0 ||
 			ctx.Err() != nil || req.Context().Err() != nil || req.GetBody == nil ||
-			!classifyUpstreamTransportError(err).Persistent {
+			!runtimeProxyConnectionFailure(err) {
 			return resp, err
 		}
 		// A plugin may report having sent a request even when it did not emit
@@ -274,6 +262,17 @@ func (s *OpenAIGatewayService) doUpstreamWithProxyFallback(ctx context.Context, 
 		)
 		attemptReq, target = retry, next
 	}
+}
+
+// The health classifier also considers credential rejection persistent. Only
+// a network failure, not a policy denial or its diagnostic text, permits retry.
+func runtimeProxyConnectionFailure(err error) bool {
+	if IsOpenAITurnAdmissionError(err) || IsUpstreamModerationDenied(err) {
+		return false
+	}
+	var dns *net.DNSError
+	return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.EHOSTUNREACH) ||
+		errors.Is(err, syscall.ENETUNREACH) || (errors.As(err, &dns) && dns.IsNotFound)
 }
 
 // Never reuse the previous attempt's trace state or context. Otherwise a
@@ -319,14 +318,36 @@ func cloneUpstreamRequestForRetry(ctx context.Context, req *http.Request) (*http
 	return clone, nil
 }
 
+func (s *OpenAIGatewayService) rejectRetiredGatewayRoute(req *http.Request, a *Account, upstream HTTPUpstream) error {
+	_, required, err := gatewayBorrowRequiredUpstreamRequest(req, a)
+	if err != nil {
+		return err
+	}
+	if required || IsAstraSourceAcquisition(req.Context()) {
+		return denyOpenAITurn("gateway_borrow_retired")
+	}
+	// Plugins may handle the request without ever entering the repository adapter.
+	if policy, ok := upstream.(interface {
+		CheckRetiredAstraRoute(*http.Request, int64) error
+	}); ok {
+		if err := policy.CheckRetiredAstraRoute(req, a.ID); err != nil {
+			return err
+		}
+	}
+	if ticket := s.boundCodexTicket(req, a); ticket != nil && (ticket.Acquisition == "gateway_borrow" || (ticket.SourceAccountID != 0 && ticket.SourceAccountID != a.ID)) {
+		return denyOpenAITurn("gateway_borrow_retired")
+	}
+	return nil
+}
+
 // Only requests with a readable complete outbound model can use a plugin when
 // the account owns a protected borrow policy. Missing/large bodies fail closed.
 func gatewayBorrowRequiredUpstreamRequest(req *http.Request, a *Account) (string, bool, error) {
-	if !a.gatewayBorrowPolicyActive() {
-		return "", false, nil
-	}
 	if model, required := GatewayBorrowRequiredModelFromContext(req.Context()); required {
 		return model, true, nil
+	}
+	if !a.gatewayBorrowPolicyActive() {
+		return "", false, nil
 	}
 	if scope, ok := req.Context().Value(openAIFinalSendScopeKey{}).(openAIFinalSendScope); ok && scope.model != "" {
 		if !a.RequiresGatewayBorrowUpstream(scope.model) {

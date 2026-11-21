@@ -1,4 +1,5 @@
 export default {
+  "proxyHint": "SIWC 重用帳號的代理設定。選擇「按請求分散」時使用已儲存的代理組；組內無可用代理則阻斷，不回退直連，帳號總併發上限不變。",
   "protocol": "OpenAI 請求協議",
   "codex": "Codex（保留現有 BPS / Prism 配置）",
   "siwc": "SIWC API（Sign in with ChatGPT）",

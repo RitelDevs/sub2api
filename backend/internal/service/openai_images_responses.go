@@ -2019,6 +2019,15 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	defer releaseUpstreamCtx()
 
+	// Image generation already survives client disconnects so completed work
+	// can be accounted for. Its proxy scope follows that upstream lifecycle.
+	proxyCtx, releaseProxy, proxyErr := s.beginOpenAIRequestProxy(upstreamCtx, c, account)
+	if proxyErr != nil {
+		return nil, proxyErr
+	}
+	defer releaseProxy()
+	upstreamCtx = proxyCtx
+
 	if direct && account.IsExcelBPSImagesEnabledForModel(requestModel) && s.excelBPSGloballyEnabled(ctx) {
 		if reason := excelBPSImagesUnsupportedReason(parsed); reason != "" {
 			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Images request stays on Codex: account_id=%d bps_unsupported=%s", account.ID, reason)
@@ -2029,7 +2038,6 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 			}
 		}
 	}
-
 	credentialAccount, err := resolveCredentialAccount(ctx, s.accountRepo, account)
 	if err != nil {
 		return nil, err
@@ -2082,6 +2090,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	upstreamStart := time.Now()
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
+	if rejection := rejectOpenAITransportChallenge(resp); rejection != nil {
+		return nil, finishOpenAITransportRejection(c, rejection)
+	}
 	if err != nil {
 		if resetErr, handled := handleOpenAIHTTP2PeerReset(c, account, "", err); handled {
 			return nil, resetErr
@@ -2110,14 +2121,10 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		_ = resp.Body.Close()
 		respBody = s.redactAgentIdentitySensitiveBody(upstreamCtx, account, respBody)
 		if direct && !isOpenAIImage26Model(upstreamModel) && canFallbackOpenAIImagesToResponses(parsed, resp.StatusCode, respBody) {
-			return s.forwardOpenAIImagesOAuth(withOpenAIImagesForceResponses(ctx), c, account, parsed, channelMappedModel)
+			return s.forwardOpenAIImagesOAuth(withOpenAIImagesForceResponses(upstreamCtx), c, account, parsed, channelMappedModel)
 		}
-		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
-			expectedTaskID := account.GetCredential("task_id")
-			if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {
-				return nil, fmt.Errorf("agent identity task recovery failed: %w", err)
-			}
-			return s.forwardOpenAIImagesOAuth(markAgentIdentityTaskRecoveryTried(ctx), c, account, parsed, channelMappedModel)
+		if s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
+			return nil, finishOpenAITransportRejection(c, errors.New("upstream rejected the selected identity task"))
 		}
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 		if resp.StatusCode == http.StatusBadRequest || resp.StatusCode >= http.StatusInternalServerError {

@@ -149,7 +149,7 @@
             </div>
           </div>
 
-          <div v-if="enableTierMultipliers" class="mt-3 grid max-w-md grid-cols-1 gap-2 sm:grid-cols-2">
+          <div v-if="enableTierMultipliers" class="mt-3 grid max-w-3xl grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
             <div>
               <label :id="'field-' + fieldLabelScope + '-9'" class="text-xs text-gray-400">{{ t('admin.channels.form.fastMultiplier') }}</label>
               <input :aria-labelledby="'field-' + fieldLabelScope + '-9'" :value="entry.fast_multiplier" @input="emitField('fast_multiplier', ($event.target as HTMLInputElement).value)"
@@ -158,6 +158,11 @@
             <div>
               <label :id="'field-' + fieldLabelScope + '-10'" class="text-xs text-gray-400">{{ t('admin.channels.form.flexMultiplier') }}</label>
               <input :aria-labelledby="'field-' + fieldLabelScope + '-10'" :value="entry.flex_multiplier" @input="emitField('flex_multiplier', ($event.target as HTMLInputElement).value)"
+                type="number" step="any" min="0.000001" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.multiplierPlaceholder')" />
+            </div>
+            <div v-if="props.platform === 'openai'">
+              <label class="text-xs text-gray-400">{{ t('admin.channels.form.ultrafastMultiplier') }} <NewFeatureBadge v-if="noticeUserId != null" :notice-id="NEW_FEATURE_NOTICES.channelUltrafastPricing" :user-id="noticeUserId" /></label>
+              <input :value="entry.ultrafast_multiplier" @input="emitField('ultrafast_multiplier', ($event.target as HTMLInputElement).value)"
                 type="number" step="any" min="0.000001" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.multiplierPlaceholder')" />
             </div>
           </div>

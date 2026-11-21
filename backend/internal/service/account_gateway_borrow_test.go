@@ -83,62 +83,36 @@ func TestGatewayBorrowSelectionAndCompactFailClosed(t *testing.T) {
 	s, a, _ := borrowSafetyService()
 	scheduler, ok := newDefaultOpenAIAccountScheduler(s, nil).(*defaultOpenAIAccountScheduler)
 	require.True(t, ok)
-	require.Empty(t, s.gatewayBorrowPolicyReason(t.Context(), a, "gpt-6-astra", false))
+	require.Equal(t, "gateway_borrow_retired", s.gatewayBorrowPolicyReason(t.Context(), a, "gpt-6-astra", false))
 	compatible, reason := scheduler.isAccountRequestCompatibleReason(t.Context(), a, OpenAIAccountScheduleRequest{RequestedModel: "gpt-6-astra", RequireCompact: true})
 	require.False(t, compatible)
 	require.Equal(t, "gateway_borrow_compact_unavailable", reason)
 	s.cfg.Gateway.CodexGatewayPin.Enabled = false
-	require.Equal(t, "gateway_borrow_policy_unavailable", s.gatewayBorrowPolicyReason(t.Context(), a, "gpt-6-astra", false))
+	require.Equal(t, "gateway_borrow_retired", s.gatewayBorrowPolicyReason(t.Context(), a, "gpt-6-astra", false))
 	s.cfg.Gateway.CodexGatewayPin.Enabled = true
 	s.httpUpstream = nil
-	require.Equal(t, "gateway_borrow_provider_unavailable", s.gatewayBorrowPolicyReason(t.Context(), a, "gpt-6-astra", false))
+	require.Equal(t, "gateway_borrow_retired", s.gatewayBorrowPolicyReason(t.Context(), a, "gpt-6-astra", false))
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest("POST", "/v1/responses/compact", nil)
 	_, err := s.admitOpenAITurn(t.Context(), c, a, "gpt-6-astra")
 	require.ErrorContains(t, err, "gateway_borrow_compact_unavailable")
 }
-func TestGatewayBorrowWSUsesVerifiedCookieAndNewPoolScope(t *testing.T) {
+func TestGatewayBorrowWSRejectsEvenUnexpiredLegacyBinding(t *testing.T) {
 	s, a, p := borrowSafetyService()
-	headers := http.Header{"Cookie": []string{"unrelated=kept; __oailb=client-cookie"}}
-	scope, proxy, release, err := s.prepareGatewayBorrowWS(t.Context(), a, "gpt-6-astra", headers, "")
-	require.NoError(t, err)
-	defer release()
-	require.NotEmpty(t, scope)
-	require.Equal(t, "http://borrow-exit.invalid:80", proxy)
-	require.Equal(t, p.cookie, gatewayBorrowCookie(headers))
-	require.Contains(t, headers.Get("Cookie"), "unrelated=kept")
-	b := s.bindOpenAIWSHandshake(a, "gpt-6-astra", headers)
-	require.NoError(t, s.checkOpenAIWSBinding(a, "gpt-6-astra", b))
-	s.cfg.Gateway.CodexGatewayPin.Enabled = false
-	require.Error(t, s.checkOpenAIWSBinding(a, "gpt-6-astra", b))
-	s.cfg.Gateway.CodexGatewayPin.Enabled = true
-	p.cookie = "rotated-cookie"
-	require.ErrorContains(t, s.checkOpenAIWSBinding(a, "gpt-6-astra", b), "connection_borrow_revoked")
-	next, _, closeNext, err := s.prepareGatewayBorrowWS(t.Context(), a, "gpt-6-astra", headers, "")
-	require.NoError(t, err)
-	defer closeNext()
-	require.NotEqual(t, scope, next)
-	p.valid = false
-	_, _, _, err = s.prepareGatewayBorrowWS(t.Context(), a, "gpt-6-astra", headers, "")
-	require.Error(t, err)
-}
-func TestGatewayBorrowWSRejectsOldNativeExpiredCredentialAndPolicyBindings(t *testing.T) {
-	s, a, p := borrowSafetyService()
-	headers := http.Header{}
-	_, _, release, err := s.prepareGatewayBorrowWS(t.Context(), a, "gpt-6-astra", headers, "")
-	require.NoError(t, err)
-	defer release()
-	b := s.bindOpenAIWSHandshake(a, "gpt-6-astra", headers)
-	native := *b
-	native.borrowCookie = ""
-	require.Error(t, s.checkOpenAIWSBinding(a, "gpt-6-astra", &native))
-	expired := *b
-	expired.borrowExpires = time.Now().Add(-time.Second)
-	require.ErrorContains(t, s.checkOpenAIWSBinding(a, "gpt-6-astra", &expired), "connection_borrow_expired")
-	a.Credentials = maps.Clone(a.Credentials)
-	a.Credentials["access_token"] = "new-private-fixture"
-	require.ErrorContains(t, s.checkOpenAIWSBinding(a, "gpt-6-astra", b), "connection_borrow_expired")
-	require.Equal(t, 1, p.calls, "per-turn binding checks must not issue a new probe")
+	h := http.Header{"Cookie": {"__oailb=" + p.cookie}}
+	before := h.Clone()
+	ctx := t.Context()
+	scope, proxy, release, err := s.prepareGatewayBorrowWS(ctx, a, "gpt-6-astra", h, "fixed")
+	require.ErrorContains(t, err, "gateway_borrow_retired")
+	release()
+	require.Empty(t, scope)
+	require.Equal(t, "fixed", proxy)
+	require.Equal(t, before, h)
+	require.Zero(t, p.calls)
+	b := &openAIWSTurnBinding{model: "gpt-6-astra", fingerprint: openAITurnRouteFingerprint(a), createdAt: time.Now(), borrowCookie: p.cookie, borrowExpires: time.Now().Add(time.Hour)}
+	require.ErrorContains(t, s.checkOpenAIWSBinding(a, "gpt-6-astra", b), "gateway_borrow_retired")
+	require.Error(t, s.checkOpenAIWSBinding(a, "gpt-6-luna", b))
+	require.Zero(t, p.calls)
 }
 func TestGatewayBorrowFinalAdmissionPreservesPauseQuotaAndModelGates(t *testing.T) {
 	for _, change := range []string{"pause", "quota", "auth", "model", "policy"} {
@@ -168,11 +142,11 @@ func TestGatewayBorrowFinalAdmissionPreservesPauseQuotaAndModelGates(t *testing.
 
 func TestGatewayBorrowReadinessIsPerModelAndNeverFallsBack(t *testing.T) {
 	s, a, p := borrowSafetyService()
-	require.Empty(t, s.gatewayBorrowPolicyReason(t.Context(), a, "gpt-6-astra", false))
-	require.Equal(t, "gateway_borrow_route_not_ready", s.gatewayBorrowPolicyReason(t.Context(), a, "gpt-6.1-sol", false))
+	require.Equal(t, "gateway_borrow_retired", s.gatewayBorrowPolicyReason(t.Context(), a, "gpt-6-astra", false))
+	require.Equal(t, "gateway_borrow_retired", s.gatewayBorrowPolicyReason(t.Context(), a, "gpt-6.1-sol", false))
 	require.Empty(t, s.gatewayBorrowPolicyReason(t.Context(), a, "gpt-6-luna", false), "unprotected native model is unaffected")
 	p.snapshot.Targets[0].State = "failed"
-	require.Equal(t, "gateway_borrow_route_not_ready", s.gatewayBorrowPolicyReason(t.Context(), a, "gpt-6-astra", false))
+	require.Equal(t, "gateway_borrow_retired", s.gatewayBorrowPolicyReason(t.Context(), a, "gpt-6-astra", false))
 	require.Zero(t, p.calls, "candidate filtering never probes or repeats model work")
 }
 
@@ -229,20 +203,6 @@ func TestGatewayBorrowPluginBypassGuardAndContextModel(t *testing.T) {
 	require.ErrorContains(t, err, "request_model_unavailable")
 }
 
-func TestGatewayBorrowPoolCannotReuseNativeOrOtherModelConnection(t *testing.T) {
-	s, a, _ := borrowSafetyService()
-	headers := http.Header{}
-	scope, proxy, release, err := s.prepareGatewayBorrowWS(t.Context(), a, "gpt-6-astra", headers, "")
-	require.NoError(t, err)
-	defer release()
-	native := openAIWSAcquireRequest{Account: a, Headers: headers, ProxyURL: proxy}
-	borrowed := native
-	borrowed.AnchorScope = scope
-	require.NotEqual(t, openAIWSAcquireCompatibility(native), openAIWSAcquireCompatibility(borrowed), "real pool compatibility key separates old native connections")
-	binding := s.bindOpenAIWSHandshake(a, "gpt-6-astra", headers)
-	require.ErrorContains(t, s.checkOpenAIWSBinding(a, "gpt-6-luna", binding), "connection_borrow_model_changed")
-}
-
 func TestGatewayBorrowFinalWireModelIsNotMappedTwice(t *testing.T) {
 	s, a, p := borrowSafetyService()
 	a.Credentials = maps.Clone(a.Credentials)
@@ -257,15 +217,10 @@ func TestGatewayBorrowFinalWireModelIsNotMappedTwice(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, required)
 	require.Equal(t, "gpt-6.1-sol", model)
-	headers := http.Header{}
-	_, _, release, err := s.prepareGatewayBorrowWS(t.Context(), a, "gpt-6.1-sol", headers, "")
-	require.NoError(t, err)
-	defer release()
-	b := s.bindOpenAIWSHandshake(a, "gpt-6.1-sol", headers)
-	require.Equal(t, p.cookie, b.borrowCookie)
-	require.NoError(t, s.checkOpenAIWSBinding(a, "gpt-6.1-sol", b))
-	p.valid = false
-	require.Error(t, s.checkOpenAIWSBinding(a, "gpt-6.1-sol", b))
+	_, _, release, err := s.prepareGatewayBorrowWS(t.Context(), a, "gpt-6.1-sol", http.Header{}, "fixed")
+	release()
+	require.ErrorContains(t, err, "gateway_borrow_retired")
+	require.Zero(t, p.calls)
 }
 
 func TestGatewayBorrowMultipartCannotUseProtectedTextRoute(t *testing.T) {
@@ -276,51 +231,5 @@ func TestGatewayBorrowMultipartCannotUseProtectedTextRoute(t *testing.T) {
 	req.Header.Set("Content-Type", "multipart/form-data; boundary=fixture")
 	req = req.WithContext(withOpenAIFinalSendModel(req.Context(), c, "gpt-6-astra"))
 	_, err := s.admitOpenAIHTTPRequest(req, a)
-	require.ErrorContains(t, err, "gateway_borrow_endpoint_unavailable")
-}
-
-func TestGatewayBorrowWSRotatedSourceDoesNotExtendOldCookie(t *testing.T) {
-	s, a, p := borrowSafetyService()
-	oldExpiry := time.Now().Add(time.Minute)
-	newExpiry := time.Now().Add(4 * time.Minute)
-	p.cookieExpires = map[string]time.Time{p.cookie: oldExpiry}
-	headers := http.Header{}
-	_, _, release, err := s.prepareGatewayBorrowWS(t.Context(), a, "gpt-6-astra", headers, "")
-	require.NoError(t, err)
-	defer release()
-	oldCookie := p.cookie
-	p.cookie = "new-source-cookie"
-	p.cookieExpires[p.cookie] = newExpiry
-	p.snapshot.Targets[0].ExpiresAt = &newExpiry
-	// Handshake can happen after another source is promoted; it still binds
-	// the original acquired cookie and its own earlier deadline.
-	b := s.bindOpenAIWSHandshake(a, "gpt-6-astra", headers)
-	require.Equal(t, oldCookie, b.borrowCookie)
-	require.Equal(t, oldExpiry, b.borrowExpires)
-	require.NoError(t, s.checkOpenAIWSBinding(a, "gpt-6-astra", b), "old verified route remains valid before its own expiry")
-	b.borrowExpires = time.Now().Add(-time.Second)
-	require.ErrorContains(t, s.checkOpenAIWSBinding(a, "gpt-6-astra", b), "connection_borrow_expired")
-	require.True(t, time.Now().Before(newExpiry), "new source TTL must not renew the old WS binding")
-}
-
-func TestGatewayBorrowSameCookieRenewalCannotExtendOldWSConnection(t *testing.T) {
-	s, account, provider := borrowSafetyService()
-	oldExpiry := time.Now().Add(time.Minute)
-	newExpiry := time.Now().Add(4 * time.Minute)
-	provider.cookieExpires = map[string]time.Time{provider.cookie: oldExpiry}
-	headers := http.Header{}
-	_, _, release, err := s.prepareGatewayBorrowWS(t.Context(), account, "gpt-6-astra", headers, "")
-	require.NoError(t, err)
-	defer release()
-	binding := s.bindOpenAIWSHandshake(account, "gpt-6-astra", headers)
-	require.Equal(t, oldExpiry, binding.borrowExpires)
-	// A new target IQ result may publish a fresh lease for the identical cookie.
-	provider.cookieExpires[provider.cookie] = newExpiry
-	provider.snapshot.Targets[0].ExpiresAt = &newExpiry
-	require.NoError(t, s.checkOpenAIWSBinding(account, "gpt-6-astra", binding))
-	require.Equal(t, oldExpiry, binding.borrowExpires, "a new proof never mutates an old handshake")
-	binding.borrowExpires = time.Now().Add(-time.Second)
-	require.ErrorContains(t, s.checkOpenAIWSBinding(account, "gpt-6-astra", binding), "connection_borrow_expired")
-	fresh := s.bindOpenAIWSHandshake(account, "gpt-6-astra", headers)
-	require.Equal(t, newExpiry, fresh.borrowExpires, "a new connection binds the independently proven new deadline")
+	require.ErrorContains(t, err, "gateway_borrow_retired")
 }

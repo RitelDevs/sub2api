@@ -35,22 +35,8 @@ func (s *OpenAIGatewayService) huntCodexHarvestTicket(ctx context.Context, accou
 	if round == nil {
 		round = &codexHarvestRound{limit: controls.Speed.MaxRequestsPerRound}
 	}
-	// Try one already collected donor before spending the same round budget
-	// on node discovery. Manual collection remains the explicit self path.
-	if fresh, ok := s.freshHarvestAccount(ctx, account, model); ok {
-		attempted, reused := s.tryBorrowStoredAstraTicket(ctx, fresh, model, time.Duration(controls.Speed.AttemptTimeoutSeconds)*time.Second, func() bool {
-			return s.reserveHarvestRequest(ctx, fresh, model, round, false)
-		})
-		if attempted && (reused.Kind == "account_error" || reused.Kind == "rate_limited") {
-			round.stopped.Store(account.ID, struct{}{})
-		}
-		if attempted && (reused.Kind == "success" || reused.Terminal || reused.Kind == "account_error" || reused.Kind == "rate_limited" || reused.Kind == "persist_failed") {
-			if reused.Kind != "success" {
-				cooldown := astraTicketCooldown(controls.Speed.CooldownSeconds, reused.RetryAfter)
-				s.openaiCodexTicketProbeCooldown.Store(openAICodexTicketKey(account.ID, model), time.Now().Add(cooldown))
-			}
-			return
-		}
+	if _, required := GatewayBorrowRequiredModelFromContext(ctx); required || IsAstraSourceAcquisition(ctx) || account.RequiresGatewayBorrowUpstream(model) {
+		return
 	}
 	tried := map[string]bool{}
 	attempts := 0
@@ -70,6 +56,9 @@ func (s *OpenAIGatewayService) huntCodexHarvestTicket(ctx context.Context, accou
 		}
 		fresh, ok := s.freshHarvestAccount(ctx, account, model)
 		if !ok {
+			return
+		}
+		if fresh.RequiresGatewayBorrowUpstream(model) {
 			return
 		}
 		account = fresh
@@ -101,25 +90,20 @@ func (s *OpenAIGatewayService) huntCodexHarvestTicket(ctx context.Context, accou
 		if n >= maxAttempts || round.AccountStopped(account.ID) || round.Used() >= min(round.limit, controls.Speed.MaxRequestsPerRound) {
 			break
 		}
-		nodeName := ""
 		var attempt codexHarvestAttempt
 		if pool {
 			// Pool exits are plain proxies: no sidecar, no node learning, and
 			// the ticket binds the concrete URL so requests reuse this exit.
 			tried[proxy] = true
 			attempt = codexHarvestAttempt{proxy: proxy, release: func() {}}
-			nodeName = harvestIPPoolNodeName(poolExit)
-			recordCodexHarvestNode(nodeName, "", 0)
+			nodeName := harvestIPPoolNodeName(poolExit)
+
 			if s.codexHarvest != nil {
 				s.codexHarvest.setRuntime(func(r *CodexHarvestRuntime) { r.CurrentNode = nodeName })
 			}
 		} else {
 			if attempt, ok = s.prepareHarvestAttempt(ctx, account, model, proxy, tried, controls); !ok {
 				break
-			}
-			nodeName = attempt.node.Name
-			if attempt.node.ID != "" {
-				recordCodexHarvestNode(attempt.node.Name, "Selector", 0)
 			}
 		}
 		started := time.Now()
@@ -137,11 +121,7 @@ func (s *OpenAIGatewayService) huntCodexHarvestTicket(ctx context.Context, accou
 		attempts++
 		last = result
 		cfg := s.openAICodexTicketConfig()
-		raw := ""
-		if result.Err != nil {
-			raw = result.Err.Error()
-		}
-		recordCodexHarvestProbe(account, model, result.Kind, nodeName, raw, result.Status, len(result.State), result.Shape.Blocks, openAICodexTicketTargetLength(account, cfg), codexHarvestExpectedBlocks(account, cfg), result.ProbeVerified)
+
 		if result.Kind == "success" {
 			s.openaiCodexTicketProbeCooldown.Delete(openAICodexTicketKey(account.ID, model))
 			ticket := codexHarvestTicket(account, model, result, cfg, attempts)

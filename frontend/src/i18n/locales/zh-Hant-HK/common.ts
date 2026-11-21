@@ -227,7 +227,6 @@ export default {
     modelPlaza: '模型廣場',
     subscriptions: '訂閱管理',
     accounts: '帳戶管理',
-    harvestFlow: '打票流程',
     plugins: '插件管理',
     proxies: 'IP管理',
     redeemCodes: '兌換碼',

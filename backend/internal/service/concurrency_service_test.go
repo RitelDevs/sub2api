@@ -617,3 +617,41 @@ func TestIncrementAccountWaitCount_NilCache(t *testing.T) {
 	require.EqualError(t, err, "account wait counter unavailable", "admin callers must be able to stop when no counter exists")
 	require.True(t, allowed, "customer callers retain best-effort admission without a cache")
 }
+
+type unlimitedUserTrackerStub struct {
+	stubConcurrencyCacheForTest
+	trackedID         string
+	releasedID        string
+	releaseCalls      int
+	trackErr          error
+	releaseContextErr error
+}
+
+func (s *unlimitedUserTrackerStub) TrackUserSlot(_ context.Context, _ int64, requestID string) error {
+	s.trackedID = requestID
+	return s.trackErr
+}
+func (s *unlimitedUserTrackerStub) ReleaseTrackedUserSlot(ctx context.Context, _ int64, requestID string) error {
+	s.releasedID = requestID
+	s.releaseCalls++
+	s.releaseContextErr = ctx.Err()
+	return nil
+}
+func TestAcquireUserSlot_UnlimitedTracksAndReleasesAfterCancellation(t *testing.T) {
+	for _, trackErr := range []error{nil, errors.New("redis timeout after write")} {
+		cache := &unlimitedUserTrackerStub{trackErr: trackErr}
+		svc := NewConcurrencyService(cache)
+		ctx, cancel := context.WithCancel(context.Background())
+		result, err := svc.AcquireUserSlot(ctx, 42, 0)
+		require.NoError(t, err)
+		require.True(t, result.Acquired)
+		require.NotEmpty(t, result.RequestID)
+		require.Equal(t, cache.trackedID, result.RequestID)
+		cancel()
+		result.ReleaseFunc()
+		result.ReleaseFunc()
+		require.Equal(t, result.RequestID, cache.releasedID)
+		require.Equal(t, 1, cache.releaseCalls)
+		require.NoError(t, cache.releaseContextErr)
+	}
+}

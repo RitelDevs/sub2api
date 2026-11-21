@@ -40,95 +40,70 @@ func (u *bpsTestUpstream) Do(r *http.Request, proxy string, _ int64, _ int) (*ht
 	return u.send(r, proxy)
 }
 
-func TestExcelBPSProxyFailoverOnlyBeforeRequestSent(t *testing.T) {
+func TestExcelBPSProxyNeverRetriesTransportErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		evidence func(*http.Request)
-		retry    bool
 	}{
-		{"dial_failure", func(r *http.Request) { httptrace.ContextClientTrace(r.Context()).GetConn("bps.openai.com:443") }, true},
-		{"missing_trace", func(*http.Request) {}, false},
+		{"dial_failure", func(r *http.Request) { httptrace.ContextClientTrace(r.Context()).GetConn("bps.openai.com:443") }},
+		{"missing_trace", func(*http.Request) {}},
 		{"connection_obtained", func(r *http.Request) {
 			tr := httptrace.ContextClientTrace(r.Context())
 			tr.GetConn("bps.openai.com:443")
 			tr.GotConn(httptrace.GotConnInfo{})
-		}, false},
+		}},
 		{"header_started", func(r *http.Request) {
 			tr := httptrace.ContextClientTrace(r.Context())
 			tr.GetConn("bps.openai.com:443")
 			tr.WroteHeaderField("Authorization", []string{"secret"})
-		}, false},
+		}},
 		{"body_read_without_trace", func(r *http.Request) {
 			tr := httptrace.ContextClientTrace(r.Context())
 			tr.GetConn("bps.openai.com:443")
 			_, _ = r.Body.Read(make([]byte, 1))
-		}, false},
+		}},
 		{"replay_body_read", func(r *http.Request) {
 			tr := httptrace.ContextClientTrace(r.Context())
 			tr.GetConn("bps.openai.com:443")
 			b, _ := r.GetBody()
 			defer func() { _ = b.Close() }()
 			_, _ = b.Read(make([]byte, 1))
-		}, false},
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 			account := excelAccount()
 			account.Extra["openai_excel_bps_mihomo"] = true
-			first, second := &bpsTestLease{}, &bpsTestLease{}
+			first := &bpsTestLease{}
 			acquired, calls := 0, 0
 			acquire := func(_ context.Context, _ string, excluded ...string) (string, excelBPSLease, error) {
 				acquired++
-				if acquired == 1 {
-					require.Empty(t, excluded)
-					return "http://127.0.0.1:19000", first, nil
-				}
-				require.Equal(t, []string{"http://127.0.0.1:19000"}, excluded)
-				require.Equal(t, 1, first.releases)
-				return "http://127.0.0.1:19001", second, nil
+				require.Empty(t, excluded)
+				return "http://127.0.0.1:19000", first, nil
 			}
 			upstream := &bpsTestUpstream{send: func(r *http.Request, proxy string) (*http.Response, error) {
 				calls++
 				defer func() { _ = r.Body.Close() }()
-				if calls == 1 {
-					tc.evidence(r)
-					return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNRESET}
-				}
-				require.Equal(t, "http://127.0.0.1:19001", proxy)
-				b, err := io.ReadAll(r.Body)
-				require.NoError(t, err)
-				require.Equal(t, "original body", string(b))
-				require.Equal(t, "Bearer bearer-secret", r.Header.Get("Authorization"))
-				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("response"))}, nil
+				require.Equal(t, "http://127.0.0.1:19000", proxy)
+				tc.evidence(r)
+				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNRESET}
 			}}
 			s := &OpenAIGatewayService{httpUpstream: upstream}
 			resp, lease, _, err := s.doExcelBPSRequest(context.Background(), c, account, "private-session", []byte("original body"), "bearer-secret", "account-secret", acquire)
 			require.Equal(t, 1, first.releases)
 			require.Equal(t, 1, first.failures)
-			if tc.retry {
-				require.NoError(t, err)
-				require.Equal(t, 2, calls)
-				require.Equal(t, 2, acquired)
-				require.Zero(t, second.releases, "caller owns lease until response closes")
-				require.NoError(t, resp.Body.Close())
-				lease.Release()
-				require.Equal(t, 1, second.releases)
-				_, set := c.Get(OpsUpstreamErrorMessageKey)
-				require.False(t, set, "recovered attempt is not the terminal upstream error")
-			} else {
-				require.Error(t, err)
-				require.Nil(t, resp)
-				require.Nil(t, lease)
-				require.Equal(t, 1, calls)
-				require.Equal(t, 1, acquired)
-			}
+			require.Error(t, err)
+			require.Nil(t, resp)
+			require.Nil(t, lease)
+			require.Equal(t, 1, calls)
+			require.Equal(t, 1, acquired)
 		})
 	}
 }
 
 func TestExcelBPSFailoverBudgetAndCancellation(t *testing.T) {
-	for _, scenario := range []string{"twice_failed", "cancelled", "deadline", "http_403", "response_and_error", "pool_exhausted", "static_proxy"} {
+	for _, scenario := range []string{"cancelled", "deadline", "http_403", "challenge", "response_and_error", "pool_exhausted", "static_proxy"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
@@ -140,7 +115,7 @@ func TestExcelBPSFailoverBudgetAndCancellation(t *testing.T) {
 			acquired, calls := 0, 0
 			acquire := func(context.Context, string, ...string) (string, excelBPSLease, error) {
 				acquired++
-				if scenario == "pool_exhausted" && acquired == 2 {
+				if scenario == "pool_exhausted" {
 					return "", nil, errors.New("no eligible nodes")
 				}
 				l := &bpsTestLease{}
@@ -153,6 +128,9 @@ func TestExcelBPSFailoverBudgetAndCancellation(t *testing.T) {
 				httptrace.ContextClientTrace(r.Context()).GetConn("bps.openai.com:443")
 				if scenario == "http_403" {
 					return &http.Response{StatusCode: 403, Body: io.NopCloser(strings.NewReader("denied"))}, nil
+				}
+				if scenario == "challenge" {
+					return &http.Response{StatusCode: 429, Body: io.NopCloser(strings.NewReader(`{"error":{"code":"challenge_required"}}`))}, nil
 				}
 				if scenario == "response_and_error" {
 					return &http.Response{StatusCode: 502, Body: io.NopCloser(strings.NewReader("failed"))}, io.EOF
@@ -178,13 +156,13 @@ func TestExcelBPSFailoverBudgetAndCancellation(t *testing.T) {
 				require.Nil(t, lease)
 			}
 			expected := 1
-			if scenario == "twice_failed" {
-				expected = 2
+			if scenario == "pool_exhausted" {
+				expected = 0
 			}
 			require.Equal(t, expected, calls)
 			for _, l := range leases {
 				require.Equal(t, 1, l.releases)
-				if scenario == "cancelled" || scenario == "deadline" || scenario == "http_403" {
+				if scenario == "cancelled" || scenario == "deadline" || scenario == "http_403" || scenario == "challenge" {
 					require.Zero(t, l.failures)
 				} else {
 					require.Equal(t, 1, l.failures)
@@ -196,6 +174,49 @@ func TestExcelBPSFailoverBudgetAndCancellation(t *testing.T) {
 			if scenario == "static_proxy" {
 				require.Zero(t, acquired)
 			}
+		})
+	}
+}
+
+func TestOpenAITransportRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name, contentType, mitigated, body string
+		status                             int
+		blocked                            bool
+	}{
+		{"marked_success", "text/event-stream", "challenge", "", 200, true},
+		{"html_success", "text/html; charset=utf-8", "", "", 200, true},
+		{"html_route_rejection", "", "", "<!DOCTYPE html><title>Just a moment</title>", 404, true},
+		{"verification", "application/json", "", `{"error":{"code":"security_check_required"}}`, 429, true},
+		{"edge_refusal", "", "", `{"cloudflare_error":true,"code":1010}`, 403, true},
+		{"ambiguous_large_error", "", "", strings.Repeat("x", (32<<10)+1), 503, true},
+		{"permission", "application/json", "", `{"error":{"code":"permission_denied"}}`, 403, false},
+		{"route_rejection", "application/json", "", `{"detail":"Not Found"}`, 404, false},
+		{"stream", "text/event-stream", "", "data: response", 200, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original := io.NopCloser(strings.NewReader(tc.body))
+			resp := &http.Response{StatusCode: tc.status, Header: make(http.Header), Body: original}
+			resp.Header.Set("Content-Type", tc.contentType)
+			resp.Header.Set("Cf-Mitigated", tc.mitigated)
+			err := rejectOpenAITransportChallenge(resp)
+			if tc.blocked {
+				if err == nil {
+					t.Fatal("expected a terminal rejection")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.status == 200 && resp.Body != original {
+				t.Fatal("success stream replaced")
+			}
+			body, err := io.ReadAll(resp.Body)
+			if err != nil || string(body) != tc.body {
+				t.Errorf("normal response changed: %q, %v", body, err)
+			}
+			_ = resp.Body.Close()
 		})
 	}
 }
@@ -276,25 +297,18 @@ func TestExcelBPSFailoverRealHTTPTransport(t *testing.T) {
 			client := &http.Client{Transport: transport}
 			upstream := &bpsTestUpstream{send: func(r *http.Request, _ string) (*http.Response, error) {
 				calls++
-				if calls == 2 {
-					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("ok"))}, nil
-				}
 				r.URL.Scheme = "http" // in-memory peer; no DNS, socket or TLS bypass in production
 				return client.Do(r)
 			}}
 			s := &OpenAIGatewayService{httpUpstream: upstream}
 			resp, lease, _, err := s.doExcelBPSRequest(context.Background(), c, account, "session", []byte("must not duplicate"), "token", "account", acquire)
+			require.Error(t, err)
+			require.Nil(t, resp)
+			require.Nil(t, lease)
+			require.Equal(t, 1, calls)
+			require.Equal(t, 1, acquired)
 			if sent {
-				require.Error(t, err)
-				require.Equal(t, 1, calls)
-				require.Equal(t, 1, acquired)
 				require.Equal(t, "must not duplicate", <-observed)
-			} else {
-				require.NoError(t, err)
-				require.Equal(t, 2, calls)
-				require.Equal(t, 2, acquired)
-				require.NoError(t, resp.Body.Close())
-				lease.Release()
 			}
 		})
 	}

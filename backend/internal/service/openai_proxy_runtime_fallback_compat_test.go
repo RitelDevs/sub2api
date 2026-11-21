@@ -25,6 +25,33 @@ type runtimeFallbackUpstream struct {
 	do func(*http.Request, string, int64, int) (*http.Response, error)
 }
 
+func TestRetiredGatewaySendBoundaries(t *testing.T) {
+	ctx := t.Context()
+	for _, tc := range []struct {
+		name    string
+		ctx     context.Context
+		account *Account
+	}{
+		{"explicit scope survives account policy removal", WithGatewayBorrowRequiredModel(ctx, "gpt-6-astra"), &Account{ID: 1}},
+		{"source child", WithAstraSourceAcquisitionForAccount(ctx, 1), &Account{ID: 1}},
+		{"protected wire model", ctx, &Account{ID: 1, Extra: map[string]any{GatewayBorrowModelsKey: []string{"gpt-6-astra"}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"model":"gpt-6-astra"}`
+			r, err := http.NewRequestWithContext(tc.ctx, http.MethodPost, chatgptCodexAPIURL, strings.NewReader(body))
+			require.NoError(t, err)
+			// Nil transports and no plugin manager: reaching dispatch would panic.
+			gateway := &OpenAIGatewayService{}
+			_, err = gateway.doOpenAIUpstream(r, "fixed", tc.account)
+			require.ErrorContains(t, err, "gateway_borrow_retired")
+			_, err = gateway.doUpstreamWithProxyFallback(tc.ctx, r, tc.account, "fixed")
+			require.True(t, IsOpenAITurnAdmissionError(err))
+			_, err = (&AccountTestService{}).doOpenAIAccountTestUpstream(r, "fixed", tc.account, true, []byte(body))
+			require.ErrorContains(t, err, "gateway_borrow_retired")
+		})
+	}
+}
+
 func (u *runtimeFallbackUpstream) Do(r *http.Request, proxy string, id int64, concurrency int) (*http.Response, error) {
 	return u.do(r, proxy, id, concurrency)
 }
@@ -39,7 +66,9 @@ func TestRuntimeProxyFallbackRequestSafety(t *testing.T) {
 	}{
 		{name: "refused direct", mode: FallbackModeDirect, err: syscall.ECONNREFUSED, wantCalls: 2},
 		{name: "refused backup", mode: FallbackModeProxy, err: syscall.ECONNREFUSED, wantCalls: 2},
-		{name: "proxy auth", mode: FallbackModeDirect, err: errors.New("proxy authentication required"), wantCalls: 2},
+		{name: "proxy auth", mode: FallbackModeDirect, err: errors.New("proxy authentication required"), wantCalls: 1},
+		{name: "admission denial wrapping network error", mode: FallbackModeProxy, err: &OpenAITurnAdmissionError{Reason: "gateway_borrow_retired", cause: syscall.ECONNREFUSED}, wantCalls: 1},
+		{name: "plugin policy denial with network diagnostic", mode: FallbackModeDirect, err: &PluginTransportError{Code: "authorization_denied", Message: "connection refused"}, wantCalls: 1},
 		{name: "DNS", mode: FallbackModeDirect, err: &net.DNSError{IsNotFound: true}, wantCalls: 2},
 		{name: "disabled fallback", mode: FallbackModeNone, err: syscall.ECONNREFUSED, wantCalls: 1},
 		{name: "transient reset", mode: FallbackModeDirect, err: syscall.ECONNRESET, wantCalls: 1},

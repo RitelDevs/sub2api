@@ -15,6 +15,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
@@ -120,7 +121,12 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "code": "basispoints_requires_responses", "message": "This group requires Basispoints for this model; use /v1/responses"}})
 		return nil, denyOpenAITurn("basispoints_required_use_responses")
 	}
-
+	proxyCtx, releaseProxy, proxyErr := s.beginOpenAIRequestProxy(ctx, c, account)
+	if proxyErr != nil {
+		return nil, proxyErr
+	}
+	defer releaseProxy()
+	ctx = proxyCtx
 	if err := CheckUpstreamModeration(ctx, c, account); err != nil {
 		return nil, err
 	}
@@ -346,6 +352,21 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		if err != nil {
 			return nil, fmt.Errorf("remarshal after codex transform: %w", err)
 		}
+	} else if !isResponsesShape && account.IsOpenAIApiKey() && openai.IsGPT61SolModelSpelling(upstreamModel) {
+		// A Responses supplier may fill an empty instructions field even when
+		// the Chat caller supplied a system message. Promote that caller-owned
+		// text just as on the OAuth bridge, without inventing a default prompt.
+		var reqBody map[string]any
+		if err := json.Unmarshal(responsesBody, &reqBody); err != nil {
+			return nil, fmt.Errorf("unmarshal sol instructions bridge: %w", err)
+		}
+		isJSONObjectFormat := strings.EqualFold(strings.TrimSpace(gjson.GetBytes(responsesBody, "text.format.type").String()), "json_object")
+		extractSystemMessagesFromInput(reqBody, !isJSONObjectFormat)
+		ensureCodexOAuthInstructionsField(reqBody)
+		responsesBody, err = json.Marshal(reqBody)
+		if err != nil {
+			return nil, fmt.Errorf("marshal sol instructions bridge: %w", err)
+		}
 	}
 	// Codex transforms may normalize the model after the initial mapping pass;
 	// record the final slug immediately before policy/auth/upstream dispatch.
@@ -425,6 +446,10 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		proxyURL = account.Proxy.URL()
 	}
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
+	if rejection := rejectOpenAITransportChallenge(resp); rejection != nil {
+		cancelUpstream()
+		return nil, finishOpenAITransportRejection(c, rejection)
+	}
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
@@ -436,12 +461,8 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg, completeErrorBody := s.readOpenAIUpstreamErrorWithCompleteness(resp)
-		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
-			expectedTaskID := account.GetCredential("task_id")
-			if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {
-				return nil, fmt.Errorf("agent identity task recovery failed: %w", err)
-			}
-			return s.forwardAsChatCompletions(markAgentIdentityTaskRecoveryTried(ctx), c, account, body, promptCacheKey, defaultMappedModel, compatPromptCacheTenantIsolated)
+		if s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
+			return nil, finishOpenAITransportRejection(c, errors.New("upstream rejected the selected identity task"))
 		}
 		if account.Type == AccountTypeAPIKey &&
 			!account.routesByModel() &&
@@ -924,6 +945,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 
 	state := apicompat.NewResponsesEventToChatState()
 	state.Model = originalModel
+	state.XAIServerSideSearch = account != nil && account.IsGrok()
 	// 网关作为计费链路的一环，不能把下游 usage 输出绑定到客户端是否显式请求。
 	// raw Chat Completions 直转路径已经强制透出 usage，这里保持同样行为，避免级联代理计费为 0。
 	state.IncludeUsage = true
@@ -1057,6 +1079,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				streamFailoverErr = s.newOpenAIStreamFailoverErrorWithModel(c, account, false, requestID, payloadBytes, message, upstreamModel, resp.Header)
 				return true
 			}
+			s.handleOpenAIStreamTerminalAccountSideEffects(c, account, payloadBytes, message, resp.Header, upstreamModel)
 			message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payloadBytes, message)
 			defaultStatus, defaultErrType, defaultMsg := http.StatusBadGateway, "upstream_error", message
 			failureStatus := openAIStreamFailureStatus(payloadBytes, message)

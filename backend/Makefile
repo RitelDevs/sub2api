@@ -1,4 +1,4 @@
-.PHONY: build build-embedded build-linux build-windows build-darwin generate test test-unit test-integration test-all test-collection test-e2e
+.PHONY: build build-embedded build-linux build-windows build-darwin generate test test-unit test-unit-packages test-integration test-all test-collection test-e2e
 
 VERSION ?= $(shell ./scripts/resolve-version.sh)
 LDFLAGS ?= -s -w -X main.Version=$(VERSION)
@@ -28,14 +28,21 @@ test: test-collection
 	go test ./...
 	golangci-lint run ./...
 
+# Defaults preserve the local full-suite behavior. CI adds JSON output and packages.
+TEST_FLAGS ?=
+TEST_PACKAGES ?= ./...
+
 test-unit: test-collection
-	go test -tags=unit ./...
+	$(MAKE) test-unit-packages
+
+test-unit-packages:
+	go test $(TEST_FLAGS) -tags=unit $(TEST_PACKAGES)
 
 test-all: test-collection
 	go test -tags=unit,integration ./...
 
 test-integration:
-	go test -tags=integration ./...
+	go test $(TEST_FLAGS) -tags=integration ./...
 
 test-e2e:
 	./scripts/e2e-test.sh
@@ -45,4 +52,4 @@ test-e2e-local:
 
 # The embedded collection engine is a nested module, outside ./... .
 test-collection:
-	go test github.com/v03413/bepusdt/app/conf github.com/v03413/bepusdt/app/task github.com/v03413/bepusdt/app/task/notify
+	go test $(TEST_FLAGS) github.com/v03413/bepusdt/app/conf github.com/v03413/bepusdt/app/task github.com/v03413/bepusdt/app/task/notify

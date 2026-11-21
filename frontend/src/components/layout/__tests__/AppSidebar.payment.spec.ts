@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount, type VueWrapper } from '@vue/test-utils'
 import { computed, nextTick, reactive } from 'vue'
 import AppSidebar from '../AppSidebar.vue'
+import { buildFeatureSearchEntries } from '@/utils/featureSearch'
 import type { CustomMenuItem } from '@/types'
 import type { ConsoleNavSource } from '@/navigation/useConsoleNavSource'
 import { DEFAULT_SMART_OPS_HIDDEN_MENU_ITEMS } from '@/constants/smartOpsMenu'
@@ -467,6 +468,21 @@ describe('merged lottery navigation', () => {
     appState.cachedPublicSettings.lottery_enabled = false
     await nextTick()
     expect(wrapper!.find('a[href="/lottery"]').exists()).toBe(false)
+  })
+})
+
+describe('credential operations navigation', () => {
+  it('lists only V2 in the sidebar and search even with no menu items hidden', () => {
+    mountSidebar()
+    const group = tree('adminNavItems').find(item => item.path === '/admin/smart-ops')
+    const sidebar = group?.children?.map(item => item.path) ?? []
+    const search = buildFeatureSearchEntries(navigation!.searchItems.value).map(entry => entry.path)
+    for (const paths of [sidebar, search]) {
+      expect(paths).toContain('/admin/token-guard-v2')
+      for (const retired of ['/admin/token-guard', '/admin/harvest-flow', '/admin/astra-gateway']) {
+        expect(paths).not.toContain(retired)
+      }
+    }
   })
 })
 

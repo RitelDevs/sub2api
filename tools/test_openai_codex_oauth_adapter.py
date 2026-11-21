@@ -78,6 +78,15 @@ class CodexDiagnosticTests(unittest.TestCase):
         return api, None
 
     def test_nonzero_and_unsafe_side_channel_never_submit_or_leak(self):
+        email = self.diagnostic(stage='email_verification', reason='email_otp_required')
+        api, error = self.run_worker(diagnostic=email)
+        self.assertIn('stage=email_verification reason=email_otp_required', error)
+        self.assertEqual(worker.safe_worker_failure(worker.WorkerError(error)), error)
+        api.credentials.assert_not_called()
+        api, invalid = self.run_worker(diagnostic={**email, 'stage': 'web_login'})
+        self.assertIn('diagnostic_invalid', invalid)
+        api.credentials.assert_not_called()
+        self.assertIn('invalid diagnostic omitted', worker.safe_worker_failure(worker.WorkerError(error.replace('email_verification', 'web_login'))))
         api, error = self.run_worker()
         self.assertIn('stage=token_exchange reason=token_exchange_failed', error)
         self.assertNotIn('synthetic', error)
@@ -112,6 +121,31 @@ class CodexDiagnosticTests(unittest.TestCase):
 
 @unittest.skipUnless(os.getenv('EXCEL_TEST_TOSUB2_ROOT'), 'pinned runtime supplied by packaging CI')
 class PinnedCodexProtocolTests(unittest.TestCase):
+    def test_interactive_pages_exit_before_input_or_further_requests(self):
+        for mode, page, stage, reason in (
+            ('email-prompt', '/email-verification', 'email_verification', 'email_otp_required'),
+            ('login-entry', '/log-in', 'web_login', 'interaction_required'),
+            ('unknown-step', '/new-step', 'web_login', 'interaction_required'),
+            ('page-challenge', '/log-in/password', 'web_login', 'security_check'),
+        ):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                temporary = Path(directory)
+                script = adapter.prepare_codex_runtime(Path(os.environ['EXCEL_TEST_TOSUB2_ROOT']), temporary)
+                script.with_name('tls-transport.mjs').write_bytes((Path(__file__).parent / 'fixtures/codex-http-transport.mjs').read_bytes())
+                diagnostic, routes, output = (temporary / n for n in ('diagnostic.json', 'routes.txt', 'oauth.json'))
+                env = dict(os.environ, SUB2API_PROTOCOL_TASK_ID='7', SUB2API_PROTOCOL_DIAGNOSTIC_PATH=str(diagnostic),
+                           CHATGPT_LOGIN_PASSWORD='synthetic-password', CODEX_TEST_MODE=mode, CODEX_TEST_ROUTES=str(routes))
+                result = subprocess.run([os.getenv('NODE_EXECUTABLE', 'node'), str(script), '--email', 'test@example.test',
+                                         '--output-mode', 'sub2api', '--sub2api-out', str(output)], cwd=temporary,
+                                        env=env, input='r\n123456\n', capture_output=True, text=True, timeout=20)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout + result.stderr, '')
+                safe = adapter.read_protocol_diagnostic(diagnostic, 7)
+                self.assertEqual((safe['stage'], safe['reason']), (stage, reason))
+                self.assertEqual(routes.read_text().splitlines(), ['GET /', 'GET /api/auth/providers', 'GET /api/auth/csrf',
+                                                                   'POST /api/auth/signin/openai', 'GET ' + page])
+                self.assertFalse(output.exists())
+
     def test_structured_failure_does_not_send_mfa_or_tokens(self):
         dependency = Path(os.environ['EXCEL_TEST_TOSUB2_ROOT'])
         cases = json.loads((Path(__file__).parent / 'fixtures/credential-operation-errors.json').read_text())

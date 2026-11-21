@@ -54,32 +54,25 @@ func astraAccountSchedulingReady(settings config.AstraRoutingSettings, snapshot 
 
 func (s *AccountTestService) syncAstraAccountScheduling(ctx context.Context) {
 	settings := s.cfg.AstraRouting(ctx)
-	strict := settings.AccountScheduling
 	poolScheduling := settings.TicketPoolScheduling && s.openaiGatewayService != nil && s.openaiGatewayService.openAICodexTicketEnabledContext(ctx)
-	if !strict && !poolScheduling {
+	if !poolScheduling {
 		return
 	}
 	var ids []int64
 	strictIDs := map[int64]bool{}
-	snapshot := AstraGatewayRuntime{}
-	if strict {
-		if provider, ok := s.httpUpstream.(AstraGatewayRuntimeProvider); ok {
-			snapshot = provider.AstraGatewaySnapshot(ctx)
-		}
+	// A retired route cannot be quality evidence. Leave historical target accounts untouched.
+	if settings.AccountScheduling {
 		for _, id := range settings.CookiePool.TargetAccountIDs {
-			ids = append(ids, id)
 			strictIDs[id] = true
 		}
 	}
-	if poolScheduling {
-		accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
-		if err != nil {
-			return
-		}
-		for i := range accounts {
-			if !strictIDs[accounts[i].ID] && s.openaiGatewayService.ticketPoolSchedulingIncludes(ctx, &accounts[i]) {
-				ids = append(ids, accounts[i].ID)
-			}
+	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
+	if err != nil {
+		return
+	}
+	for i := range accounts {
+		if !strictIDs[accounts[i].ID] && s.openaiGatewayService.ticketPoolSchedulingIncludes(ctx, &accounts[i]) {
+			ids = append(ids, accounts[i].ID)
 		}
 	}
 	// One writer serializes both policies with local settings saves.
@@ -98,28 +91,15 @@ func (s *AccountTestService) syncAstraAccountScheduling(ctx context.Context) {
 		if err != nil || account == nil {
 			continue
 		}
-		quality := strictIDs[id]
-		var ready bool
-		reason := "ticket_unavailable"
-		var fields []zap.Field
-		if quality {
-			ready = astraAccountSchedulingReady(settings, snapshot, id, time.Now())
-			fields = astraSchedulingLogFields(settings, snapshot, account, ready, time.Now())
-			for _, field := range fields {
-				if field.Key == "reason" {
-					reason = field.String
-				}
-			}
-		} else {
-			if !s.openaiGatewayService.ticketPoolSchedulingIncludes(ctx, account) {
-				continue
-			}
-			ready = s.openaiGatewayService.ticketPoolSchedulingReady(account, settings)
-			if ready {
-				reason = "ticket_ready"
-			}
-			fields = []zap.Field{zap.Int64("account_id", id), zap.Bool("schedulable", ready), zap.String("reason", reason), zap.String("trigger", "ticket_pool_sync")}
+		if !s.openaiGatewayService.ticketPoolSchedulingIncludes(ctx, account) {
+			continue
 		}
+		ready := s.openaiGatewayService.ticketPoolSchedulingReady(account, settings)
+		reason := "ticket_unavailable"
+		if ready {
+			reason = "ticket_ready"
+		}
+		fields := []zap.Field{zap.Int64("account_id", id), zap.Bool("schedulable", ready), zap.String("reason", reason), zap.String("trigger", "ticket_pool_sync")}
 		ready = ready && account.IsOpenAIOAuthLike() && account.Status == StatusActive && account.ParentAccountID == nil && (account.ExpiresAt == nil || time.Now().Before(*account.ExpiresAt))
 		action, err := applyAstraScheduling(ctx, s.accountRepo, account, settings, ready)
 		if err != nil {
@@ -137,9 +117,6 @@ func (s *AccountTestService) syncAstraAccountScheduling(ctx context.Context) {
 		fields = append(fields, zap.String("mode", action.Action))
 		logger.L().Info("astra_account_scheduling_changed", fields...)
 		astraRecentScheduling.add(AstraSchedulingRecord{CheckedAt: time.Now(), AccountID: id, Schedulable: ready, Reason: reason, Mode: action.Action})
-		if !quality {
-			recordCodexHarvestScheduling(account, action.Action, reason, ready)
-		}
 	}
 }
 

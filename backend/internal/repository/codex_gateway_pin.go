@@ -67,73 +67,16 @@ func (s *codexGatewayPinUpstream) Do(req *http.Request, proxy string, accountID 
 }
 
 func (s *codexGatewayPinUpstream) DoWithTLS(req *http.Request, proxy string, accountID int64, concurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {
-	source := slices.Contains(s.config.SourceAccountIDs, accountID)
-	target := slices.Contains(s.config.TargetAccountIDs, accountID)
-	model := codexGatewayPinModel(req)
-	if s.config.Enabled && target && codexGatewayPinRequest(req) && model == "" {
-		return nil, errors.New("borrow_request_model_unavailable")
+	// A legacy pool must never capture a source or select a route from cached tickets.
+	if _, required := service.GatewayBorrowRequiredModelFromContext(req.Context()); required || service.IsAstraSourceAcquisition(req.Context()) {
+		return nil, &service.OpenAITurnAdmissionError{Reason: "gateway_borrow_retired"}
 	}
-	if !s.config.Enabled || (!source && !target) || !codexGatewayPinRequest(req) ||
-		(source && model != "gpt-6-astra") || (target && !s.config.TargetRequiresModel(accountID, model)) || model == "" {
-		return s.delegate.DoWithTLS(req, proxy, accountID, concurrency, profile)
-	}
-	if err := s.config.Validate(); err != nil {
-		return nil, err
-	}
-	req = req.Clone(service.WithHTTPUpstreamRedirectsDisabled(req.Context()))
-	if target {
-		cookie, sourceID := s.currentCookie(req.URL.Path, time.Now())
-		if cookie == nil {
-			slog.Info("codex_gateway_pin_unavailable", "target_account_id", accountID)
-			return nil, errCodexGatewayPinUnavailable
-		}
-		if s.config.IPAffinity {
-			s.mu.Lock()
-			route, exists := s.routes[sourceID]
-			s.mu.Unlock()
-			if !exists || route.cookie.Value != cookie.Value || !time.Now().Before(route.expires) {
-				return nil, errCodexGatewayPinUnavailable
-			}
-			proxy = route.proxy
-		}
-		replaceCodexGatewayCookie(req, cookie)
-		slog.Info("codex_gateway_pin_applied", "source_account_id", sourceID, "target_account_id", accountID)
-	}
-	egress, _ := req.Context().Value(astraSourceEgressKey{}).(astraSourceEgress)
-	if source && egress.node.ID != "" {
-		proxy = egress.proxy
-		req = astraFreshRequest(req)
-	}
-	started := time.Now()
-	resp, err := s.delegate.DoWithTLS(req, proxy, accountID, concurrency, profile)
-	if source && service.IsAstraSourceAcquisition(req.Context()) {
-		if err != nil || resp == nil || resp.StatusCode < 200 || resp.StatusCode >= 300 || resp.Body == nil {
-			s.recordSourceReason(accountID, started, nil, false, "upstream_http_error")
-		} else {
-			received := time.Now()
-			route := codexGatewayRouteFromResponse(resp, req.URL.Path, received, s.config.TTLSeconds)
-			if route != nil {
-				route.acquiredAt = received
-				route.proxy = proxy
-				route.node = egress.node
-			}
-			ttl := s.config.TTLSeconds
-			if ttl == 0 {
-				ttl = 230
-			}
-			if route != nil && !route.expires.IsZero() && route.expires.After(received.Add(time.Duration(ttl)*time.Second)) {
-				route.expires = received.Add(time.Duration(ttl) * time.Second)
-			}
-			// Qualification happens only after the complete SSE response has been read.
-			// A header or response.created event does not prove request success.
-			if contentType := strings.ToLower(resp.Header.Get("Content-Type")); contentType == "" || strings.HasPrefix(contentType, "text/event-stream") {
-				resp.Body = &codexGatewayProbeBody{ReadCloser: resp.Body, onResult: func(ok bool) { s.recordSource(accountID, started, route, ok) }}
-			} else {
-				s.recordSource(accountID, started, nil, false)
-			}
+	if s.config.Enabled && slices.Contains(s.config.TargetAccountIDs, accountID) && codexGatewayPinRequest(req) {
+		if model := codexGatewayPinModel(req); model == "" || s.config.TargetRequiresModel(accountID, model) {
+			return nil, &service.OpenAITurnAdmissionError{Reason: "gateway_borrow_retired"}
 		}
 	}
-	return resp, err
+	return s.delegate.DoWithTLS(req, proxy, accountID, concurrency, profile)
 }
 
 func codexGatewayPinRequest(req *http.Request) bool {
@@ -483,15 +426,9 @@ func (b *codexGatewayProbeBody) Close() error {
 	return err
 }
 
-// CodexGatewayPinWSHeader lets the private WS experiment use the same qualified
-// routing pool at handshake time. It does not capture or share WS response IDs.
 func (s *codexGatewayPinUpstream) CodexGatewayPinWSHeader(accountID int64) (string, error) {
-	if !s.config.Enabled || !slices.Contains(s.config.TargetAccountIDs, accountID) {
-		return "", nil
+	if s.config.Enabled && slices.Contains(s.config.TargetAccountIDs, accountID) {
+		return "", &service.OpenAITurnAdmissionError{Reason: "gateway_borrow_retired"}
 	}
-	cookie, _ := s.currentCookie("/backend-api/codex/responses", time.Now())
-	if cookie == nil {
-		return "", errCodexGatewayPinUnavailable
-	}
-	return cookie.Value, nil
+	return "", nil
 }

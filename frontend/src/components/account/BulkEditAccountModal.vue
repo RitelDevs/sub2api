@@ -200,6 +200,22 @@
           aria-labelledby="bulk-edit-openai-passthrough-label"
         >
           <Toggle :model-value="!!openaiPassthroughEnabled" :aria-label="t('admin.accounts.openai.oauthPassthrough')" :disabled="!enableOpenAIPassthrough" id="bulk-edit-openai-passthrough-toggle" @click="openaiPassthroughEnabled = !openaiPassthroughEnabled" />
+          <label v-if="openaiPassthroughEnabled" class="mt-3 flex items-start gap-2">
+            <input
+              v-model="openaiPassthroughModelFilterEnabled"
+              type="checkbox"
+              data-testid="bulk-openai-passthrough-model-filter"
+              :disabled="!enableOpenAIPassthrough"
+              class="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+            <span class="text-sm">
+              {{ t('admin.accounts.openai.passthroughModelFilter') }}
+              <NewFeatureBadge v-if="authStore.user?.id != null" :notice-id="NEW_FEATURE_NOTICES.passthroughModelFilter" :user-id="authStore.user?.id" />
+              <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.openai.passthroughModelFilterDesc') }}
+              </span>
+            </span>
+          </label>
         </div>
       </div>
 
@@ -338,12 +354,20 @@
           <input
             v-model="enableModelRestriction"
             id="bulk-edit-model-restriction-enabled"
+            :disabled="syncBusy"
             type="checkbox"
             aria-controls="bulk-edit-model-restriction-body"
             class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
           />
         </div>
 
+        <BatchUpstreamWhitelist
+          v-if="syncAdminId != null"
+          v-show="syncBusy || syncRows.length > 0 || (modelRestrictionMode === 'whitelist' && !isOpenAIModelRestrictionDisabled)"
+          :rows="syncRows" :busy="syncBusy" :valid="syncValid" :user-id="syncAdminId"
+          :disabled="formBusy || showMixedChannelWarning"
+          @run="startWhitelistSync" @stop="stopSync"
+        />
         <div
           id="bulk-edit-model-restriction-body"
           :class="!enableModelRestriction && 'pointer-events-none opacity-50'"
@@ -1426,7 +1450,7 @@
         <button
           type="submit"
           form="bulk-edit-account-form"
-          :disabled="submitting"
+          :disabled="formBusy || showMixedChannelWarning || bpsDefaults.loading.value"
           class="btn btn-primary"
         >
           <svg
@@ -1473,16 +1497,17 @@
 </template>
 
 <script setup lang="ts">
-import { useId as useFieldLabelId } from 'vue'
-const fieldLabelScope = useFieldLabelId()
-
 import Toggle from '@/components/common/Toggle.vue'
 import ConfirmationPrompt from '@/components/common/ConfirmationPrompt.vue'
 import { useConfirmation, useConfirmedAction } from '@/composables/useConfirmation'
 
+import { useBatchUpstreamWhitelist } from '@/composables/useBatchUpstreamWhitelist'
+import BatchUpstreamWhitelist from './BatchUpstreamWhitelist.vue'
+import NewFeatureBadge from '@/components/common/NewFeatureBadge.vue'
+import { NEW_FEATURE_NOTICES } from '@/constants/newFeatureNotices'
 import { DEFAULT_ACCOUNT_COST_MULTIPLIER, isValidAccountCostMultiplier } from '@/utils/accountCost'
 
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ExcelBPSModeSwitches from './ExcelBPSModeSwitches.vue'
 import ExcelBPSSearchOptions from './ExcelBPSSearchOptions.vue'
@@ -1538,6 +1563,7 @@ import type { OpenAIWSMode } from '@/utils/openaiWsMode'
 interface Props {
   show: boolean
   accountIds: number[]
+  filteredPreview?: boolean
   selectedPlatforms: AccountPlatform[]
   selectedTypes: AccountType[]
   target?: {
@@ -1553,9 +1579,11 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+const fieldLabelScope = useId()
 const emit = defineEmits<{
   close: []
   updated: []
+  whitelistsSaved: []
 }>()
 
 const { t } = useI18n()
@@ -1568,6 +1596,19 @@ const targetMode = computed(() => props.target?.mode ?? 'selected')
 const targetAccountIds = computed(() => props.target?.mode === 'selected'
   ? props.target.accountIds ?? props.accountIds
   : props.accountIds)
+const syncAdminId = computed(() => props.show && authStore.isAdmin && targetMode.value === 'selected' && !props.filteredPreview
+  ? authStore.user?.id ?? null : null)
+const { rows: syncRows, busy: syncBusy, valid: syncValid, run: runSync, stop: stopSync, leave: leaveSync } = useBatchUpstreamWhitelist(
+  () => syncAdminId.value,
+  () => props.target ? props.target.accountIds ?? [] : props.accountIds,
+  () => emit('whitelistsSaved')
+)
+function startWhitelistSync(retry: boolean) {
+  if (formBusy.value || showMixedChannelWarning.value || !syncValid.value || syncAdminId.value == null) return
+  // A subsequent form submit must not overwrite individual results with the shared draft.
+  enableModelRestriction.value = false
+  void runSync(retry)
+}
 const targetPreviewCount = computed(() => props.target?.previewCount ?? props.accountIds.length)
 const targetSelectedPlatforms = computed(() => props.target?.selectedPlatforms ?? props.selectedPlatforms)
 const targetSelectedTypes = computed(() => props.target?.selectedTypes ?? props.selectedTypes)
@@ -1705,6 +1746,8 @@ const enableRpmLimit = ref(false)
 
 // State - field values
 const submitting = ref(false)
+const checkingSubmit = ref(false)
+let dialogGeneration = 0
 const showMixedChannelWarning = ref(false)
 const mixedChannelWarningMessage = ref('')
 const pendingUpdatesForConfirm = ref<Record<string, unknown> | null>(null)
@@ -1766,6 +1809,7 @@ const excelBPS403GroupOptions = computed(() => [
     .map(group => ({ value: group.id, label: group.name }))
 ])
 const openaiPassthroughEnabled = ref(false)
+const openaiPassthroughModelFilterEnabled = ref(false)
 // Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
 const openaiFlattenNamespacesEnabled = ref(false)
 const openAILongContextBillingEnabled = ref(false)
@@ -1824,7 +1868,8 @@ const isOpenAIModelRestrictionDisabled = computed(
   () =>
     allOpenAIPassthroughCapable.value &&
     enableOpenAIPassthrough.value &&
-    openaiPassthroughEnabled.value
+    openaiPassthroughEnabled.value &&
+    !openaiPassthroughModelFilterEnabled.value
 )
 
 const openAIWSModeOptions = computed(() => [
@@ -2086,6 +2131,7 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
   if (enableOpenAIPassthrough.value) {
     const extra = ensureExtra()
     extra.openai_passthrough = openaiPassthroughEnabled.value
+    extra.openai_passthrough_model_filter = openaiPassthroughEnabled.value && openaiPassthroughModelFilterEnabled.value
     if (!openaiPassthroughEnabled.value) {
       extra.openai_oauth_passthrough = false
     }
@@ -2259,7 +2305,9 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
   return Object.keys(updates).length > 0 ? updates : null
 }
 
-const mixedChannelConfirmed = ref(false)
+const mixedContext = () => [props.show, props.accountIds, props.target]
+const mixedAction = useConfirmedAction(() => ({ active: props.show, identity: mixedContext() }))
+const formBusy = computed(() => submitting.value || checkingSubmit.value || syncBusy.value || mixedAction.busy.value)
 
 // 是否需要预检查：改了分组 + 全是单一的 antigravity 或 anthropic 平台
 // 多平台混合的情况由 submitBulkUpdate 的 409 catch 兜底
@@ -2270,25 +2318,25 @@ const canPreCheck = () =>
   (targetSelectedPlatforms.value[0] === 'antigravity' || targetSelectedPlatforms.value[0] === 'anthropic')
 
 const handleClose = () => {
+  dialogGeneration++
+  leaveSync()
   showMixedChannelWarning.value = false
   mixedChannelWarningMessage.value = ''
   pendingUpdatesForConfirm.value = null
-  mixedChannelConfirmed.value = false
   emit('close')
 }
 
 // 预检查：提交前调接口检测，有风险就弹窗阻止，返回 false 表示需要用户确认
 const preCheckMixedChannelRisk = async (built: Record<string, unknown>): Promise<boolean> => {
-  const isCurrent = mixedCurrent()
   if (!canPreCheck()) return true
-  if (mixedChannelConfirmed.value) return true
+  const generation = dialogGeneration
 
   try {
     const result = await adminAPI.accounts.checkMixedChannelRisk({
       platform: targetSelectedPlatforms.value[0],
       group_ids: groupIds.value
     })
-    if (!isCurrent()) return false
+    if (generation !== dialogGeneration || !props.show) return false
     if (!result.has_risk) return true
 
     pendingUpdatesForConfirm.value = built
@@ -2296,15 +2344,14 @@ const preCheckMixedChannelRisk = async (built: Record<string, unknown>): Promise
     showMixedChannelWarning.value = true
     return false
   } catch (error: any) {
-    if (!isCurrent()) return false
+    if (generation !== dialogGeneration || !props.show) return false
     appStore.showError(error.message || t('admin.accounts.bulkEdit.failed'))
     return false
   }
 }
 
 const handleSubmit = async () => {
-  if (mixedAction.busy.value || submitting.value) return
-    if (bpsDefaults.loading.value) return
+  if (formBusy.value || showMixedChannelWarning.value || bpsDefaults.loading.value) return
   if (targetMode.value === 'selected' && targetAccountIds.value.length === 0) {
     appStore.showError(t('admin.accounts.bulkEdit.noSelection'))
     return
@@ -2396,16 +2443,21 @@ const handleSubmit = async () => {
     return
   }
 
-  const canContinue = await preCheckMixedChannelRisk(built)
-  if (!canContinue) return
-
-  await submitBulkUpdate(built)
+  checkingSubmit.value = true
+  const generation = dialogGeneration
+  try {
+    const canContinue = await preCheckMixedChannelRisk(built)
+    if (!canContinue || !props.show || generation !== dialogGeneration) return
+    await submitBulkUpdate(built)
+  } finally {
+    checkingSubmit.value = false
+  }
 }
 
-const submitBulkUpdate = async (baseUpdates: Record<string, unknown>) => {
-  const isCurrent = mixedCurrent()
-  // 无论是预检查确认还是 409 兜底确认，只要 mixedChannelConfirmed 为 true 就带上 flag
-  const updates = mixedChannelConfirmed.value
+const submitBulkUpdate = async (baseUpdates: Record<string, unknown>, confirmed?: () => boolean) => {
+  const generation = dialogGeneration
+  const isCurrent = () => props.show && generation === dialogGeneration && (!confirmed || confirmed())
+  const updates = confirmed
     ? { ...baseUpdates, confirm_mixed_channel_risk: true }
     : baseUpdates
 
@@ -2464,32 +2516,16 @@ const submitBulkUpdate = async (baseUpdates: Record<string, unknown>) => {
       console.error('Error bulk updating accounts:', error)
     }
   } finally {
-    if (isCurrent()) submitting.value = false
+    submitting.value = false
   }
 }
 
-const mixedContext = () => [props.show, props.accountIds, props.target]
-const mixedAction = useConfirmedAction(() => ({ active: props.show, identity: mixedContext() }))
-let mixedRevision = 0
-let mixedExecutionCurrent: (() => boolean) | null = null
-const mixedCurrent = () => {
-  const revision = mixedRevision
-  const execution = mixedExecutionCurrent
-  return () => props.show && mixedRevision === revision && (!execution || execution())
-}
-watch(mixedContext, () => { submitting.value = false; mixedRevision++; handleMixedChannelCancel() }, { deep: true, flush: 'sync' })
 const handleMixedChannelConfirm = async () => {
   const updates = pendingUpdatesForConfirm.value
-  if (!props.show || !showMixedChannelWarning.value || !updates) return
+  if (formBusy.value || !props.show || !showMixedChannelWarning.value || !updates) return
   await mixedAction.run(async (isCurrent) => {
-    mixedExecutionCurrent = isCurrent
-    mixedChannelConfirmed.value = true
-    try {
-      await submitBulkUpdate(updates)
-      if (isCurrent()) handleMixedChannelCancel()
-    } finally {
-      mixedExecutionCurrent = null
-    }
+    handleMixedChannelCancel()
+    await submitBulkUpdate(updates, isCurrent)
   })
 }
 
@@ -2499,6 +2535,11 @@ const handleMixedChannelCancel = () => {
 }
 
 // Reset form when modal closes
+watch(mixedContext, () => {
+  dialogGeneration++
+  handleMixedChannelCancel()
+}, { deep: true, flush: 'sync' })
+
 watch(
   () => props.show,
   (newShow) => {
@@ -2556,6 +2597,7 @@ watch(
       excelBPSAutoMoveOn403.value = false
       excelBPS403TargetGroupID.value = ''
       openaiPassthroughEnabled.value = false
+      openaiPassthroughModelFilterEnabled.value = false
       openaiFlattenNamespacesEnabled.value = false
       openAILongContextBillingEnabled.value = false
       openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
@@ -2592,7 +2634,6 @@ watch(
       showMixedChannelWarning.value = false
       mixedChannelWarningMessage.value = ''
       pendingUpdatesForConfirm.value = null
-      mixedChannelConfirmed.value = false
     }
   }
 )

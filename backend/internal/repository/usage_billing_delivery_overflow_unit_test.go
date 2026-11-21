@@ -100,7 +100,7 @@ func expectDurableOverflowEnqueue(mock sqlmock.Sqlmock, cmd service.UsageBilling
 
 func expectDurableOverflowQuote(mock sqlmock.Sqlmock, cmd service.UsageBillingCommand) *sqlmock.ExpectedExec {
 	return mock.ExpectExec("INSERT INTO usage_billing_quotes").
-		WithArgs(cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint, "0.000078125", cmd.BalanceCost)
+		WithArgs(cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint, "0.000078125", cmd.BalanceCost, cmd.UserID, cmd.BalanceCost)
 }
 
 func TestUsageBillingDeliveryOverflowPersistsNoticeAndNeverReplaysIt(t *testing.T) {

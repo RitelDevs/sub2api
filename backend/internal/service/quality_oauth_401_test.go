@@ -62,7 +62,8 @@ func TestQualityOAuth401DirectSourceExcludesTicketsAndPlugins(t *testing.T) {
 				svc.openaiGatewayService = nil
 			} else if scenario == "borrowed-ticket" {
 				ticket.Acquisition, ticket.SourceAccountID = "reuse", account.ID+1
-				require.NoError(t, gateway.storeOpenAICodexTicket(t.Context(), account, ticket))
+				require.Error(t, gateway.storeOpenAICodexTicket(t.Context(), account, ticket))
+				return
 			}
 			if scenario == "ticket-fail-open" {
 				gateway.openaiCodexTickets.Delete(openAICodexTicketKey(account.ID, "gpt-6-astra"))

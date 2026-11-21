@@ -47,7 +47,7 @@ const preferredModels: Record<CodexQuickConfigPlatform, string> = {
 }
 
 
-function escapeTomlBasicString(value: string): string {
+export function escapeTomlBasicString(value: string): string {
   return value
     .replace(/\\/g, '\\\\')
     .replace(/"/g, '\\"')

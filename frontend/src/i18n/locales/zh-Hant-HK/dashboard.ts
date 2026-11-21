@@ -208,7 +208,8 @@ export default {
       downloadSuccessMessage: '腳本已下載，請運行腳本完成 Codex 配置；看到配置成功提示後重啟 Codex。',
       errorMessage: '操作未完成，請重試或檢查瀏覽器的剪貼板和下載權限。',
       runTitle: '運行方式',
-      windowsRun: '下載 .cmd 文件後雙擊運行，無需安裝額外包。確認系統彈窗或終端結果後按任意鍵關閉窗口；配置成功後完全退出並重啟 Codex。'
+      windowsRun: '下載 .cmd 文件後雙擊運行，無需安裝額外包。確認系統彈窗或終端結果後按任意鍵關閉窗口；配置成功後完全退出並重啟 Codex。',
+      "noCatalog": "不使用自定義目錄",
     },
     useKeyModal: {
       title: '使用 API 密鑰',
@@ -386,7 +387,9 @@ export default {
       inactive: '已停用',
       quota_exhausted: '額度耗盡',
       expired: '已過期'
-    }
+    },
+    "forceOpenAIFast": "強制 Fast（OpenAI）",
+    "forceOpenAIFastHint": "Fast 可能增加費用，仍受管理員策略限制。",
   },
 
   // Usage
@@ -579,6 +582,7 @@ export default {
         loadFailed: '載入詳情失敗，請稍後重試',
       },
     },
+    "exportRateLimitedWait": "查詢太頻繁，{seconds} 秒後自動繼續...",
   },
 
   // Shared keys for channel monitor (admin + user views)
@@ -850,21 +854,30 @@ export default {
       timePricingRowHintPeak: '；本行價格未含高峯倍率，與高峯時段 {window} 重疊的部分實付再乘 ×{multiplier}',
       timePricingWeekdays: '工作日',
       timePricingRateHint: '生效倍率 {rate} × 時段倍率 {multiplier}',
-      paidPrice: '實付價格(折後)',
+      paidPrice: "客户參考價（折後）",
       officialPrice: '官方價格',
       rate: '折扣倍率',
-      unitPerMillion: '$ / 1M token',
+      unitPerMillion: "/ 1M token",
       perUnitSecond: '/ 秒',
       perSecond: '按秒計費',
       perUnitRequest: '/ 次',
       perUnitImage: '/ 張',
       perRequest: '按次計費',
-      perImage: '按圖片計費'
+      perImage: '按圖片計費',
+      "copyModelId": "複製模型 ID {model}",
     },
     nav: {
       login: '登入',
       backToDashboard: '回到後台'
-    }
+    },
+    "currency": {
+      "customerLabel": "客户參考價：{currency}（折後）",
+      "credits": "站內額度",
+      "reference": "展示參考匯率：1 USD = {rate} CNY",
+      "explanation": "站內額度參考價值：1 額度 = {value} {currency}。客户價與官方參考價的幣種由站點設置，官方價可按平台／模型不同；以金額符號和列標題為準。參考換算不改變實際扣費，也不代表充值優惠後的成本。",
+      "unavailable": "暫未取得換算配置：客户價顯示站內額度，官方參考價顯示美元。",
+      "minimumCharge": "單次最低 {amount}"
+    },
   },
 
   affiliate: {

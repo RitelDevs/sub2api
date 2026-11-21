@@ -16,7 +16,7 @@ function shipWoff2Only(): Plugin {
     name: 'ritel-woff2-runtime',
     apply: 'build',
     configResolved(config) { output = resolve(config.root, config.build.outDir, 'brand') },
-    closeBundle() {
+    writeBundle() {
       function visit(directory: string) {
         for (const entry of readdirSync(directory, { withFileTypes: true })) {
           const file = resolve(directory, entry.name)

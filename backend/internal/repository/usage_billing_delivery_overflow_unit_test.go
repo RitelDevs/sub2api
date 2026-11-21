@@ -64,6 +64,9 @@ func durableOverflowUnitEvent(t *testing.T) (service.UsageBillingCommand, []byte
 }
 
 func expectDurableOverflowEvent(mock sqlmock.Sqlmock, cmd service.UsageBillingCommand, payload, result []byte, state string) {
+	mock.ExpectQuery("SELECT COALESCE.*FROM usage_billing_events").
+		WithArgs(cmd.RequestID, cmd.APIKeyID).
+		WillReturnRows(sqlmock.NewRows([]string{"owner"}).AddRow(cmd.UserID))
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT schema_version,payload,state,result,request_fingerprint").
 		WithArgs(cmd.RequestID, cmd.APIKeyID).

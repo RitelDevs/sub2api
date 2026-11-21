@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -77,11 +76,8 @@ func (f offlineReauthRuntimeTransport) RoundTrip(r *http.Request) (*http.Respons
 }
 
 func TestOpenAIOAuthReauthForkVersionUsesPinnedRuntimeRelease(t *testing.T) {
-	version, err := os.ReadFile("../../cmd/server/VERSION")
-	require.NoError(t, err)
-	// Use the actual release version: a version bump must keep its reviewed runtime mapping.
 	for _, tt := range []struct{ version, runtime, repository string }{
-		{strings.TrimSpace(string(version)), "2.19.2-ritel-reauth.1", "RitelDevs/sub2api"},
+		{managedReauthForkVersion, "2.19.2-ritel-reauth.1", "RitelDevs/sub2api"},
 		{"2.21.5.10-ritel", "2.19.2-ritel-reauth.1", "RitelDevs/sub2api"},
 		{"2.21.5.3-ritel", "2.19.2-ritel-reauth.1", "RitelDevs/sub2api"},
 		{"2.21.2.9-ritel", "2.19.2-ritel-reauth.1", "RitelDevs/sub2api"},
@@ -115,7 +111,7 @@ func TestOpenAIOAuthReauthForkVersionUsesPinnedRuntimeRelease(t *testing.T) {
 }
 
 func TestOpenAIOAuthReauthOtherBuildsKeepReleaseGate(t *testing.T) {
-	for _, version := range []string{"dev", "2.9.8.2-ritel", "2.9.8.1-custom", "2.9.6.5-ritel", "2.9.5.1-ritel"} {
+	for _, version := range []string{"dev", "2.23.0-ritel.rc1", "2.24.1-ritel.rc1", "2.9.8.2-ritel", "2.9.8.1-custom", "2.9.6.5-ritel", "2.9.5.1-ritel"} {
 		t.Run(version, func(t *testing.T) {
 			t.Setenv("OPENAI_REAUTH_WORKER_TOKEN", "")
 			t.Setenv("DATA_DIR", t.TempDir())

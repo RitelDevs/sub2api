@@ -195,6 +195,15 @@
       />
       <TrafficPanel v-if="activeTab === 'traffic'" :api-key-options="apiKeyOptions" class="card" />
     </div>
+    <ExportProgressDialog
+      :show="exportProgress.show"
+      :progress="exportProgress.progress"
+      :current="exportProgress.current"
+      :total="exportProgress.total"
+      estimated-time=""
+      :notice="exportProgress.notice"
+      @cancel="cancelExport"
+    />
   </AppLayout>
 
 </template>
@@ -229,6 +238,8 @@ import TokenUsageTrend from '@/components/charts/TokenUsageTrend.vue'
 import UserErrorRequestsTable from '@/components/user/UserErrorRequestsTable.vue'
 import { useTableColumns } from '@/composables/useTableColumns'
 import ColumnSettings from '@/components/common/ColumnSettings.vue'
+import ExportProgressDialog from '@/components/common/ExportProgressDialog.vue'
+import { EXPORT_PAGE_SIZE, fetchAllExportPages, isExportAbortError } from '@/utils/pagedExport'
 import { formatReasoningEffort } from '@/utils/format'
 import { formatUsageCacheRate, showUsageCacheRate } from '@/utils/usageCacheRate'
 import { showUpstreamResponseModelToUsers } from '@/utils/upstreamResponseModel'
@@ -269,6 +280,8 @@ const analyticsErrors = reactive(new Set<string>())
 const chartsLoading = ref(false)
 const modelStatsLoading = ref(false)
 const exporting = ref(false)
+const exportProgress = reactive({ show: false, progress: 0, current: 0, total: 0, notice: '' })
+let exportAbortController: AbortController | null = null
 const errorSortBy = ref('created_at')
 const errorSortOrder = ref<'asc' | 'desc'>('desc')
 const errorFilter = ref<{ model: string | null; category: string; api_key_id: number | null; status_code: number | null }>({
@@ -598,22 +611,33 @@ const escapeCSVValue = (value: unknown): string => {
   return str
 }
 
+const cancelExport = () => exportAbortController?.abort()
+
 const exportToCSV = async () => {
+  if (exporting.value) return
   if ((logsTotal.value ?? 0) === 0) {
     appStore.showWarning(t('usage.noDataToExport'))
     return
   }
+  const controller = new AbortController()
+  exportAbortController = controller
   exporting.value = true
-  appStore.showInfo(t('usage.preparingExport'))
+  Object.assign(exportProgress, { show: true, progress: 0, current: 0, total: logsTotal.value ?? 0, notice: '' })
   try {
-    const allLogs: UsageLog[] = []
-    const pageSize = 100
-    const exportParams = buildUsageListParams(1, pageSize)
-    const totalPages = Math.ceil((logsTotal.value ?? 0) / pageSize)
-    for (let page = 1; page <= totalPages; page++) {
-      const response = await usageAPI.query({ ...exportParams, page })
-      allLogs.push(...response.items)
-    }
+    const exportParams = buildUsageListParams(1, EXPORT_PAGE_SIZE)
+    const allLogs = await fetchAllExportPages<UsageLog>({
+      signal: controller.signal,
+      fetchPage: (page, pageSize) => usageAPI.query({ ...exportParams, page, page_size: pageSize }, { signal: controller.signal }),
+      onProgress: ({ fetched, total }) => {
+        exportProgress.notice = ''
+        exportProgress.current = fetched
+        exportProgress.total = total
+        exportProgress.progress = total > 0 ? Math.min(100, Math.round((fetched / total) * 100)) : 0
+      },
+      onRateLimited: ({ waitSeconds }) => {
+        exportProgress.notice = t('usage.exportRateLimitedWait', { seconds: waitSeconds })
+      },
+    })
     if (allLogs.length === 0) {
       appStore.showWarning(t('usage.noDataToExport'))
       return
@@ -673,10 +697,16 @@ const exportToCSV = async () => {
     window.URL.revokeObjectURL(url)
     appStore.showSuccess(t('usage.exportSuccess'))
   } catch (error) {
-    console.error('CSV Export failed:', error)
-    appStore.showError(t('usage.exportFailed'))
+    if (isExportAbortError(error)) {
+      appStore.showInfo(t('usage.exportCancelled'))
+    } else {
+      console.error('CSV Export failed:', error)
+      appStore.showError(t('usage.exportFailed'))
+    }
   } finally {
+    if (exportAbortController === controller) exportAbortController = null
     exporting.value = false
+    exportProgress.show = false
   }
 }
 
@@ -902,6 +932,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  exportAbortController?.abort()
   ++detailReqSeq
   ++chartReqSeq
   ++statsReqSeq

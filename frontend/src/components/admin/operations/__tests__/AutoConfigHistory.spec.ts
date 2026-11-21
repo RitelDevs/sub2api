@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { reactive } from 'vue'
+import { createPinia } from 'pinia'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import AutoConfigHistory from '../AutoConfigHistory.vue'
 import InfiniteListSentinel from '@/components/common/InfiniteListSentinel.vue'
@@ -23,7 +24,7 @@ const event = (id: number, kind: AutoConfigEvent['kind'] = 'concurrency_upgraded
 })
 let wrapper: VueWrapper | undefined
 function render(attach = false) {
-  wrapper = mount(AutoConfigHistory, { props: { refreshKey: 0 }, attachTo: attach ? document.body : undefined })
+  wrapper = mount(AutoConfigHistory, { props: { refreshKey: 0 }, attachTo: attach ? document.body : undefined, global: { plugins: [createPinia()] } })
   return wrapper
 }
 beforeEach(() => {
@@ -34,6 +35,16 @@ beforeEach(() => {
 })
 afterEach(() => { wrapper?.unmount(); wrapper = undefined })
 describe('AutoConfigHistory', () => {
+  it('shows the five actual HTTP rejections as the model restriction reason', async () => {
+    const row = event(42, 'oauth429_review_completed')
+    row.details.oauth429 = { model: 'example', trigger_id: 'fixture', reason: 'five_consecutive_429', model_blocked: true,
+      runs: Array.from({ length: 5 }, (_, i) => ({ id: 'run-' + i, result_id: 'result-' + i, verdict: 'rate_limited' })) }
+    vi.mocked(getAutoConfigEvents).mockResolvedValue({ items: [row], has_more: false })
+    const view = render()
+    await flushPromises()
+    expect(view.text()).toContain('追加测试连续 5 次 429')
+    expect(view.text()).toContain('已限制该模型')
+  })
   it('shows only the applied degradation actions and reads legacy events as concurrency plus models', async () => {
     const legacy = event(13, 'degradation_applied')
     legacy.details.degradation = { revision:'legacy',models:['gpt-6-luna'],threshold_percent:50,degradation_percent:60,quality_samples:10,window_start:'start',window_end:'end',concurrency_cap:6 }
@@ -88,7 +99,7 @@ describe('AutoConfigHistory', () => {
     expect(rows[0].text()).not.toContain('gpt-5.4 → gpt-5.5')
     expect(rows[0].text()).not.toContain('legacy-echo')
     const snapshot = rows[0].get('details').text()
-    expect(snapshot).toContain('Free · 并发 2 · 负载 保留导入值 · 优先级 0')
+    expect(snapshot).toContain('Free · 并发 2 · 负载 与并发数相同 · 优先级 0')
     expect(snapshot).toContain('Business / Team · 并发 20 · 负载 20 · 优先级 2')
     expect(snapshot).toContain('model-business → target-business')
     expect(snapshot).toContain('model-promax → target-promax')

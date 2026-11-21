@@ -98,13 +98,13 @@ export default {
   },
  degradation: {
   "title": "降智後處置",
-  "hint": "獨立適用於所有 OAuth 帳號，沿用帳號性能的統一滾動窗口。任一已勾選條件達到閾值時執行處置，無需開啟帳號性能停調監控。降智率只統計完整、可明確判定的質量檢測輪次；429 條件獨立判斷，質量檢測失敗或無結果也可觸發。",
+  "hint": "普通探針分支保留原確認流程。HTTP 429 壓力只觸發下方獨立測試，不代表答案錯誤，也不直接降低帳號併發。",
   "conditions": "判斷條件（滿足任一項）",
-  "conditionsRequired": "啟用處置時至少勾選一個判斷條件。",
+  "conditionsRequired": "請勾選 429 條件或啓用糖果題複核。",
   "upstream429": "429 錯誤率過高",
   "upstreamErrorThreshold": "上游錯誤率閾值（%）",
   "upstream429ShareThreshold": "429 佔錯誤響應閾值（%）",
-  "upstream429Hint": "429 條件默認勾選：窗口內至少 20 次上游 HTTP 響應，同時滿足錯誤率 ≥80%、429 佔錯誤響應 ≥80%（閾值可修改）。只使用當前評估進程觀測到的響應，每次重試獨立計數；無響應的網絡錯誤和原生 WebSocket 不計入。觸發後執行下方所選動作一次。",
+  "upstream429Hint": "按原帳號和目標模型統計 HTTP 錯誤率與錯誤中的 429 佔比。每個業務請求跨重試只計一次，以首次 HTTP 響應為準；無響應的傳輸錯誤和後台測試不計入。",
   "upstream429Event": "429 錯誤過高 · 錯誤 {failures}/{total}（閾值 {errorThreshold}%）· 429 {rateLimited}/{failures}（閾值 {shareThreshold}%）· 本進程 HTTP 響應 · {actions} · 窗口 {start} — {end}",
   "threshold": "降智率閾值（%）",
   "actions": "達到閾值後執行（可多選）",
@@ -125,7 +125,14 @@ export default {
   "event": "降智 {percent}% ≥ {threshold}% · {samples} 個明確輪次 · {actions} · 窗口 {start} — {end}",
   "concurrencyEvent": "併發 {before} → {after}",
   "modelsEvent": "模型：{models}",
-  "groupsEvent": "所選分組：{groups}；實際移出：{removed}"
+  "groupsEvent": "所選分組：{groups}；實際移出：{removed}",
+  "independentScope": "每個帳號和模型使用最近一小時內最多 200 個業務樣本。只對啓用了模型限制且不在保留名單的被測模型執行處置。",
+  "independentSamples": "最少業務請求樣本（20–200）",
+  "independentHint": "啓用後，業務 429 達到閾值會對原帳號和模型發起複測。兩次完整明確錯答，或同一輪追加測試連續 5 次收到 HTTP 429，均可觸發模型限制。超時、空答、截斷和正文裏的數字 429 都不能計入連續 429。",
+  "independentEnable": "達到 429 閾值後自動複測",
+  "candyRetest": "即時複核糖果題，兩次均明確答錯才處置",
+  "probeEvent": "降智 {percent}% ≥ {threshold}% · {samples} 個明確輪次",
+  "candyEvent": "{model} 糖果複核 · {wrong}/2 次明確答錯",
 },
   selection: {
     "accountHint": "此帳號保留首次模型範圍（空範圍表示禁用全部）。普通保存和重新授權會保留；更改模型映射會轉為手動配置。",
@@ -299,8 +306,21 @@ export default {
       "config_saved": "配置已儲存",
       "initial_applied": "首次配置已應用",
       "concurrency_upgraded": "併發已升級",
-      "failure_cooldown": "失敗冷卻"
-    }
+      "failure_cooldown": "失敗冷卻",
+      "oauth429_review_completed": "429 獨立測試完成",
+    },
+    "oauth429Detail": "被測模型 {model}：{verdicts}",
+    "oauth429Reasons": {
+      "five_consecutive_429": "追加測試連續 5 次 429",
+      "two_wrong_answers": "連續兩次完整錯答"
+    },
+    "oauth429ModelBlocked": "已限制該模型",
+    "oauth429Verdicts": {
+      "rate_limited": "上游 HTTP 429",
+      "correct": "正確",
+      "incorrect": "明確錯答",
+      "inconclusive": "無法確定"
+    },
   },
   "bps": {
     "title": "Excel / BPS 預設配置",

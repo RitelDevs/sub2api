@@ -149,10 +149,7 @@ func TestNativeAnthropicStreamMissingTerminalMarksCurrentAccountAndPreservesUsag
 			require.ErrorContains(t, err, "missing terminal event")
 			var failover *UpstreamFailoverError
 			require.False(t, errors.As(err, &failover), "already written streams must not be replayed")
-			expected := payload
-			if suffix == "event: message_stop\n" {
-				expected = strings.TrimSuffix(payload, suffix)
-			}
+			expected := strings.TrimSuffix(payload, suffix)
 			require.Equal(t, expected, rec.Body.String(), "incomplete events must not be exposed")
 			require.NotContains(t, rec.Body.String(), `"type":"message_stop"`)
 			require.Equal(t, http.StatusOK, rec.Code)
@@ -244,7 +241,10 @@ func TestNativeAnthropicStreamErrorAfterOutputCannotBecomeSuccess(t *testing.T) 
 
 func TestNativeAnthropicStreamReadFailurePreservesOutcomeAndUsage(t *testing.T) {
 	start := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10}}}\n\n"
-	stop := "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	stop := "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"ok\"}}\n\n" +
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 	for _, tt := range []struct {
 		name, payload          string
 		disconnected, complete bool

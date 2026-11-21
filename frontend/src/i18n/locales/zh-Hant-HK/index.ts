@@ -2,6 +2,8 @@ import consoleExperience from './consoleExperience'
 import consoleUi from './consoleUi'
 import consoleFields from './consoleFields'
 import consoleInline from './consoleInline'
+import imageUsage from './imageUsage'
+import channelConfig from './channelConfig'
 import coupon from './coupon'
 import qqbot from './qqbot'
 import matureProviders from './matureProviders'
@@ -55,6 +57,8 @@ export default {
   consoleUi,
   consoleFields,
   consoleInline,
+  imageUsage,
+  channelConfig,
   coupon,
   ...qqbot,
   matureProviders,

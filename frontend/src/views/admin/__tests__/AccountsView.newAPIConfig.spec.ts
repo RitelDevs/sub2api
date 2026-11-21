@@ -1,8 +1,9 @@
+import { createPinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import AccountsView from '../AccountsView.vue'
 
-const { list, getConfig, saveConfig, probe, auth } = vi.hoisted(() => ({ list: vi.fn(), getConfig: vi.fn(), saveConfig: vi.fn(), probe: vi.fn(), auth: { token: 'test-token', isAdmin: true, isSimpleMode: false } }))
+const { list, getConfig, saveConfig, probe, auth } = vi.hoisted(() => ({ list: vi.fn(), getConfig: vi.fn(), saveConfig: vi.fn(), probe: vi.fn(), auth: { user: { id: 42 }, token: 'test-token', isAdmin: true, isSimpleMode: false } }))
 vi.mock('@/api/admin', () => ({ adminAPI: {
   accounts: {
     getManagementCapabilities: vi.fn().mockResolvedValue({ concurrency_upgrade_enabled: false }), list,

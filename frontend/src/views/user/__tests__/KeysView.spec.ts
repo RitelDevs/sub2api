@@ -1354,6 +1354,9 @@ describe('user KeysView column settings', () => {
   })
 
   it('queries the default 30 calendar days and keeps the selected range through paging', async () => {
+    listKeys.mockImplementation(async (page: number, size: number) => ({
+      items: [{ ...createApiKey(), id: page }], total: size + 1, pages: 2,
+    }))
     const wrapper = await mountView()
     const end = new Date()
     const start = new Date(end)
@@ -1361,7 +1364,7 @@ describe('user KeysView column settings', () => {
     expect(getDashboardApiKeysUsage).toHaveBeenLastCalledWith([1], expect.objectContaining({
       start_date: formatDateLocalInput(start), end_date: formatDateLocalInput(end), timezone: getBrowserTimeZone(),
     }))
-    expect(listKeys).toHaveBeenLastCalledWith(1, 20, expect.objectContaining({
+    expect(listKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({
       sort_by: 'usage', sort_order: 'desc',
       start_date: formatDateLocalInput(start), end_date: formatDateLocalInput(end), timezone: getBrowserTimeZone(),
     }), expect.any(Object))
@@ -1371,24 +1374,24 @@ describe('user KeysView column settings', () => {
     await flushPromises()
     await wrapper.get('[data-test="load-more"]').trigger('click')
     await flushPromises()
-    expect(getDashboardApiKeysUsage).toHaveBeenLastCalledWith([1], expect.objectContaining({
+    expect(getDashboardApiKeysUsage).toHaveBeenLastCalledWith([2], expect.objectContaining({
       start_date: '2026-10-01', end_date: '2026-10-31', timezone: getBrowserTimeZone(),
     }))
-    expect(listKeys).toHaveBeenLastCalledWith(2, 20, expect.objectContaining({
+    expect(listKeys).toHaveBeenLastCalledWith(2, 50, expect.objectContaining({
       sort_by: 'usage', sort_order: 'desc',
       start_date: '2026-10-01', end_date: '2026-10-31', timezone: getBrowserTimeZone(),
     }), expect.any(Object))
   })
 
-  it('marks usage descending by default and toggles the actual header in both directions', async () => {
-    const wrapper = await mountView(true)
-    const header = wrapper.findAll('th').find(th => th.text() === 'Usage')!
-    expect(header.attributes('aria-sort')).toBe('descending')
+  it('passes the default usage sort to the table and honors sort changes in both directions', async () => {
+    const wrapper = await mountView()
+    const table = wrapper.findComponent({ name: 'DataTable' })
+    expect(table.props()).toMatchObject({ sortKey: 'usage', sortOrder: 'desc' })
     for (const order of ['asc', 'desc'] as const) {
-      await header.trigger('click')
+      table.vm.$emit('sort', 'usage', order)
       await flushPromises()
-      expect(header.attributes('aria-sort')).toBe(order === 'asc' ? 'ascending' : 'descending')
-      expect(listKeys).toHaveBeenLastCalledWith(1, 20, expect.objectContaining({
+      expect(table.props('sortOrder')).toBe(order)
+      expect(listKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({
         sort_by: 'usage', sort_order: order, timezone: getBrowserTimeZone(),
       }), expect.any(Object))
     }
@@ -1399,7 +1402,7 @@ describe('user KeysView column settings', () => {
     const table = wrapper.findComponent({ name: 'DataTable' })
     table.vm.$emit('sort', 'usage', 'asc')
     await flushPromises()
-    await wrapper.get('[data-test="page-2"]').trigger('click')
+    await wrapper.get('[data-test="load-more"]').trigger('click')
     await flushPromises()
     table.vm.$emit('update:selectedKeys', [1])
     await nextTick()
@@ -1408,7 +1411,7 @@ describe('user KeysView column settings', () => {
     })
     await flushPromises()
     expect(table.props('selectedKeys')).toEqual([])
-    expect(listKeys).toHaveBeenLastCalledWith(1, 20, expect.objectContaining({
+    expect(listKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({
       sort_by: 'usage', sort_order: 'asc',
       start_date: '2026-10-05', end_date: '2026-10-06', timezone: getBrowserTimeZone(),
     }), expect.any(Object))

@@ -28,7 +28,7 @@ func (s *httpUpstreamService) doRegionalEgress(req *http.Request, accountID int6
 	}
 	client := &http.Client{Transport: &regionalUpstreamTransport{s, accountID, concurrency, profile, fingerprint}, CheckRedirect: s.redirectChecker}
 	client = s.httpClientForUpstreamRequest(client, req)
-	client = httpClientWithGrokAccessDeniedFallback(client)
+	client = httpClientWithUpstreamPolicies(client, nil)
 	// Regional routing adds no replay/failover or transparent direct fallback.
 	return doUpstreamRequest(client, req)
 }
@@ -69,7 +69,8 @@ func (t *regionalUpstreamTransport) RoundTrip(req *http.Request) (*http.Response
 	if service.HTTPUpstreamPublicHostsOnly(req.Context()) {
 		transport = publicimagehttp.Wrap(transport)
 	}
-	resp, err := transport.RoundTrip(req)
+	// Compression follows the regional JSON rewrite and the destination policy.
+	resp, err := t.service.wrapUpstreamRequestCompression(transport).RoundTrip(req)
 	if region != "" {
 		status := 0
 		if resp != nil {

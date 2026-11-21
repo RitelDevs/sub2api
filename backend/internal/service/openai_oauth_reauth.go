@@ -419,8 +419,9 @@ func (s *OpenAIOAuthReauthService) SaveCredentialConfig(ctx context.Context, acc
 	// The 2FA importer already uses this configured service for initial login.
 	// Keep the same engine for a newly registered Business login; explicit
 	// account/global choices and existing configurations remain authoritative.
+	plan := oauthAccountDefaultsPlanKey(strings.ToLower(strings.TrimSpace(account.GetCredential("plan_type"))))
 	if existing == nil && strings.TrimSpace(input.Engine) == "" && mode == OpenAIOAuthReauthModePasswordTOTP &&
-		oauthAccountDefaultsPlanKey(strings.ToLower(strings.TrimSpace(account.GetCredential("plan_type")))) == "business" {
+		(plan == "business" || plan == "business_premium") {
 		engine = OpenAIOAuthReauthEngineSessionStudio
 	}
 	if mode == OpenAIOAuthReauthModeEmailOTPURL && input.Engine == "" {

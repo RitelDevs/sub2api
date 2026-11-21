@@ -80,10 +80,10 @@
         </div>
 
         <template v-if="!identityOnly">
-          <div v-if="mode === 'usage' && !observerMode" data-testid="usage-platform-filter" class="usage-filter-field">
+          <div v-if="showPlatformFilter" data-testid="usage-platform-filter" class="w-full sm:w-52">
             <label for="usage-platform" class="input-label flex items-center gap-1.5">
               {{ t('admin.usage.platform') }}
-              <NewFeatureBadge v-if="noticeUserId != null" :notice-id="NEW_FEATURE_NOTICES.adminUsagePlatform" :user-id="noticeUserId" />
+              <NewFeatureBadge v-if="noticeUserId != null" :notice-id="mode === 'errors' ? NEW_FEATURE_NOTICES.adminErrorPlatform : NEW_FEATURE_NOTICES.adminUsagePlatform" :user-id="noticeUserId" />
             </label>
             <Select
               id="usage-platform"
@@ -215,7 +215,7 @@
         </template>
       </div>
     </div>
-    <p v-if="!identityOnly && mode === 'usage' && !observerMode" id="usage-platform-hint" class="mt-3 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.usage.platformHistoryHint') }}</p>
+    <p v-if="!identityOnly && showPlatformFilter" id="usage-platform-hint" class="mt-3 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.usage.platformHistoryHint') }}</p>
   </div>
 </template>
 
@@ -311,6 +311,7 @@ const modelOptions = computed<SelectOption[]>(() => [
   { value: null, label: t('admin.usage.allModels') },
   ...(props.modelOptions ?? []).map((m) => ({ value: m, label: m })),
 ])
+const showPlatformFilter = computed(() => !observerMode && (props.mode === 'usage' || props.mode === 'errors'))
 const platformOptions = computed<SelectOption[]>(() => [
   { value: null, label: t('admin.usage.allPlatforms') },
   ...CONCRETE_PLATFORM_OPTIONS,

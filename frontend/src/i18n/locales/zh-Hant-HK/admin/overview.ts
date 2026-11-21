@@ -1340,7 +1340,7 @@ export default {
       },
       openaiFast: {
         forceUltrafast: "強制使用 Ultra Fast（ultrafast）",
-        ultrafastHint: "對支援的模型強制設定 service_tier=ultrafast。GPT-6.2 訂閱檔位按套餐補全：Pro 200 支援 Sol，Pro 500 支援 Sol 和 Astra；其他帳號使用其目錄明確提供的檔位。不可用時，若同時開啟強制 Fast 則使用 Fast，否則跟隨客戶端。GPT-6.2 Sol/Astra 在 2027-03-01 00:00（太平洋時間）前按標準價 3 倍計費，之後恢復 6 倍；GPT-6 Astra 和 GPT-6.1 Sol 為 6 倍。渠道可單獨設定 Ultra Fast 倍率。免費 Fast 不包含 Ultra Fast，免費 UltraFast 由獨立開關控制。",
+        ultrafastHint: "對支持的模型強制使用 Ultra Fast（service_tier=ultrafast）。GPT-6.2 訂閲檔位按套餐補全：Pro 200 支持 Sol，Pro 500 支持 Sol 和 Astra；其他帳號使用其目錄明確提供的檔位。不可用時，若同時開啓強制 Fast 則使用 Fast，否則跟隨客户端。6.2 Sol 和 Astra 在2027-03-01 00:00（太平洋時間）前按標準價 3 倍計費，之後恢復 6 倍。GPT-6 Astra 和 GPT-6.1 Sol 為 6 倍。渠道可單獨設置 Ultra Fast 倍率。免費 Fast 不包含 Ultra Fast，免費 UltraFast 由獨立開關控制。",
         freeUltrafast: "免費 UltraFast",
         freeUltrafastHint: "開啟後，最終按 ultrafast 檔位結算的請求向用戶按 Standard 價格計費（含緩存讀寫）。獨立於免費 Fast；不強制上游使用 UltraFast，帳號成本統計仍保留實際檔位。",
         title: 'OpenAI Fast 模式',

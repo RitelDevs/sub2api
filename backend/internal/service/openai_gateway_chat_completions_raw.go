@@ -366,7 +366,9 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		}
 		flushPending = false
 	}
-	scanner := s.newUpstreamSSEScanner(&flushBeforeUpstreamRead{r: resp.Body, flush: flushToClient})
+	scanner := newDeepSeekChatSSEPrefixScanner(
+		s.newUpstreamSSEScanner(&flushBeforeUpstreamRead{r: resp.Body, flush: flushToClient}), account, upstreamModel,
+	)
 	pendingLines := make([]string, 0, 8)
 	refusalDetector := newOpenAIChatSilentRefusalDetector(requestBodyLen)
 	var terminal openAIRawStreamTerminalState

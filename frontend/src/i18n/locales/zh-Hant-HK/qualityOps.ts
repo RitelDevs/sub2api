@@ -562,5 +562,27 @@ export default {
   "modelRemovalReadbackFailed": "確認可能已經提交，請重新預覽並核對規則模型範圍，再繼續編輯；不要重複解除。",
   "editPreset": "編輯檢測模板",
   "invalidMaxResults": "保留結果數必須為 1–200。",
-  "retentionTooSmall": "保留結果數必須容納本輪全部模型與樣本。"
+  "retentionTooSmall": "保留結果數必須容納本輪全部模型與樣本。",
+  "ciallo": {
+    "ruleHint": "按規則的模型、推理強度和時間計劃發送 ciallo。完整回覆以指定問候和顏文字開頭即匹配，由內置規則判定。結果參與本規則配置的處置；首次配置可選擇僅觀察。",
+    "title": "Ciallo 檢測",
+    "hint": "向原生 OpenAI Responses 文本帳號發送一次 ciallo，可能消耗額度。僅在回覆完整時檢查開頭的問候和顏文字。最近五次結果保存在當前瀏覽器，單次匹配無法鑑定模型身份。",
+    "start": "發送一次檢測",
+    "unsupported": "請選擇支持原生 Responses 的 OpenAI 文本帳號。",
+    "accountError": "讀取檢測帳號失敗",
+    "matched": "請求完成 · 問候格式匹配",
+    "unmatched": "請求完成 · 問候格式未匹配",
+    "unassessable": "無法評估",
+    "timeout": "請求超時",
+    "cancelled": "請求已取消",
+    "auth": "鑑權失敗",
+    "balance": "上游要求付費",
+    "limited": "上游限流",
+    "incomplete": "生成未完整結束",
+    "empty": "回覆為空",
+    "output_limit": "回覆超過檢測上限",
+    "request_failed": "請求失敗",
+    "busy": "此帳號已有檢測在進行",
+    "storage": "瀏覽器無法讀寫檢測歷史"
+  },
 }

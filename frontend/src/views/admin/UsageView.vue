@@ -848,7 +848,7 @@ const rankingRef = ref<InstanceType<typeof UserTokenRanking> | null>(null)
 
 const switchTab = (tab: UsageDetailTab) => {
   if (!detailTabs.value.some(item => item.key === tab) || activeTab.value === tab) return
-  if (tab !== 'usage' && tab !== 'analysis') filters.value.platform = undefined
+  if (tab !== 'usage' && tab !== 'analysis' && tab !== 'errors') filters.value.platform = undefined
   activeTab.value = tab
   invalidateActiveRequests()
   syncLocation()
@@ -881,6 +881,7 @@ const errorList = useInfiniteList<OpsErrorLog>({
       account_id: filters.value.account_id ?? undefined,
       group_id: filters.value.group_id ?? undefined,
       model: filters.value.model || undefined,
+      platform: props.observerMode ? undefined : filters.value.platform,
       phase: filters.value.error_phase || undefined,
       category: filters.value.error_category || undefined,
       status_codes: filters.value.status_code != null ? String(filters.value.status_code) : undefined,

@@ -252,5 +252,7 @@ export default {
   ,"groupMemberCount": "{count} 個成員"
   ,"selectedGroups": "已選 {count} 個帳戶組"
   ,"selectGroup": "選擇 {name}"
-  ,"selectVisibleGroups": "全選當前可見帳戶組"
+  ,"selectVisibleGroups": "全選當前可見帳戶組",
+  "accountBalanceNotification": "請求餘額不足通知",
+  "accountBalanceNotificationHint": "僅控制此帳號請求返回餘額不足時的郵件和機器人提醒；餘額閾值規則獨立設置。全局開關關閉時不會發送。",
 }

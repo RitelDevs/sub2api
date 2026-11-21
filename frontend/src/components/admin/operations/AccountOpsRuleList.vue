@@ -4,9 +4,14 @@
     data-testid="account-ops-rules"
   >
     <div class="flex flex-wrap items-center justify-between gap-3 pb-5">
-      <div>
+      <div v-if="!channelView">
         <AppHeading as="h3" variant="subsection" >{{ t('accountOps.accountRules') }} <NewFeatureBadge v-if="userId != null" :notice-id="NEW_FEATURE_NOTICES.accountOpsProviderBalance" :user-id="userId" /></AppHeading>
         <p class="mt-1 text-xs text-gray-500">{{ t('accountOps.rulesOnceSummary') }}</p>
+      </div>
+      <div v-else class="flex flex-wrap items-center gap-1">
+        <button v-for="view in channelViews" :key="view" type="button" class="btn btn-secondary btn-sm" :aria-pressed="activeView === view" :data-testid="`channel-view-${view}`" @click="activeView = view">
+          {{ t(`channelConfig.${view}`) }}
+        </button>
       </div>
       <div class="flex flex-wrap gap-2">
         <slot name="actions" />
@@ -48,7 +53,7 @@
       </div>
     </div>
     <slot name="global-settings" />
-    <DataTable :selection-disabled="selectionUnavailable" :loading="loading" :columns="columns" :data="filtered" :row-key="groupKey" :row-attrs="groupRowAttrs" column-order-key="admin-account-notification-rules" selectable :selected-keys="[...selectedIds]" :selection-label="selectionLabel" @update:selected-keys="updateSelection">
+    <DataTable :selection-disabled="selectionUnavailable" :loading="loading" :columns="columns" :data="visibleRows" :row-key="groupKey" :row-attrs="groupRowAttrs" column-order-key="admin-account-notification-rules" selectable :selected-keys="[...selectedIds]" :selection-label="selectionLabel" @update:selected-keys="updateSelection">
         <template #cell-group="{ row }"><p class="font-medium text-gray-900 dark:text-gray-100">{{ row.group.name }}</p>
               <p class="mt-1 text-xs text-gray-500">{{ row.group.site || row.group.provider || '—' }} · {{ t('accountOps.groupMemberCount', { count: row.accounts.length }) }}</p>
               <p class="mt-1 max-w-72 truncate text-xs text-gray-500" :title="row.memberNames">{{ row.memberNames || t('accountOps.noAccountGroups') }}</p>
@@ -60,6 +65,10 @@
               <span v-if="!row.balanceAccounts.length && !row.quotaAccounts.length">—</span>
               <span v-if="row.quotaWindow" class="mt-1 block">{{ row.quotaWindow }}</span></template>
         <template #cell-value="{ row }"><AccountOpsBalanceStatus v-if="row.balanceAccounts.length" :accounts="row.balanceAccounts.slice(0, 1)" :disabled="selectionUnavailable" @updated="emit('refresh')" />
+              <details v-if="row.balanceAccounts.length" class="mt-1 text-xs">
+                <summary class="cursor-pointer">{{ t('channelConfig.memberDetails', { count: row.balanceAccounts.length }) }}</summary>
+                <AccountOpsBalanceNotification v-for="account in row.balanceAccounts" :key="account.account_id" :account="account" :config="config" :user-id="userId" :disabled="selectionUnavailable" @saved="emit('saved', $event)" />
+              </details>
               <p v-if="row.quotaValue" class="mt-1 font-mono text-xs">{{ row.quotaValue }}</p>
               <span v-if="row.state !== 'unknown' || row.quotaAccounts.length || row.balanceAccounts.some((account: AccountOpsThresholdAccount) => account.balance_status === 'ok')" class="mt-1 inline-block text-xs" :class="row.state === 'warning' ? 'text-amber-700 dark:text-amber-400' : row.state === 'normal' ? 'text-emerald-700 dark:text-emerald-400' : 'text-gray-500'">{{ t(`accountOps.ruleStates.${row.state}`) }}</span></template>
         <template #cell-rule="{ row }"><template v-if="row.balanceRule || row.quotaRule">
@@ -77,6 +86,7 @@
               </div></template>
       <template #empty><p v-if="!error" class="p-8 text-center text-sm text-gray-500">{{ t('accountOps.noThresholdAccounts') }}</p></template>
     </DataTable>
+    <Pagination v-if="channelView && filtered.length > pageSize" :page="page" :page-size="pageSize" :total="filtered.length" :show-page-size-selector="false" @update:page="page = $event" />
   </section>
 </template>
 
@@ -88,6 +98,9 @@ import DataTable from '@/components/common/DataTable.vue'
 import { computed, ref, watch } from 'vue'
 import AccountOpsBalanceStatus from './AccountOpsBalanceStatus.vue'
 import AccountOpsLifecycleSelector from './AccountOpsLifecycleSelector.vue'
+import AccountOpsBalanceNotification from './AccountOpsBalanceNotification.vue'
+import Pagination from '@/components/common/Pagination.vue'
+import { channelRuleGroups, type ChannelRuleView } from './channelRuleGroups'
 import NewFeatureBadge from '@/components/common/NewFeatureBadge.vue'
 import { NEW_FEATURE_NOTICES } from '@/constants/newFeatureNotices'
 import { useI18n } from 'vue-i18n'
@@ -106,10 +119,14 @@ interface GroupRow {
   state: string
 }
 
-const props = withDefaults(defineProps<{ userId?: number | null; accounts: AccountOpsThresholdAccount[]; groups?: AccountOpsGroup[]; config: AccountOpsConfig; loading: boolean; ready: boolean; error: string; busy?: boolean }>(), { groups: () => [] })
-const emit = defineEmits<{ (event: 'refresh'): void; (event: 'batch-edit', accounts: AccountOpsThresholdAccount[]): void; (event: 'edit-group', group: AccountOpsGroup): void; (event: 'toggle', group: AccountOpsGroup, accounts: AccountOpsThresholdAccount[], enabled: boolean): void }>()
+const props = withDefaults(defineProps<{ channelView?: boolean; scoped?: boolean; userId?: number | null; accounts: AccountOpsThresholdAccount[]; groups?: AccountOpsGroup[]; config: AccountOpsConfig; loading: boolean; ready: boolean; error: string; busy?: boolean }>(), { groups: () => [] })
+const emit = defineEmits<{ (event: 'refresh'): void; (event: 'saved', config: AccountOpsConfig): void; (event: 'batch-edit', accounts: AccountOpsThresholdAccount[]): void; (event: 'edit-group', group: AccountOpsGroup): void; (event: 'toggle', group: AccountOpsGroup, accounts: AccountOpsThresholdAccount[], enabled: boolean): void }>()
 const { t } = useI18n()
 const search = ref(''), type = ref('all'), state = ref('all'), selectedIds = ref(new Set<string>())
+const channelViews: ChannelRuleView[] = ['wallets', 'official', 'other']
+const activeView = ref<ChannelRuleView>('wallets')
+const page = ref(1)
+const pageSize = 10
 const columns = computed(() => [
   { key: 'group', label: t('accountOps.accountGroup'), primary: true },
   { key: 'metric', label: t('accountOps.metric'), primary: true },
@@ -121,7 +138,10 @@ const groupKey = (row: GroupRow) => row.group.id
 const groupRowAttrs = (row: GroupRow) => ({ 'data-testid': `rule-row-${row.group.id}` })
 const selectionLabel = (row: GroupRow) => t('accountOps.selectGroup', { name: row.group.name })
 function updateSelection(keys: Array<string | number>) {
-  if (!selectionUnavailable.value) selectedIds.value = new Set(keys.map(String))
+  if (!selectionUnavailable.value) {
+    const selectable = new Set(visibleRows.value.filter(row => row.group.mode !== 'account').map(row => row.group.id))
+    selectedIds.value = new Set(keys.map(String).filter(id => selectable.has(id)))
+  }
 }
 const states = ['warning', 'normal', 'unknown', 'unconfigured', 'disabled']
 const accountByID = computed(() => new Map(props.accounts.map(account => [account.account_id, account])))
@@ -155,7 +175,10 @@ function metricValue(account: AccountOpsThresholdAccount, rule: GroupRow['balanc
   const current = account.usage_windows.find(item => (selected === 'any' || selected === '' || selected === item.window) && item.status === 'ok' && item.used_percent != null)
   return current ? `${current.used_percent!.toFixed(1)}%` : t('accountOps.observations.unknown')
 }
-const rows = computed<GroupRow[]>(() => groups.value.map(group => {
+const displayedGroups = computed(() => props.channelView
+  ? channelRuleGroups(groups.value, props.accounts, activeView.value, !!props.scoped)
+  : groups.value)
+const rows = computed<GroupRow[]>(() => displayedGroups.value.map(group => {
   const accounts = group.account_ids.map(id => accountByID.value.get(id)).filter((account): account is AccountOpsThresholdAccount => !!account)
   const balanceAccounts = accounts.filter(account => account.type === 'apikey')
   const quotaAccounts = accounts.filter(account => account.type === 'oauth')
@@ -174,7 +197,8 @@ const filtered = computed(() => {
   })
 })
 const selectionUnavailable = computed(() => props.busy || props.loading || !props.ready || !!props.error)
-const selectedGroups = computed(() => filtered.value.filter(row => selectedIds.value.has(row.group.id)))
+const visibleRows = computed(() => props.channelView ? filtered.value.slice((page.value - 1) * pageSize, page.value * pageSize) : filtered.value)
+const selectedGroups = computed(() => visibleRows.value.filter(row => selectedIds.value.has(row.group.id)))
 const selectedAccounts = computed(() => {
   const unique = new Map<number, AccountOpsThresholdAccount>()
   for (const row of selectedGroups.value) for (const account of row.accounts) unique.set(account.account_id, account)
@@ -187,8 +211,10 @@ const policy = (row: GroupRow) => {
   return t(alert ? (recovery ? 'accountOps.policyBoth' : 'accountOps.policyAlert') : (recovery ? 'accountOps.policyRecovery' : 'accountOps.policyRecord'))
 }
 function clearSelection() { selectedIds.value = new Set() }
-watch([type, state], clearSelection, { flush: 'sync' })
-watch(filtered, visible => { const visibleIDs = new Set(visible.map(row => row.group.id)); selectedIds.value = new Set([...selectedIds.value].filter(id => visibleIDs.has(id))) }, { flush: 'sync' })
+watch([type, state, search], () => { page.value = 1 }, { flush: 'sync' })
+watch(activeView, () => { type.value = 'all'; state.value = 'all'; search.value = ''; page.value = 1; clearSelection() }, { flush: 'sync' })
+watch([type, state, page], clearSelection, { flush: 'sync' })
+watch(visibleRows, visible => { const visibleIDs = new Set(visible.map(row => row.group.id)); selectedIds.value = new Set([...selectedIds.value].filter(id => visibleIDs.has(id))) }, { flush: 'sync' })
 function editRow(row: GroupRow) {
   if (selectionUnavailable.value) return
   if (row.accounts.length) emit('batch-edit', row.accounts)

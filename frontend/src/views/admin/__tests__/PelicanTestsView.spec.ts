@@ -309,7 +309,7 @@ describe('PelicanTestsView', () => {
     await wrapper.get('[data-testid="pelican-result-view-90"]').trigger('click')
     await flushPromises()
     const frame = wrapper.get('[data-testid="pelican-result-preview"] iframe')
-    expect(frame.attributes('sandbox')).toBe('allow-scripts')
+    expect(frame.attributes('sandbox')).toBe('allow-scripts allow-pointer-lock')
     expect(frame.attributes('srcdoc')).toContain('data-answer="90"')
     wrapper.getComponent(InfiniteListSentinel).vm.$emit('load-more')
     await flushPromises()

@@ -22,7 +22,7 @@ func TestGatewayRoutesGroupStreamOnlyRejectsNonStreamRequests(t *testing.T) {
 		{service.PlatformComposite, "/chat/completions", `{"model":"gpt-5.4","messages":[]}`, "stream_required"},
 		{service.PlatformOpenAI, "/v1/responses", `{"model":"gpt-5.4","input":"hi"}`, "stream_required"},
 		{service.PlatformComposite, "/responses", `{"model":"gpt-5.4","stream":"true"}`, "stream_required"},
-		{service.PlatformOpenAI, "/backend-api/codex/responses", `{"model":"gpt-5.4","stream":true,"stream":false}`, "stream_required"},
+		{service.PlatformOpenAI, "/backend-api/codex/responses", `{"model":"gpt-5.4","stream":true,"stream":false}`, "invalid_request_error"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			router := newGatewayRoutesTestRouterWithGroup(&service.Group{Platform: tc.platform, StreamOnly: true})

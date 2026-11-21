@@ -1,0 +1,21 @@
+export default {
+  "directory": "渠道目錄與定價",
+  "wallets": "渠道餘額",
+  "official": "官方渠道 · OAuth",
+  "other": "其他帳號規則",
+  "emptyWallets": "當前範圍沒有已關聯錢包的渠道。",
+  "memberDetails": "成員帳號（{count}）",
+  "pageSelect": "選擇本頁分組",
+  "channels": "渠道管理",
+  "observations": "請求與延遲觀測",
+  "title": "渠道配置",
+  "description": "查看渠道利潤、錢包餘額和官方帳號配額。",
+  "currentChannel": "當前渠道 ID（0 為全部）",
+  "identityHelp": "名稱、URL 和帳號歸屬用於分類；模型與定價單獨配置。修改歸屬不會自動啓用錢包成本，同域名也不代表共享錢包或告警。",
+  "connections": "供應商連接與成本來源",
+  "costMode": "利潤成本來源",
+  "estimate": "倍率估算",
+  "wallet": "錢包消費",
+  "costHelp": "選擇後保存生效。錢包消費按統計窗口讀取，缺少讀數顯示不可用；不會以零或估算代替。僅修改名稱或關聯保留此選擇。",
+  "stale": "配置已變更。已加載的利潤結果保留原查詢時間；請在利潤面板點擊刷新統計。相同窗口的分頁和排序最多複用兩分鐘內的彙總。"
+}

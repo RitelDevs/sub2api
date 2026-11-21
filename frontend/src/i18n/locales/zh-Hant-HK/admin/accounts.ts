@@ -364,7 +364,7 @@ export default {
           boundUser: "已配置用戶 {id}",
           preview: "預覽",
           save: "驗證並儲存",
-          wallet: "錢包餘額（標準化 USD）：{amount}",
+          wallet: "錢包餘額：{amount}",
           matched: "已匹配 API Key",
           needsSelection: "請選擇對應權杖",
           group: "分組：{name}",
@@ -383,6 +383,16 @@ export default {
           tokenRequired: "此站點尚未儲存該用戶的授權，請輸入系統訪問權杖。",
           verifyFailed: "驗證失敗，請檢查用戶 ID、訪問權杖和所選帳戶。",
           saveIncomplete: "部分帳戶未能完成驗證，配置尚未確認儲存，請檢查匹配結果後重試。",
+          "convertedDeclaration": "聲明倍率換算：{rate} × 7 = {value}x",
+          "costConversion": "採購成本倍率換算",
+          "costConversionHint": "默認應用美元匯率：CN 平台 ×1，非 CN 平台 ×7。取消勾選則按上游倍率 ×1 作為採購成本，不改變客户售價。",
+          "applyUSDRate": "應用美元匯率",
+          "requestPlatformFactor": "按每次請求的目標平台換算採購成本",
+          "costPlatformFactor": "平台自動換算 ×{factor}",
+          "costPreview": "採購成本倍率：{rate} × {scale} = {cost}",
+          "costSyncPaused": "此帳號已關閉採購成本自動同步，保留手動成本；可在編輯帳號中開啓。",
+          "costUnavailable": "未取得固定分組倍率，保持已有采購成本。",
+          "costManagedHint": "New API 按平台自動換算採購成本；是否應用美元匯率在「上游渠道聲明」配置中管理。",
         },
         trustWarning: '此列的倍率與餘額由上游站點針對當前 API Key 自行聲明。Sub2API 無法驗證這些數據是否與實際扣費一致；上游站點或中間代理可能返回偽造、過期或被篡改的數據。請結合帳單、餘額變化和實際用量自行核驗。',
         autoProbe: '自動探測上游渠道聲明',
@@ -2322,7 +2332,18 @@ export default {
         todayCost: '今日計費',
         usageTrend: '30天費用與請求趨勢',
         noData: '該帳戶暫無使用數據'
-      }
+      },
+      "refreshTokenHint": "系統已在後台自動刷新令牌，頻繁手動刷新可能與自動刷新相互衝突，導致令牌失效、帳號被暫停",
+      "refreshTokenFrequentWarning": "距離上次手動刷新不足一分鐘：頻繁刷新可能與後台自動刷新衝突，導致令牌失效。如無必要請稍候再試。",
+      "gatewayProvider": "上游類型",
+      "probePenalty": {
+        "title": "探針懲罰",
+        "hint": "對經此 Claude 帳號完成的按量請求設置最低扣費；正常短請求也適用。默認關閉。",
+        "minimum": "請求最低扣費（$ 站內額度）",
+        "downstream": "低於門檻時補差，並向下遊返回計費等效 Token，原始用量另行保留。下游按自己的價卡收費；相同價卡和倍率下僅有不足一個輸出 Token 單價的取整差額。",
+        "invalid": "請輸入 0 到 1000 之間、最多 8 位小數的金額；啓用時必須大於 0。",
+        "adjustment": "探針懲罰補差"
+      },
     },
 
     // Scheduled Tests

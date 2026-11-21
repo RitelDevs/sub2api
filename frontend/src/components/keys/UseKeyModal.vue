@@ -388,6 +388,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
 import { buildCodexModelCatalogUrl, fetchCodexModelsManifest } from '@/api/codex'
+import { escapeTomlBasicString } from '@/utils/codexQuickConfig'
 import type { ApiKey, GroupPlatform, PublicSettings } from '@/types'
 import { buildCcSwitchImportDeeplink, getCcSwitchApplicationProfiles, isCcSwitchOmpKeyReference, type CcSwitchApplicationProfile } from '@/utils/ccswitchImport'
 import { buildCcSwitchProviderConfig } from '@/utils/ccsProviderConfig'
@@ -400,6 +401,7 @@ interface Props {
   apiKey: string
   baseUrl: string
   platform: GroupPlatform | null
+  siteName?: string
   allowMessagesDispatch?: boolean
   keyRecord?: ApiKey | null
   publicSettings?: PublicSettings | null
@@ -1099,10 +1101,6 @@ function ritelEnvironmentFile(apiKey: string): FileConfig {
 function joinConfigPath(dir: string, file: string, windows: boolean): string {
   if (!windows) return `${dir}/${file}`
   return `${dir}\\${file}`
-}
-
-function escapeTomlBasicString(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 
 function generateGrokFiles(baseUrl: string, apiKey: string): FileConfig[] {

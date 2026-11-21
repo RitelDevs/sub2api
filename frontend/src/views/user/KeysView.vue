@@ -420,6 +420,7 @@
           <Select
             :key="showEditModal ? 'edit' : createProvider"
             id="key-form-group"
+            match-trigger-width
             :aria-label="t('keys.groupLabel')"
             v-model="formData.group_id"
             :options="formGroupOptions"
@@ -1006,6 +1007,7 @@
       :key-record="selectedKey"
       :public-settings="publicSettings"
       :base-url="publicSettings?.api_base_url || ''"
+      :site-name="publicSettings?.site_name"
       :platform="selectedKey?.group?.platform || null"
       :allow-messages-dispatch="selectedKey?.group?.allow_messages_dispatch || false"
       @close="closeUseKeyModal"
@@ -1020,6 +1022,7 @@
       :show="showCodexQuickConfigModal"
       :api-key="selectedKey?.key || ''"
       :base-url="publicSettings?.api_base_url || ''"
+      :site-name="publicSettings?.site_name"
       :platform="selectedCodexQuickConfigPlatform"
       @close="closeCodexQuickConfigModal"
     />

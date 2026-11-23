@@ -13,6 +13,8 @@ func TestDeliveredEventsAreDistinctAndWriteScoped(t *testing.T) {
 	now := start
 	c := newCollector(start, 0, func() time.Time { return now })
 	ctx := With(context.Background(), c)
+	DeliveredSSE(WithOuterDelivery(ctx), []byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0}]}}]}\n\n"))
+	require.Empty(t, c.snapshot().Events)
 	DeliveredSSE(ctx, []byte(": heartbeat\n\ndata: {\"type\":\"response.created\"}\n\n"))
 	require.Empty(t, c.snapshot().Events)
 	now = start.Add(200 * time.Millisecond)

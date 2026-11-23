@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -171,4 +173,34 @@ func TestGeminiBridgeProtocolFailureAndCleanTail(t *testing.T) {
 	previous := recorder.Body.String()
 	w.finish()
 	require.Equal(t, previous, recorder.Body.String())
+}
+
+func TestGeminiBridgeObservesOnlyFinalToolWrite(t *testing.T) {
+	start := time.Now()
+	collector := requesttiming.New(start, 0)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/fixture:streamGenerateContent", strings.NewReader(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`)).WithContext(requesttiming.With(context.Background(), collector))
+	c.Params = gin.Params{{Key: "modelAction", Value: "/fixture:streamGenerateContent"}}
+	var finalWriteStart float64
+	ServeGeminiViaChatCompletions(c, func(c *gin.Context) {
+		c.Header("Content-Type", "text/event-stream")
+		wire := []byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"lookup\",\"arguments\":\"{}\"}}]}}]}\n\n")
+		_, err := c.Writer.Write(wire)
+		require.NoError(t, err)
+		require.Empty(t, recorder.Body.String())
+		requesttiming.DeliveredSSE(c.Request.Context(), wire)
+		finalWriteStart = float64(time.Since(start)) / float64(time.Millisecond)
+		_, err = io.WriteString(c.Writer, "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n")
+		require.NoError(t, err)
+	})
+	require.Empty(t, c.Errors)
+	collector.Finish(200, false)
+	collector.WhenFinished(func(s requesttiming.Snapshot) {
+		tool, ok := s.Events["downstream_first_tool_write"]
+		require.True(t, ok)
+		require.GreaterOrEqual(t, tool, finalWriteStart)
+		_, text := s.Events["downstream_first_text_write"]
+		require.False(t, text)
+	})
 }

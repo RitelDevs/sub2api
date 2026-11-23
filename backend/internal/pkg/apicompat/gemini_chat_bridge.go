@@ -857,6 +857,7 @@ func geminiUsageFromChat(usage *ChatUsage) map[string]any {
 // Preserve the original numeric representation and reject incomplete or non-object
 // arguments. Output-limit truncation omits only the unusable call.
 func geminiToolPart(name, arguments, reason string) (map[string]any, error) {
+	name = strings.TrimSpace(name)
 	raw := strings.TrimSpace(arguments)
 	if raw == "" {
 		if reason == "length" {
@@ -864,7 +865,7 @@ func geminiToolPart(name, arguments, reason string) (map[string]any, error) {
 		}
 		raw = "{}"
 	}
-	if strings.TrimSpace(name) == "" || !strings.HasPrefix(raw, "{") || !json.Valid([]byte(raw)) {
+	if name == "" || !strings.HasPrefix(raw, "{") || !json.Valid([]byte(raw)) {
 		if reason == "length" {
 			return nil, nil
 		}

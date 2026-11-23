@@ -126,6 +126,7 @@ func ServeGeminiViaChatCompletions(c *gin.Context, chat gin.HandlerFunc, maxFram
 	requestmodel.ResetRequestBody(c.Request, chatBody)
 	writer := newGeminiChatResponseWriter(c.Writer, modelName, maxFrameBytes...)
 	writer.ctx = c.Request.Context()
+	c.Request = c.Request.WithContext(requesttiming.WithOuterDelivery(writer.ctx))
 	c.Writer = writer
 	defer func() {
 		if writer.streaming && writer.ctx.Err() != nil && writer.err == nil {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/sse"
 	"github.com/tidwall/gjson"
 )
 
@@ -122,8 +123,10 @@ func ChatCompletionsJSONToGemini(body []byte, fallbackModel string) ([]byte, err
 
 // GeminiSSETranslator 把 Chat Completions SSE 增量转成 Gemini SSE（data: {...}\n\n）。
 type GeminiSSETranslator struct {
-	model string
-	buf   bytes.Buffer
+	model    string
+	decoder  *sse.Decoder
+	err      error
+	finished bool
 	// 工具增量按候选和 tool index 分开。两个候选都会从 index 0 开始，
 	// 混在一张表里会串参数，并且先结束的候选会清掉另一个的状态。
 	tools map[geminiToolKey]*geminiToolAccum
@@ -134,40 +137,55 @@ type geminiToolKey struct {
 	tool   int
 }
 
-func NewGeminiSSETranslator(model string) *GeminiSSETranslator {
-	return &GeminiSSETranslator{model: strings.TrimSpace(model), tools: map[geminiToolKey]*geminiToolAccum{}}
+// The default matches the gateway's existing SSE line limit. The decoder also
+// bounds accumulated metadata and multi-data frames.
+func NewGeminiSSETranslator(model string, maxFrameBytes ...int) *GeminiSSETranslator {
+	limit := 500 * 1024 * 1024
+	if len(maxFrameBytes) > 0 && maxFrameBytes[0] > 0 {
+		limit = maxFrameBytes[0]
+	}
+	return &GeminiSSETranslator{model: strings.TrimSpace(model), decoder: sse.NewDecoder(limit), tools: map[geminiToolKey]*geminiToolAccum{}}
 }
 
-// Push 吃进任意切分的上游字节，返回已经可以写给 Gemini 客户端的 SSE。
-func (t *GeminiSSETranslator) Push(p []byte) []byte {
-	if t == nil || len(p) == 0 {
+// Err reports a latched protocol error; callers must stop accepting input.
+func (t *GeminiSSETranslator) Err() error { return t.err }
+
+func (t *GeminiSSETranslator) consume(event sse.Event, out *bytes.Buffer) error {
+	if len(event.Comment) > 0 {
+		out.Write(event.Comment)
+		out.WriteString("\n\n")
 		return nil
 	}
-	_, _ = t.buf.Write(p)
+	converted, err := t.translatePayload(event.Data)
+	out.Write(converted)
+	return err
+}
+
+// Push consumes arbitrary byte fragments. Complete events are emitted immediately.
+func (t *GeminiSSETranslator) Push(p []byte) []byte {
+	if t == nil || t.finished || t.err != nil {
+		return nil
+	}
 	var out bytes.Buffer
-	for {
-		data := t.buf.Bytes()
-		idx := bytes.IndexByte(data, '\n')
-		if idx < 0 {
-			break
-		}
-		line := strings.TrimRight(string(data[:idx]), "\r")
-		t.buf.Next(idx + 1)
-		if converted := t.translateLine(line); len(converted) > 0 {
-			_, _ = out.Write(converted)
-		}
+	t.err = t.decoder.Push(p, func(event sse.Event) error { return t.consume(event, &out) })
+	if t.err != nil {
+		out.Write(geminiSSEData(map[string]any{"error": map[string]any{"code": 502, "status": "INTERNAL", "message": "Invalid upstream response stream"}}))
 	}
 	return out.Bytes()
 }
 
-// Flush 处理末尾没有换行的残留行。
+// Flush accepts a complete trailing event on clean completion and is idempotent.
 func (t *GeminiSSETranslator) Flush() []byte {
-	if t == nil || t.buf.Len() == 0 {
+	if t == nil || t.finished || t.err != nil {
 		return nil
 	}
-	line := strings.TrimRight(t.buf.String(), "\r\n")
-	t.buf.Reset()
-	return t.translateLine(line)
+	t.finished = true
+	var out bytes.Buffer
+	t.err = t.decoder.Finish(func(event sse.Event) error { return t.consume(event, &out) })
+	if t.err != nil {
+		out.Write(geminiSSEData(map[string]any{"error": map[string]any{"code": 502, "status": "INTERNAL", "message": "Invalid upstream response stream"}}))
+	}
+	return out.Bytes()
 }
 
 // EstimateGeminiTotalTokens 按文本长度估算 countTokens。桥接分组没有 Gemini
@@ -832,40 +850,19 @@ func geminiUsageFromChat(usage *ChatUsage) map[string]any {
 	}
 }
 
-func (t *GeminiSSETranslator) translateLine(line string) []byte {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" || strings.HasPrefix(trimmed, "event:") {
-		return nil
-	}
-	// 上游转发链用 `:` 注释做 SSE keepalive。丢掉后，长时间无内容时下游连接失去保活。
-	if strings.HasPrefix(trimmed, ":") {
-		out := make([]byte, 0, len(trimmed)+2)
-		out = append(out, trimmed...)
-		out = append(out, '\n', '\n')
-		return out
-	}
-	line = trimmed
-	rest, ok := strings.CutPrefix(line, "data:")
-	if !ok {
-		return nil
-	}
-	payload := strings.TrimSpace(rest)
+func (t *GeminiSSETranslator) translatePayload(data []byte) ([]byte, error) {
+	payload := strings.TrimSpace(string(data))
 	if payload == "" || payload == "[DONE]" {
-		return nil
+		return nil, nil
 	}
 	if gjson.Get(payload, "error").Exists() && !gjson.Get(payload, "choices").Exists() {
-		message := gjson.Get(payload, "error.message").String()
-		if message == "" {
-			message = "Upstream request failed"
-		}
-		return geminiSSEData(map[string]any{
-			"error": map[string]any{"code": 502, "message": message, "status": "INTERNAL"},
-		})
+		return nil, fmt.Errorf("upstream stream error")
 	}
 	var chunk ChatCompletionsChunk
 	if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-		return nil
+		return nil, fmt.Errorf("invalid upstream Chat event: %w", err)
 	}
+
 	if chunk.Model != "" {
 		t.model = chunk.Model
 	}
@@ -941,13 +938,13 @@ func (t *GeminiSSETranslator) translateLine(line string) []byte {
 		}
 	}
 	if len(events) == 0 {
-		return nil
+		return nil, nil
 	}
 	var out bytes.Buffer
 	for _, event := range events {
 		_, _ = out.Write(geminiSSEData(event))
 	}
-	return out.Bytes()
+	return out.Bytes(), nil
 }
 
 func geminiStreamCandidate(index int, parts []any, finish string) map[string]any {

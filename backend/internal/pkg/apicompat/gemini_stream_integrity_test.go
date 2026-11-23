@@ -75,3 +75,39 @@ func TestGeminiStreamKeepsUsageBeforeAndAfterTerminal(t *testing.T) {
 	}
 	require.Equal(t, []int64{5, 7}, usage)
 }
+
+func TestGeminiStreamLargeFragmentedToolArguments(t *testing.T) {
+	for _, fragment := range []int{64, 1024} {
+		translator := NewGeminiSSETranslator("fixture")
+		frames := geminiToolBenchmarkFrames(256*1024, fragment)
+		for _, frame := range frames[:len(frames)-1] {
+			require.Empty(t, translator.Push(frame), "a partial tool must remain buffered")
+		}
+		out := translator.Push(frames[len(frames)-1])
+		require.Empty(t, translator.Flush())
+		require.NoError(t, translator.Err())
+		payloads := sseDataPayloads(string(out))
+		require.Len(t, payloads, 1)
+		call := gjson.Get(payloads[0], "candidates.0.content.parts.0.functionCall")
+		require.Equal(t, "lookup", call.Get("name").String())
+		require.Equal(t, strings.Repeat("x", 256*1024), call.Get("args.text").String())
+		require.Equal(t, "9007199254740993", call.Get("args.n").Raw)
+		require.Equal(t, "STOP", gjson.Get(payloads[0], "candidates.0.finishReason").String())
+	}
+}
+
+func TestGeminiStreamOutputRemainsOwnedAcrossPushes(t *testing.T) {
+	translator := NewGeminiSSETranslator("fixture")
+	first := translator.Push([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"<first>\\n中\"}}]}\n\n"))
+	saved := string(first)
+	frames := geminiToolBenchmarkFrames(32*1024, 64)
+	for _, frame := range frames {
+		translator.Push(frame)
+	}
+	translator.Flush()
+	require.NoError(t, translator.Err())
+	require.Equal(t, saved, string(first))
+	payloads := sseDataPayloads(saved)
+	require.Len(t, payloads, 1)
+	require.Equal(t, "<first>\n中", gjson.Get(payloads[0], "candidates.0.content.parts.0.text").String())
+}

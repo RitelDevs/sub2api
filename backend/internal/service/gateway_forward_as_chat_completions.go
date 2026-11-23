@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -502,6 +503,11 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		return result
 	}
 
+	timingContext := context.Background()
+	if c.Request != nil {
+		timingContext = c.Request.Context()
+	}
+
 	writeChunk := func(chunk apicompat.ChatCompletionsChunk) bool {
 		sse, err := apicompat.ChatChunkToSSE(chunk)
 		if err != nil {
@@ -511,8 +517,10 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		// c 可能持有请求侧注入的 ToolNameRewrite；无则仅做静态前缀还原。
 		out := reverseToolNamesIfPresentString(c, sse)
 		if _, err := fmt.Fprint(c.Writer, out); err != nil {
+			requesttiming.Mark(timingContext, "downstream_write_failed")
 			return true // client disconnected
 		}
+		requesttiming.DeliveredSSE(timingContext, []byte(out))
 		return false
 	}
 
@@ -540,6 +548,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			return
 		}
 		if firstChunk {
+			requesttiming.Mark(timingContext, "bridge_first_upstream_event")
 			firstChunk = false
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms

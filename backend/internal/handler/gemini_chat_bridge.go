@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/googleapi"
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requestmodel"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -123,8 +125,12 @@ func ServeGeminiViaChatCompletions(c *gin.Context, chat gin.HandlerFunc, maxFram
 	}
 	requestmodel.ResetRequestBody(c.Request, chatBody)
 	writer := newGeminiChatResponseWriter(c.Writer, modelName, maxFrameBytes...)
+	writer.ctx = c.Request.Context()
 	c.Writer = writer
 	defer func() {
+		if writer.streaming && writer.ctx.Err() != nil && writer.err == nil {
+			writer.err = writer.ctx.Err()
+		}
 		writer.finish()
 		if writer.err != nil {
 			_ = c.Error(writer.err)
@@ -182,6 +188,7 @@ func acceptableBridgedModelName(model string) bool {
 type geminiChatResponseWriter struct {
 	gin.ResponseWriter
 	model      string
+	ctx        context.Context
 	status     int
 	buf        bytes.Buffer
 	sawWrite   bool
@@ -195,6 +202,7 @@ type geminiChatResponseWriter struct {
 func newGeminiChatResponseWriter(base gin.ResponseWriter, model string, maxFrameBytes ...int) *geminiChatResponseWriter {
 	return &geminiChatResponseWriter{
 		ResponseWriter: base,
+		ctx:            context.Background(),
 		model:          model,
 		translator:     apicompat.NewGeminiSSETranslator(model, maxFrameBytes...),
 	}
@@ -277,6 +285,11 @@ func (w *geminiChatResponseWriter) writeStream(p []byte) {
 		err = io.ErrShortWrite
 	}
 	w.err = err
+	if err != nil {
+		requesttiming.Mark(w.ctx, "downstream_write_failed")
+	} else {
+		requesttiming.DeliveredSSE(w.ctx, p)
+	}
 	if err == nil && (bytes.HasPrefix(p, []byte(":")) || bytes.Contains(p, []byte("\n:"))) {
 		_ = w.FlushError()
 	}
@@ -291,6 +304,9 @@ func (w *geminiChatResponseWriter) FlushError() error {
 	}
 	if w.streaming && w.committed {
 		w.err = service.FlushGatewayResponse(w.ResponseWriter)
+		if w.err != nil {
+			requesttiming.Mark(w.ctx, "downstream_flush_failed")
+		}
 	}
 	return w.err
 }

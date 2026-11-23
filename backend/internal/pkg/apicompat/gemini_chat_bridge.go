@@ -160,9 +160,7 @@ func (t *GeminiSSETranslator) consume(event sse.Event, out *bytes.Buffer) error 
 		out.WriteString("\n\n")
 		return nil
 	}
-	converted, err := t.translatePayload(event.Data)
-	out.Write(converted)
-	return err
+	return t.translatePayload(event.Data, out)
 }
 
 // Push consumes arbitrary byte fragments. Complete events are emitted immediately.
@@ -173,7 +171,7 @@ func (t *GeminiSSETranslator) Push(p []byte) []byte {
 	var out bytes.Buffer
 	t.err = t.decoder.Push(p, func(event sse.Event) error { return t.consume(event, &out) })
 	if t.err != nil {
-		out.Write(geminiSSEData(map[string]any{"error": map[string]any{"code": 502, "status": "INTERNAL", "message": "Invalid upstream response stream"}}))
+		writeGeminiSSE(&out, map[string]any{"error": map[string]any{"code": 502, "status": "INTERNAL", "message": "Invalid upstream response stream"}})
 	}
 	return out.Bytes()
 }
@@ -190,7 +188,7 @@ func (t *GeminiSSETranslator) Flush() []byte {
 		t.err = t.validateTerminals()
 	}
 	if t.err != nil {
-		out.Write(geminiSSEData(map[string]any{"error": map[string]any{"code": 502, "status": "INTERNAL", "message": "Invalid upstream response stream"}}))
+		writeGeminiSSE(&out, map[string]any{"error": map[string]any{"code": 502, "status": "INTERNAL", "message": "Invalid upstream response stream"}})
 	}
 	return out.Bytes()
 }
@@ -243,7 +241,7 @@ type geminiPendingCall struct {
 
 type geminiToolAccum struct {
 	name string
-	args string
+	args strings.Builder
 }
 
 func geminiContentToChatMessages(role string, parts gjson.Result, pending *[]geminiPendingCall) []any {
@@ -886,27 +884,27 @@ func (t *GeminiSSETranslator) validateTerminals() error {
 	return nil
 }
 
-func (t *GeminiSSETranslator) translatePayload(data []byte) ([]byte, error) {
-	payload := strings.TrimSpace(string(data))
-	if payload == "" {
-		return nil, nil
+func (t *GeminiSSETranslator) translatePayload(data []byte, out *bytes.Buffer) error {
+	payload := bytes.TrimSpace(data)
+	if len(payload) == 0 {
+		return nil
 	}
-	if payload == "[DONE]" {
+	if bytes.Equal(payload, []byte("[DONE]")) {
 		if err := t.validateTerminals(); err != nil {
-			return nil, err
+			return err
 		}
 		t.done = true
-		return nil, nil
+		return nil
 	}
 	if t.done {
-		return nil, fmt.Errorf("upstream data after stream completion")
+		return fmt.Errorf("upstream data after stream completion")
 	}
-	if gjson.Get(payload, "error").Exists() && !gjson.Get(payload, "choices").Exists() {
-		return nil, fmt.Errorf("upstream stream error")
+	if gjson.GetBytes(payload, "error").Exists() && !gjson.GetBytes(payload, "choices").Exists() {
+		return fmt.Errorf("upstream stream error")
 	}
 	var chunk ChatCompletionsChunk
-	if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-		return nil, fmt.Errorf("invalid upstream Chat event: %w", err)
+	if err := json.Unmarshal(payload, &chunk); err != nil {
+		return fmt.Errorf("invalid upstream Chat event: %w", err)
 	}
 
 	if chunk.Model != "" {
@@ -915,7 +913,7 @@ func (t *GeminiSSETranslator) translatePayload(data []byte) ([]byte, error) {
 	var events []any
 	for _, choice := range chunk.Choices {
 		if t.candidates[choice.Index] {
-			return nil, fmt.Errorf("upstream data after candidate completion")
+			return fmt.Errorf("upstream data after candidate completion")
 		}
 		t.candidates[choice.Index] = false
 		if text := choice.Delta.Content; text != nil && *text != "" {
@@ -937,7 +935,7 @@ func (t *GeminiSSETranslator) translatePayload(data []byte) ([]byte, error) {
 			if name := strings.TrimSpace(call.Function.Name); name != "" {
 				acc.name = name
 			}
-			acc.args += call.Function.Arguments
+			acc.args.WriteString(call.Function.Arguments)
 		}
 		if choice.FinishReason != nil && *choice.FinishReason != "" {
 			indexes := make([]int, 0)
@@ -955,9 +953,9 @@ func (t *GeminiSSETranslator) translatePayload(data []byte) ([]byte, error) {
 				if acc == nil {
 					continue
 				}
-				part, err := geminiToolPart(acc.name, acc.args, *choice.FinishReason)
+				part, err := geminiToolPart(acc.name, acc.args.String(), *choice.FinishReason)
 				if err != nil {
-					return nil, err
+					return err
 				}
 				if part != nil {
 					parts = append(parts, part)
@@ -980,14 +978,10 @@ func (t *GeminiSSETranslator) translatePayload(data []byte) ([]byte, error) {
 		}
 		events = append(events, event)
 	}
-	if len(events) == 0 {
-		return nil, nil
-	}
-	var out bytes.Buffer
 	for _, event := range events {
-		_, _ = out.Write(geminiSSEData(event))
+		writeGeminiSSE(out, event)
 	}
-	return out.Bytes(), nil
+	return nil
 }
 
 func geminiStreamCandidate(index int, parts []any, finish string) map[string]any {
@@ -1004,16 +998,15 @@ func geminiStreamCandidate(index int, parts []any, finish string) map[string]any
 	return candidate
 }
 
-func geminiSSEData(payload any) []byte {
+func writeGeminiSSE(out *bytes.Buffer, payload any) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		return nil
+		return
 	}
-	buf := make([]byte, 0, len(encoded)+8)
-	buf = append(buf, "data: "...)
-	buf = append(buf, encoded...)
-	buf = append(buf, '\n', '\n')
-	return buf
+	out.Grow(len(encoded) + 8)
+	out.WriteString("data: ")
+	out.Write(encoded)
+	out.WriteString("\n\n")
 }
 
 func geminiInstructionText(body []byte, keys ...string) string {

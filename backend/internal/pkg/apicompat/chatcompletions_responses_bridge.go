@@ -640,8 +640,8 @@ func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessa
 			pendingReasoning = ""
 			lastTurnReasoning = ""
 			continue
-		case "input_image":
-			content, err := chatContentFromSingleResponsesPart(itemType, item)
+		case "input_image", "input_file":
+			content, err := chatContentFromSingleResponsesPart(itemType, item, "user")
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1056,7 +1056,7 @@ func responsesContentToChatContent(raw json.RawMessage, role string) (json.RawMe
 
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err == nil {
-		return chatContentFromSingleResponsesPart(rawString(obj["type"]), obj)
+		return chatContentFromSingleResponsesPart(rawString(obj["type"]), obj, role)
 	}
 
 	return raw, nil
@@ -1094,6 +1094,13 @@ func responsesContentPartsToChatContent(rawParts []json.RawMessage, role string)
 				Type:     "image_url",
 				ImageURL: &ChatImageURL{URL: imageURL},
 			})
+		case "input_file":
+			filePart, err := responsesFileToChatPart(part, role)
+			if err != nil {
+				return nil, err
+			}
+			hasNonText = true
+			chatParts = append(chatParts, filePart)
 		}
 	}
 
@@ -1112,8 +1119,14 @@ func responsesContentPartsToChatContent(rawParts []json.RawMessage, role string)
 	return json.Marshal(chatParts)
 }
 
-func chatContentFromSingleResponsesPart(partType string, part map[string]json.RawMessage) (json.RawMessage, error) {
+func chatContentFromSingleResponsesPart(partType string, part map[string]json.RawMessage, role string) (json.RawMessage, error) {
 	switch partType {
+	case "input_file":
+		filePart, err := responsesFileToChatPart(part, role)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal([]ChatContentPart{filePart})
 	case "input_image", "image_url":
 		imageURL := rawString(part["image_url"])
 		if imageURL == "" {
@@ -1126,6 +1139,24 @@ func chatContentFromSingleResponsesPart(partType string, part map[string]json.Ra
 	default:
 		return json.Marshal(rawString(part["text"]))
 	}
+}
+
+func responsesFileToChatPart(part map[string]json.RawMessage, role string) (ChatContentPart, error) {
+	if role != "user" {
+		return ChatContentPart{}, fmt.Errorf("input_file in a %s message cannot be represented by Chat Completions", role)
+	}
+	if rawString(part["file_url"]) != "" {
+		return ChatContentPart{}, fmt.Errorf("input_file.file_url cannot be forwarded to Chat Completions; supply inline file_data")
+	}
+	if rawString(part["file_id"]) != "" {
+		// The fallback selects a Chat account without an ownership binding for Responses files.
+		return ChatContentPart{}, fmt.Errorf("input_file.file_id ownership cannot be resolved on this Chat Completions route; supply inline file_data")
+	}
+	data := rawString(part["file_data"])
+	if strings.TrimSpace(data) == "" {
+		return ChatContentPart{}, fmt.Errorf("input_file requires nonempty file_data on this Chat Completions route")
+	}
+	return ChatContentPart{Type: "file", File: &ChatFile{Filename: rawString(part["filename"]), FileData: data}}, nil
 }
 
 // customToolInputSchema 是 custom/freeform 工具降级为 function 工具时的参数 schema。

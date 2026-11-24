@@ -175,8 +175,7 @@ func TestForwardAsChatCompletions_StreamPingsThenErrorFailsOverWithoutOutput(t *
 	}
 }
 
-// 非流式（缓冲）路径在流体内收到非安全类 error 事件时，客户端还没有收到任何
-// 字节：应转为故障转移，而不是忽略事件后返回 502 或截断的半截响应。
+// Only an upstream rejection received before content and usage can fail over.
 func TestForwardAsCompatBuffered_UpstreamErrorEventFailsOver(t *testing.T) {
 	for _, endpoint := range []string{"chat_completions", "responses"} {
 		for _, tc := range []struct {
@@ -210,6 +209,49 @@ func TestForwardAsCompatBuffered_UpstreamErrorEventFailsOver(t *testing.T) {
 				require.Zero(t, rec.Body.Len())
 				require.False(t, IsResponseCommitted(c))
 			})
+		}
+	}
+}
+
+func TestForwardAsCompatObservedGenerationPreventsReplay(t *testing.T) {
+	const emptyStart = `{"type":"message_start","message":{"id":"fixture","role":"assistant","content":[]}}`
+	const thinking = "event: content_block_start\ndata: " + `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}` + "\n\n"
+	const signature = "event: content_block_delta\ndata: " + `{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"fixture"}}` + "\n\n"
+	const arguments = "event: content_block_delta\ndata: " + `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}` + "\n\n"
+	for _, endpoint := range []string{"chat_completions", "responses"} {
+		for _, tc := range []struct {
+			name       string
+			start      string
+			deltas     string
+			wantResult bool
+		}{
+			{"zero_usage", `{"type":"message_start","message":{"id":"fixture","role":"assistant","content":[],"usage":{"input_tokens":0}}}`, "", true},
+			{"content_without_usage", `{"type":"message_start","message":{"id":"fixture","role":"assistant","content":[{"type":"text","text":"generated"}]}}`, "", false},
+			{"signature_without_usage", emptyStart, thinking + signature, false},
+			{"partial_json_without_usage", emptyStart, arguments, false},
+		} {
+			for _, stream := range []bool{false, true} {
+				mode := "buffered"
+				if stream {
+					mode = "stream"
+				}
+				t.Run(endpoint+"/"+mode+"/"+tc.name, func(t *testing.T) {
+					wire := "event: message_start\ndata: " + tc.start + "\n\n" + tc.deltas + compatOverloadedErrorEvent
+					svc, c, rec, body, account := newCompatFailoverTestRequest(t, endpoint, stream, wire)
+					result, err := forwardCompatForTest(svc, c, endpoint, body, account)
+					var failover *UpstreamFailoverError
+					require.Error(t, err)
+					require.False(t, errors.As(err, &failover))
+					require.True(t, IsResponseCommitted(c))
+					require.Contains(t, rec.Body.String(), "overloaded_error")
+					if tc.wantResult {
+						require.NotNil(t, result)
+						require.Zero(t, result.Usage.InputTokens)
+					} else {
+						require.Nil(t, result)
+					}
+				})
+			}
 		}
 	}
 }

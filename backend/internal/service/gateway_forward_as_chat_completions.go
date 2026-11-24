@@ -231,7 +231,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		switch {
 		case errors.As(handleErr, &sseErr):
 			policyErr := s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, mappedModel, c.Writer.Size() != writerSizeBeforeStream)
-			if result != nil || c.Writer.Size() != writerSizeBeforeStream {
+			if result != nil || IsResponseCommitted(c) || c.Writer.Size() != writerSizeBeforeStream {
 				return result, errors.New("stream usage incomplete: upstream semantic stream failure")
 			}
 			return nil, policyErr
@@ -244,7 +244,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		var sseErr *sseStreamErrorEventError
 		if errors.As(handleErr, &sseErr) {
 			policyErr := s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, mappedModel, c.Writer.Size() != writerSizeBeforeBody)
-			if result != nil || c.Writer.Size() != writerSizeBeforeBody {
+			if result != nil || IsResponseCommitted(c) || c.Writer.Size() != writerSizeBeforeBody {
 				return result, errors.New("stream usage incomplete: upstream semantic stream failure")
 			}
 			return nil, policyErr
@@ -342,11 +342,6 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	}
 
 	if failure := streamStatus.failure(); failure != nil {
-		var sseErr *sseStreamErrorEventError
-		if errors.As(failure.err, &sseErr) && !usage.hasObservedTokens() && !isAnthropicCompatSafetyRejection([]byte(sseErr.RawData)) {
-			return nil, failure.err
-		}
-
 		result := &ForwardResult{
 			UpstreamResponseServiceTier: observer.ServiceTier(),
 			RequestID:                   requestID,
@@ -360,20 +355,7 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 			Duration:                    time.Since(startTime),
 		}
 		applyObservedGatewayResponseModel(c, result)
-		if !streamStatus.clientDisconnected {
-			if isAnthropicCompatSafetyRejection([]byte(extractCompatFailurePayload(failure.err))) {
-				writeGatewayCCError(c, http.StatusForbidden, "permission_error", failure.message)
-				if !usage.hasObservedTokens() {
-					result = nil
-				}
-				return result, fmt.Errorf("upstream safety rejection: %s", failure.message)
-			}
-			writeGatewayCCError(c, http.StatusBadGateway, failure.errType, failure.message)
-		}
-		if !usage.hasObservedTokens() {
-			result = nil
-		}
-		return result, failure.err
+		return streamStatus.finishBufferedFailure(c, failure, result, writeGatewayCCError)
 	}
 
 	if finalResp == nil {
@@ -608,7 +590,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	}
 
 	if failure := stream.failure(); failure != nil {
-		return finishAnthropicCompatStreamFailure(c, writerSizeBeforeStream, failure, resultWithUsage(), func() {
+		return stream.finishFailure(c, writerSizeBeforeStream, failure, resultWithUsage(), func() {
 			writeAnthropicCompatCCStreamFailure(c, failure)
 		})
 	}

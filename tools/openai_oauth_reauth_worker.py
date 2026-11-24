@@ -1005,27 +1005,13 @@ def process_claim(api: WorkerAPI, protocol: SimpleNamespace | None, claim: dict[
         _best_effort_progress(api, task_id, "protocol_connecting")
         # An empty proxy explicitly means direct connection.  Do not let the
         # Turb project silently choose a local proxy pool for this worker.
-        for bootstrap_attempt in (1, 2):
-            session = protocol.ProtocolSession(
-                proxy=proxy_url or "",
-                detect_exit_geo=bool(proxy_url),
-                use_exit_geo_cache=False,
-            )
-            try:
-                protocol.network_preflight(session)
-                protocol.bootstrap_authorize(session, state, auth_url=auth_url)
-                break
-            except ProtocolHTTPError as exc:
-                _close_protocol_session(session)
-                session = None
-                if exc.status_code != 403 or bootstrap_attempt == 2:
-                    raise
-                LOGGER.warning(
-                    "task=%s OAuth bootstrap received HTTP 403 at %s; retrying once with a fresh protocol session",
-                    task_id,
-                    exc.endpoint,
-                )
-                time.sleep(1.0)
+        session = protocol.ProtocolSession(
+            proxy=proxy_url or "",
+            detect_exit_geo=bool(proxy_url),
+            use_exit_geo_cache=False,
+        )
+        protocol.network_preflight(session)
+        protocol.bootstrap_authorize(session, state, auth_url=auth_url)
         otp_after_ts = time.time()
         submission = protocol.submit_email(session, email)
         page_type, continue_path = _email_submission_state(submission)

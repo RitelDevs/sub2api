@@ -11,6 +11,8 @@ import (
 const (
 	DefaultReloginMaxFailures = 3
 	DefaultReloginBackoffMax  = 3600
+	// A lost claim cannot tell us whether the login reached the provider.
+	ReloginOutcomeUnknown = "re-login outcome unknown; reconcile before retry"
 )
 
 type AccountReloginOutcome struct {
@@ -85,12 +87,17 @@ func AdvanceAccountReloginBudgetPage(record AccountTokenGuardV2Record, outcomes 
 		}
 		record.LastCountedTaskID = outcome.ID
 		if outcome.Status == OpenAIOAuthReauthStatusFailed {
-			_, diagnostic, handled := localProtocolError(outcome.Error)
+			if outcome.Error == ReloginOutcomeUnknown {
+				record.AutoReloginExhausted = true
+			}
+			_, diagnostic, handled := parseReauthIdentityError(outcome.Error)
+			if !handled {
+				_, diagnostic, handled = localProtocolError(outcome.Error)
+			}
 			if !handled {
 				_, diagnostic, _ = sessionStudioError(outcome.Error)
 			}
-			// Stop only on an explicit, validated worker challenge, not a generic HTTP 403.
-			if diagnostic != nil && (diagnostic.Reason == "security_check" || diagnostic.Reason == "email_otp_required") {
+			if reloginNeedsReconciliation(diagnostic) {
 				record.AutoReloginExhausted = true
 			}
 		}
@@ -116,6 +123,27 @@ func AdvanceAccountReloginBudgetPage(record AccountTokenGuardV2Record, outcomes 
 		record.CooldownUntil = nil
 	}
 	return record, pending
+}
+
+func reloginNeedsReconciliation(d *ReauthDiagnostic) bool {
+	if d == nil {
+		return false
+	}
+	if d.Identity != nil {
+		return true
+	}
+	switch d.Reason {
+	case "security_check", "email_otp_required", "interaction_required", "phone_verification_required", "mfa_required",
+		"authorization_denied", "account_deactivated", "account_deleted", "account_retired":
+		return true
+	}
+	if d.Engine != OpenAIOAuthReauthEngineSessionStudio {
+		return false
+	}
+	// The provider may have received the request, or issued credentials, before
+	// the response stream or the worker's write-back was interrupted.
+	return d.Stage == "event_stream" || d.Stage == "credentials_submit" ||
+		d.Stage == "credentials_validation" || (d.Stage == "http_request" && d.Reason == "transport_error")
 }
 
 func (s *AccountTokenGuardV2Service) ResumeReloginBudget(ctx context.Context, id int64) (*AccountTokenGuardV2Account, error) {

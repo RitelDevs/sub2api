@@ -216,7 +216,7 @@ class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
                 auth_url="https://auth.openai.com/oauth/authorize?state=secret",
             )
 
-    def test_process_claim_retries_bootstrap_403_with_a_fresh_session(self):
+    def test_process_claim_stops_on_bootstrap_403(self):
         events = []
         sessions = []
 
@@ -261,18 +261,10 @@ class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
             "otp_url": "http://127.0.0.1:12345/code",
             "auth_url": "https://auth.openai.com/authorize?state=state-1",
         }
-        with (
-            patch("tools.openai_oauth_reauth_worker.time.sleep"),
-            patch("tools.openai_oauth_reauth_worker._wait_for_otp", return_value="482931"),
-        ):
+        with self.assertRaises(ProtocolHTTPError):
             process_claim(FakeAPI(), FakeProtocol, claim)
 
-        self.assertEqual([event for event in events if event[0] == "preflight"], [("preflight", 1), ("preflight", 2)])
-        self.assertEqual([event for event in events if event[0] == "bootstrap"], [("bootstrap", 1), ("bootstrap", 2)])
-        self.assertLess(events.index(("preflight", 1)), events.index(("bootstrap", 1)))
-        self.assertLess(events.index(("preflight", 2)), events.index(("bootstrap", 2)))
-        self.assertEqual([event for event in events if event[0] == "email"], [("email", 2)])
-        self.assertEqual([event for event in events if event[0] == "close"], [("close", 1), ("close", 2)])
+        self.assertEqual(events, [("preflight", 1), ("bootstrap", 1), ("close", 1)])
 
     def test_auth_session_flow_exposes_only_safe_state(self):
         payload = {

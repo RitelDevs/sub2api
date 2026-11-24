@@ -1319,6 +1319,8 @@ func sanitizeReauthError(raw string) string {
 		return code
 	}
 	switch msg {
+	case ReloginOutcomeUnknown:
+		return msg
 	case "password/TOTP protocol failed (exit 1)", "proxy_unavailable", "password_rejected", "totp_rejected", "upstream_rejected", "worker_timeout":
 		return msg
 	}

@@ -53,7 +53,12 @@ func (s *OpenAIOAuthReauthService) configureWorker(cfg *config.Config, info Buil
 			host = cfg.Server.Host
 		}
 	}
-	runtimeVersion := info.Version
+	s.worker = reauthruntime.New(filepath.Join(dir, "credential-worker"), ManagedReauthRuntimeVersion(info.Version), "http://"+net.JoinHostPort(host, strconv.Itoa(port)), s.workerToken)
+}
+
+// ManagedReauthRuntimeVersion is shared by startup and offline release checks.
+func ManagedReauthRuntimeVersion(coreVersion string) string {
+	runtimeVersion := coreVersion
 	switch runtimeVersion {
 	case managedReauthForkVersion, "2.21.5.11-ritel", "2.21.5.10-ritel", "2.21.5.9-ritel", "2.21.5.8-ritel", "2.21.5.7-ritel", "2.21.5.6-ritel", "2.21.5.5-ritel", "2.21.5.4-ritel", "2.21.5.3-ritel", "2.21.5.2-ritel", "2.21.5.1-ritel", "2.21.2.10-ritel", "2.21.2.9-ritel", "2.21.2.8-ritel", "2.21.2.7-ritel", "2.21.2.6-ritel", "2.21.2.5-ritel", "2.21.2.4-ritel", "2.21.2.3-ritel", "2.21.2.2-ritel", "2.21.2.1-ritel", "2.21.1.4-ritel", "2.21.1.3-ritel", "2.21.1.2-ritel", "2.21.1.1-ritel", "2.19.2.28-ritel", "2.19.2.26-ritel", "2.19.2.25-ritel", "2.19.2.24-ritel", "2.19.2.22-ritel", "2.19.2.21-ritel", "2.19.2.20-ritel", "2.19.2.18-ritel", "2.19.2.17-ritel", "2.19.2.15-ritel", "2.19.2.14-ritel", "2.19.2.13-ritel", "2.19.2.12-ritel", "2.19.2.11-ritel", "2.19.2.10-ritel", "2.19.2.9-ritel":
 		runtimeVersion = "2.19.2-ritel-reauth.1"
@@ -66,7 +71,7 @@ func (s *OpenAIOAuthReauthService) configureWorker(cfg *config.Config, info Buil
 	case "2.9.4.1-ritel", "2.9.4.2-ritel", "2.9.4.3-ritel":
 		runtimeVersion = "2.9.4"
 	}
-	s.worker = reauthruntime.New(filepath.Join(dir, "credential-worker"), runtimeVersion, "http://"+net.JoinHostPort(host, strconv.Itoa(port)), s.workerToken)
+	return runtimeVersion
 }
 
 // WorkerAuthentication verifies the private protocol without exposing the key.

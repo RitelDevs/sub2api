@@ -24,6 +24,11 @@ import (
 const maxArchive = 256 << 20
 const maxExtracted = 768 << 20
 
+var releaseVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$`)
+
+// IsReleaseVersion reports whether the runtime manager accepts this version.
+func IsReleaseVersion(version string) bool { return releaseVersionPattern.MatchString(version) }
+
 type Status struct {
 	StartedAt int64  `json:"-"`
 	Mode      string `json:"mode"`
@@ -75,7 +80,7 @@ func (m *Manager) Ensure() {
 		m.status.Reason = "unsupported_platform"
 		return
 	}
-	if !regexp.MustCompile(`^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$`).MatchString(m.version) {
+	if !IsReleaseVersion(m.version) {
 		m.status.State = "unavailable"
 		m.status.Reason = "release_required"
 		return

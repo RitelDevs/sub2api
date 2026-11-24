@@ -179,10 +179,10 @@ func (r *openAIOAuthReauthRepository) ClaimNextTaskForRuntime(ctx context.Contex
 			UPDATE openai_oauth_reauth_tasks
 			SET status = $1,
 				stage = $2,
-				error_message = 'callback processing expired before completion',
+				error_message = CASE WHEN oauth_profile = 'codex' THEN $12::text ELSE 'callback processing expired before completion' END,
 				finished_at = NOW(),
 				updated_at = NOW()
-			WHERE status = $3
+			WHERE (status = $3 OR (status = $6 AND oauth_profile = 'codex'))
                 AND NOT EXISTS (SELECT 1 FROM openai_totp_rotations rotation WHERE rotation.task_id=openai_oauth_reauth_tasks.id)
                 AND claimed_at < NOW() - ($4 * INTERVAL '1 second')
 		), next_task AS (
@@ -191,6 +191,9 @@ func (r *openAIOAuthReauthRepository) ClaimNextTaskForRuntime(ctx context.Contex
 			WHERE (status = $5
 				OR (
 					status = $6
+					AND (oauth_profile <> 'codex' OR EXISTS (
+						SELECT 1 FROM openai_totp_rotations rotation WHERE rotation.task_id = openai_oauth_reauth_tasks.id
+					))
 					AND claimed_at < NOW() - ($4 * INTERVAL '1 second')
 				))
 				AND ($9 = '' OR EXISTS (
@@ -229,7 +232,7 @@ func (r *openAIOAuthReauthRepository) ClaimNextTaskForRuntime(ctx context.Contex
 		service.OpenAIOAuthReauthStatusQueued,
 		service.OpenAIOAuthReauthStatusRunning,
 		service.OpenAIOAuthReauthStageStarting,
-		workerID, mode, pq.Array(engines), globalEngine,
+		workerID, mode, pq.Array(engines), globalEngine, service.ReloginOutcomeUnknown,
 	)
 	record, err := scanOpenAIOAuthReauthTask(row)
 	if errors.Is(err, sql.ErrNoRows) {

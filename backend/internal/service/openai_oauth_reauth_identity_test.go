@@ -149,10 +149,11 @@ func TestIssue730ManualAndAutomaticTasksShareIdentityAndBudgetSemantics(t *testi
 			require.False(t, updater.applied)
 			require.Equal(t, "account_id_mismatch", safeReauthTask(repo.task).Diagnostic.Reason)
 			finished := time.Now()
-			outcome := AccountReloginOutcome{ID: repo.task.ID, Status: repo.task.Status, FinishedAt: &finished}
+			outcome := AccountReloginOutcome{ID: repo.task.ID, Status: repo.task.Status, FinishedAt: &finished, Error: repo.task.Error}
 			rules := budgetTestRules()
 			updated, pending := AdvanceAccountReloginBudget(AccountTokenGuardV2Record{Enabled: true, AutoReloginEnabled: true}, []AccountReloginOutcome{outcome}, rules, finished, AccountTokenGuardV2ProbeAuth)
 			require.False(t, pending)
+			require.True(t, updated.AutoReloginExhausted, "a different workspace needs manual reconciliation")
 			require.Equal(t, 1, updated.ReloginFailStreak)
 			again, _ := AdvanceAccountReloginBudget(updated, []AccountReloginOutcome{outcome}, rules, finished.Add(time.Second), AccountTokenGuardV2ProbeAuth)
 			require.Equal(t, updated, again, "an identity failure consumes its existing budget exactly once")

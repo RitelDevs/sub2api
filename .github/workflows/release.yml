@@ -181,6 +181,13 @@ jobs:
           TARGET_ARCH: ${{ matrix.goarch }}
           RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
         run: python "$RUNNER_TEMP/release-tools/release_matrix.py" collect --version "$RELEASE_VERSION" --sha "$RELEASE_SHA" --goos "$TARGET_OS" --goarch "$TARGET_ARCH" --output matrix-output
+      - name: Check managed worker mapping in the Linux release binary
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64' && endsWith(env.RELEASE_VERSION, '-ritel')
+        run: |
+          binary="$RUNNER_TEMP/sub2api-worker-release-check"
+          tar -xzOf "matrix-output/sub2api_${RELEASE_VERSION}_linux_amd64.tar.gz" sub2api > "$binary"
+          chmod 700 "$binary"
+          "$binary" -check-reauth-runtime "$RELEASE_VERSION"
       - uses: actions/upload-artifact@v7
         with:
           name: release-binary-${{ matrix.goos }}-${{ matrix.goarch }}

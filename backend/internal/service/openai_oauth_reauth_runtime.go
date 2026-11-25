@@ -70,6 +70,12 @@ func ManagedReauthRuntimeVersion(coreVersion string) string {
 		runtimeVersion = "2.9.6"
 	case "2.9.4.1-ritel", "2.9.4.2-ritel", "2.9.4.3-ritel":
 		runtimeVersion = "2.9.4"
+	default:
+		// A three-part fork version can look like a valid upstream runtime tag.
+		_, suffix, _ := strings.Cut(coreVersion, "-")
+		if suffix == "ritel" || strings.HasPrefix(suffix, "ritel.") || strings.HasPrefix(suffix, "ritel-") {
+			return ""
+		}
 	}
 	return runtimeVersion
 }

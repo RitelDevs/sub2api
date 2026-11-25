@@ -182,8 +182,9 @@ jobs:
           RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
         run: python "$RUNNER_TEMP/release-tools/release_matrix.py" collect --version "$RELEASE_VERSION" --sha "$RELEASE_SHA" --goos "$TARGET_OS" --goarch "$TARGET_ARCH" --output matrix-output
       - name: Check managed worker mapping in the Linux release binary
-        if: matrix.goos == 'linux' && matrix.goarch == 'amd64' && endsWith(env.RELEASE_VERSION, '-ritel')
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
         run: |
+          case "${RELEASE_VERSION#*-}" in ritel|ritel.*|ritel-*) ;; *) exit 0 ;; esac
           binary="$RUNNER_TEMP/sub2api-worker-release-check"
           tar -xzOf "matrix-output/sub2api_${RELEASE_VERSION}_linux_amd64.tar.gz" sub2api > "$binary"
           chmod 700 "$binary"

@@ -70,7 +70,7 @@ class LocalBuildTests(unittest.TestCase):
                 if args == ['uname', '-m']:
                     return 'x86_64'
                 if args == [str(output/'sub2api'), '--version']:
-                    return '2.17.9.1-ritel '+COMMIT
+                    return '2.21.5.13-ritel.forwarding1 '+COMMIT
                 raise AssertionError(args)
 
             def run(args, **kwargs):
@@ -84,21 +84,22 @@ class LocalBuildTests(unittest.TestCase):
                     self.assertEqual(build.files(root/'backend/internal/web/dist'), build.files(root/'frontend/dist'))
                     (output/'sub2api').write_bytes(b'fixture executable')
 
-            argv = ['build-local.py', '--ritel', '--version', '2.17.9.1-ritel', '--go', 'go-fixture',
+            argv = ['build-local.py', '--ritel', '--version', '2.21.5.13-ritel.forwarding1', '--go', 'go-fixture',
                     '--pnpm', 'pnpm-fixture', '--offline', '--output', str(output)]
             with patch.object(build, 'ROOT', root), patch.object(build, 'capture', side_effect=capture), \
                     patch.object(build.subprocess, 'run', side_effect=run), patch('sys.argv', argv), \
                     patch.dict(build.os.environ, {}, clear=True):
                 build.main()
             result = json.loads((output/'manifest.json').read_text())
-            self.assertEqual([command[0][0] for command in commands], ['pnpm-fixture', 'go-fixture', 'go-fixture'])
+            self.assertEqual([command[0][0] for command in commands[:-1]], ['pnpm-fixture', 'go-fixture', 'go-fixture'])
+            self.assertEqual(commands[-1][0], [str(output/'sub2api'), '-check-reauth-runtime', '2.21.5.13-ritel.forwarding1'])
             self.assertEqual(result['build_date'], '2023-11-14T22:13:20Z')
             self.assertEqual(result['source']['commit'], COMMIT)
             self.assertEqual(result['public_origins']['console'], 'https://dash.ritel.si')
-            environment = commands[-1][1]['env']
+            environment = commands[-2][1]['env']
             self.assertEqual(environment['CGO_ENABLED'], '0')
             self.assertEqual(environment['GOPROXY'], 'off')
-            self.assertIn('-trimpath', commands[-1][0])
+            self.assertIn('-trimpath', commands[-2][0])
             self.assertEqual(result['binary']['sha256'], build.sha(output/'sub2api'))
 
     def test_dirty_tree_fails_before_output_or_tool_execution(self):

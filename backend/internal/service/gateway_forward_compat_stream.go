@@ -45,7 +45,6 @@ type anthropicCompatStream struct {
 	frameCount      int
 	contentBytes    int
 	semanticContent bool
-	generatedOutput bool // Includes opaque output that forbids replay even without visible content.
 	inputUsageSeen  bool
 	outputUsageSeen bool
 	usageSeen       bool
@@ -198,9 +197,7 @@ func (st *anthropicCompatStream) observe(event *apicompat.AnthropicStreamEvent, 
 		n := len(event.Delta.Text) + len(event.Delta.Thinking)
 		st.contentBytes += n
 		st.semanticContent = st.semanticContent || n > 0
-		st.generatedOutput = st.generatedOutput || event.Delta.Signature != "" || event.Delta.PartialJSON != ""
 	}
-	st.generatedOutput = st.generatedOutput || st.semanticContent
 
 	switch event.Type {
 	case "message_start":
@@ -238,7 +235,6 @@ func anthropicUsageFieldsObserved(u gjson.Result) bool {
 }
 
 func (st *anthropicCompatStream) observeContent(block apicompat.AnthropicContentBlock) {
-	st.generatedOutput = st.generatedOutput || block.Signature != ""
 	n := len(block.Text) + len(block.Thinking) + len(block.Data)
 	st.contentBytes += n
 	st.semanticContent = st.semanticContent || n > 0 ||
@@ -294,16 +290,16 @@ func (st *anthropicCompatStream) failure() *anthropicCompatStreamFailure {
 
 // Preserve partial usage on failure. Only the existing pre-output upstream
 // rejection policy may fail over; incomplete/protocol errors never replay.
-func (st *anthropicCompatStream) finishFailure(c *gin.Context, writerSizeBeforeStream int, failure *anthropicCompatStreamFailure, result *ForwardResult, writeFailure func()) (*ForwardResult, error) {
+func finishAnthropicCompatStreamFailure(c *gin.Context, writerSizeBeforeStream int, failure *anthropicCompatStreamFailure, result *ForwardResult, writeFailure func()) (*ForwardResult, error) {
 	var sseErr *sseStreamErrorEventError
 	isSSEError := errors.As(failure.err, &sseErr)
 	clientDisconnected := result.ClientDisconnect
 	wroteFailure := false
-	if !clientDisconnected && (!isSSEError || c.Writer.Size() != writerSizeBeforeStream || st.usageSeen || st.generatedOutput) {
+	if !clientDisconnected && (!isSSEError || c.Writer.Size() != writerSizeBeforeStream || result.Usage.hasObservedTokens()) {
 		writeFailure()
 		wroteFailure = true
 	}
-	if !st.usageSeen {
+	if !result.Usage.hasObservedTokens() {
 		result = nil
 	}
 	if isAnthropicCompatSafetyRejection([]byte(extractCompatFailurePayload(failure.err))) {
@@ -312,32 +308,6 @@ func (st *anthropicCompatStream) finishFailure(c *gin.Context, writerSizeBeforeS
 		}
 		return result, fmt.Errorf("upstream safety rejection: %s", failure.message)
 	}
-	if clientDisconnected && isSSEError {
-		return result, context.Canceled
-	}
-	return result, failure.err
-}
-
-func (st *anthropicCompatStream) finishBufferedFailure(c *gin.Context, failure *anthropicCompatStreamFailure, result *ForwardResult, writeError func(*gin.Context, int, string, string)) (*ForwardResult, error) {
-	if !st.usageSeen {
-		result = nil
-	}
-	if st.clientDisconnected {
-		return result, context.Canceled
-	}
-	var upstream *sseStreamErrorEventError
-	if errors.As(failure.err, &upstream) {
-		if isAnthropicCompatSafetyRejection([]byte(upstream.RawData)) {
-			writeError(c, http.StatusForbidden, "permission_error", failure.message)
-			return result, fmt.Errorf("upstream safety rejection: %s", failure.message)
-		}
-		// A rejection can switch accounts only before the upstream has generated
-		// content or reported usage, even when the client requested buffered JSON.
-		if !st.generatedOutput && !st.usageSeen {
-			return nil, failure.err
-		}
-	}
-	writeError(c, http.StatusBadGateway, failure.errType, failure.message)
 	return result, failure.err
 }
 
@@ -394,18 +364,11 @@ func writeAnthropicCompatResponsesStreamFailure(c *gin.Context, state *apicompat
 	if err != nil {
 		return
 	}
-	MarkOpsStreamError(c, failure.errType, failure.message, http.StatusBadGateway)
-	MarkResponseCommitted(c)
-	ctx := context.Background()
-	if c.Request != nil {
-		ctx = c.Request.Context()
-	}
+	var frames strings.Builder
 	for _, restored := range payloads {
-		if err := writeAnthropicResponsesFrame(ctx, c.Writer, restored); err != nil {
-			return
-		}
+		fmt.Fprintf(&frames, "event: %s\ndata: %s\n\n", gjson.GetBytes(restored, "type").String(), restored)
 	}
-	_ = flushAnthropicResponsesFrames(ctx, c.Writer)
+	commitAnthropicCompatStreamFailure(c, failure, frames.String())
 }
 
 func commitAnthropicCompatStreamFailure(c *gin.Context, failure *anthropicCompatStreamFailure, frame string) {

@@ -2270,6 +2270,8 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 	defer stopKeepalive()
 	// flushPending 表示已写入但未到 SSE 空行边界的脏状态；defer 兜底函数退出前的残留，断连后不再 Flush。
 	flushPending := false
+	pendingSSEEventType := ""
+	var metricEvent openAISSEMetricEvent
 	flushPendingOutput := func() {
 		if clientDisconnected || !flushPending {
 			return
@@ -2386,57 +2388,27 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 	// read before usage/terminal events can be collected and settled.
 	upstreamReadCtx, releaseUpstreamReadCtx := openAIPassthroughContext(ctx, account)
 	defer releaseUpstreamReadCtx()
-	readLine := func() (string, bool) {
-		if !documentScanner.Next(upstreamReadCtx, streamInterval, keepaliveCh, heartbeat) {
-			return "", false
-		}
-		return documentScanner.Text(), true
-	}
-	var frame openAIPassthroughEvent
-	for {
-		budget := int64(-1)
-		if pluginEarlyCommitted || (earlyPluginEvents && !clientOutputStarted) {
-			budget = openAIFirstOutputStageMaxBytes - pluginPendingBytes
-		}
-		if !frame.next(readLine, maxLineSize, budget, pluginEarlyCommitted) {
-			break
-		}
-		line := frame.line
+	for documentScanner.Next(upstreamReadCtx, streamInterval, keepaliveCh, heartbeat) {
+		line := documentScanner.Text()
 		pluginEventOpen = line != ""
-		if frame.index == 1 {
-			frame.validJSON = gjson.Valid(frame.payload)
-			if frame.validJSON {
-				frame.eventType = effectiveOpenAISSEEventType([]byte(frame.payload), frame.eventType)
-			}
-			eventType := frame.eventType
-			if !frame.delimited && documentScanner.Err() != nil && openAIStreamEventIsTerminalWithType(frame.payload, eventType) {
-				// A read error cannot validate a final event with no delimiter.
-				break
-			}
-			if frame.firstData >= 0 && (eventType == "error" || openAIStreamEventTypeIsTerminal(eventType)) && !frame.validJSON && strings.TrimSpace(frame.payload) != "[DONE]" {
-				failedMessage = "Invalid upstream terminal event"
-				sawFailedEvent = true
-				sawBareError = true
-				break
-			}
-			suppressCurrentEvent = codexFailureTerminal && (eventType == "error" || (sawBareError && !sawResponseFailed && eventType != "response.failed"))
+		if _, dataLine := extractOpenAISSEDataLine(line); !dataLine {
+			metricEvent.observeLine(line)
 		}
-		if frame.rewritten && frame.index-1 != frame.firstData {
-			if _, isData := extractOpenAISSEDataLine(line); isData {
-				continue
-			}
+		if eventType, ok := extractOpenAISSEEventLine(line); ok {
+			pendingSSEEventType = eventType
+			eventType = strings.TrimSpace(eventType)
+			suppressCurrentEvent = codexFailureTerminal && (eventType == "error" || (sawBareError && !sawResponseFailed && eventType != "response.failed"))
 		}
 		lineStartsClientOutput := false
 		forceFlushFailedEvent := false
-		isPayload := frame.index-1 == frame.firstData
-		if data := frame.payload; isPayload && (strings.TrimSpace(data) == "[DONE]" || frame.validJSON) {
+		if data, ok := extractOpenAISSEDataLine(line); ok {
 			dataBytes := []byte(data)
 			trimmedData := strings.TrimSpace(data)
-			rawEventType := frame.eventType
+			rawEventType := effectiveOpenAISSEEventType(dataBytes, pendingSSEEventType)
 			observer.ObserveOpenAI(dataBytes, rawEventType)
 			if needModelReplace {
-				replacedLine := s.replaceModelInSSELine("data: "+data, mappedModel, originalModel)
-				if replacedData, replaced := extractOpenAISSEDataLine(replacedLine); replaced {
+				line = s.replaceModelInSSELine(line, mappedModel, originalModel)
+				if replacedData, replaced := extractOpenAISSEDataLine(line); replaced {
 					dataBytes = []byte(replacedData)
 					trimmedData = strings.TrimSpace(replacedData)
 				}
@@ -2444,10 +2416,12 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 			if normalizedData, normalized := normalizeOpenAIResponsesFunctionCallArguments(dataBytes); normalized {
 				dataBytes = normalizedData
 				trimmedData = strings.TrimSpace(string(normalizedData))
+				line = "data: " + string(normalizedData)
 			}
 			if normalizedData, normalized := normalizeCompletedImageGenerationStatus(dataBytes); normalized {
 				dataBytes = normalizedData
 				trimmedData = strings.TrimSpace(string(normalizedData))
+				line = "data: " + string(normalizedData)
 			}
 			if trimmedData != "[DONE]" {
 				restoredData, restoreErr := restoreOpenAIResponsesNamespacePayload(c, dataBytes)
@@ -2458,9 +2432,10 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 				if !bytes.Equal(restoredData, dataBytes) {
 					dataBytes = restoredData
 					trimmedData = strings.TrimSpace(string(restoredData))
+					line = "data: " + string(restoredData)
 				}
 			}
-			eventType := rawEventType
+			eventType := effectiveOpenAISSEEventType(dataBytes, rawEventType)
 			createdAtTracker.Observe(dataBytes, eventType)
 			if codexFailureTerminal && sawBareError && !sawResponseFailed && eventType != "response.failed" {
 				suppressCurrentEvent = true
@@ -2587,15 +2562,9 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 			); sanitized {
 				dataBytes = sanitizedData
 				trimmedData = strings.TrimSpace(string(sanitizedData))
+				line = "data: " + string(sanitizedData)
 			}
-			if string(dataBytes) != data {
-				var rewriteErr error
-				line, rewriteErr = frame.rewrite(dataBytes)
-				if rewriteErr != nil {
-					return resultWithUsage(), fmt.Errorf("rewrite Responses SSE event: %w", rewriteErr)
-				}
-			}
-			metricPayload, metricType := dataBytes, eventType
+			metricPayload, metricType := metricEvent.observeLine("data: " + trimmedData)
 			lineStartsClientOutput = forceFlushFailedEvent || openAIStreamDataStartsClientOutput(trimmedData, eventType)
 			if earlyPluginEvents && !forceFlushFailedEvent {
 				lineStartsClientOutput = len(metricPayload) > 0 && openAIStreamDataStartsClientOutput(string(metricPayload), metricType)
@@ -2617,7 +2586,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 				openAIResponsesCompletedEventIsEmpty(dataBytes, usage) {
 				return resultWithUsage(), newOpenAIResponsesEmptyCompletedFailoverError(c, account, upstreamRequestID)
 			}
-			if requesttiming.From(ctx) != nil && frame.validJSON {
+			if requesttiming.From(ctx) != nil && gjson.Valid(trimmedData) {
 				requesttiming.Stage(ctx, "sse_parsed_first")
 				if openAIStreamDataStartsVisibleOutput(trimmedData, eventType) {
 					requesttiming.Stage(ctx, "sse_visible_first")
@@ -2638,14 +2607,6 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 				firstTokenMs = &ms
 			}
 			s.parseSSEUsageBytesWithType(dataBytes, eventType, usage)
-		} else if isPayload && frame.delimited && strings.TrimSpace(frame.payload) != "" && !strings.HasPrefix(frame.eventType, "response.") {
-			// Native extensions may be opaque SSE data. Once this frame is
-			// written, subsequent errors belong to the same upstream attempt.
-			lineStartsClientOutput = !openAIStreamEventIsMetadata(frame.eventType)
-			if lineStartsClientOutput {
-				documentScanner.firstOutputDeadline = time.Time{}
-				stopKeepalive()
-			}
 		}
 		if line == "" {
 			earlyMetadataPending = pluginMetadataEvent.boundary() && earlyPluginEvents
@@ -2653,6 +2614,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 				observeOpenAIHTTPProgress(ctx)
 				budgetProgressPending = false
 			}
+			pendingSSEEventType = ""
 			if suppressCurrentEvent {
 				deliveryObservation.discard()
 				earlyMetadataPending = false
@@ -2722,14 +2684,6 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 		if (sawDone || sawTerminalEvent) && line == "" && (!codexFailureTerminal || !sawBareError) {
 			break
 		}
-	}
-	if frame.err != nil {
-		if errors.Is(frame.err, errPassthroughPluginEventTooLarge) && !pluginEarlyCommitted {
-			failoverErr := s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, nil, "OpenAI first-output staging limit exceeded")
-			failoverErr.SafeToFailoverAfterWrite = true
-			return resultWithUsage(), failoverErr
-		}
-		return resultWithUsage(), frame.err
 	}
 	if pluginEarlyCommitted && pluginEventOpen {
 		if sawTerminalEvent || sawDone {

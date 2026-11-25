@@ -14,7 +14,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -231,7 +230,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		switch {
 		case errors.As(handleErr, &sseErr):
 			policyErr := s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, mappedModel, c.Writer.Size() != writerSizeBeforeStream)
-			if result != nil || IsResponseCommitted(c) || c.Writer.Size() != writerSizeBeforeStream {
+			if result != nil || c.Writer.Size() != writerSizeBeforeStream {
 				return result, errors.New("stream usage incomplete: upstream semantic stream failure")
 			}
 			return nil, policyErr
@@ -244,7 +243,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		var sseErr *sseStreamErrorEventError
 		if errors.As(handleErr, &sseErr) {
 			policyErr := s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, mappedModel, c.Writer.Size() != writerSizeBeforeBody)
-			if result != nil || IsResponseCommitted(c) || c.Writer.Size() != writerSizeBeforeBody {
+			if result != nil || c.Writer.Size() != writerSizeBeforeBody {
 				return result, errors.New("stream usage incomplete: upstream semantic stream failure")
 			}
 			return nil, policyErr
@@ -342,6 +341,11 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	}
 
 	if failure := streamStatus.failure(); failure != nil {
+		var sseErr *sseStreamErrorEventError
+		if errors.As(failure.err, &sseErr) && !usage.hasObservedTokens() && !isAnthropicCompatSafetyRejection([]byte(sseErr.RawData)) {
+			return nil, failure.err
+		}
+
 		result := &ForwardResult{
 			UpstreamResponseServiceTier: observer.ServiceTier(),
 			RequestID:                   requestID,
@@ -355,7 +359,20 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 			Duration:                    time.Since(startTime),
 		}
 		applyObservedGatewayResponseModel(c, result)
-		return streamStatus.finishBufferedFailure(c, failure, result, writeGatewayCCError)
+		if !streamStatus.clientDisconnected {
+			if isAnthropicCompatSafetyRejection([]byte(extractCompatFailurePayload(failure.err))) {
+				writeGatewayCCError(c, http.StatusForbidden, "permission_error", failure.message)
+				if !usage.hasObservedTokens() {
+					result = nil
+				}
+				return result, fmt.Errorf("upstream safety rejection: %s", failure.message)
+			}
+			writeGatewayCCError(c, http.StatusBadGateway, failure.errType, failure.message)
+		}
+		if !usage.hasObservedTokens() {
+			result = nil
+		}
+		return result, failure.err
 	}
 
 	if finalResp == nil {
@@ -485,11 +502,6 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		return result
 	}
 
-	timingContext := context.Background()
-	if c.Request != nil {
-		timingContext = c.Request.Context()
-	}
-
 	writeChunk := func(chunk apicompat.ChatCompletionsChunk) bool {
 		sse, err := apicompat.ChatChunkToSSE(chunk)
 		if err != nil {
@@ -499,10 +511,8 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		// c 可能持有请求侧注入的 ToolNameRewrite；无则仅做静态前缀还原。
 		out := reverseToolNamesIfPresentString(c, sse)
 		if _, err := fmt.Fprint(c.Writer, out); err != nil {
-			requesttiming.Mark(timingContext, "downstream_write_failed")
 			return true // client disconnected
 		}
-		requesttiming.DeliveredSSE(timingContext, []byte(out))
 		return false
 	}
 
@@ -530,7 +540,6 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			return
 		}
 		if firstChunk {
-			requesttiming.Mark(timingContext, "bridge_first_upstream_event")
 			firstChunk = false
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
@@ -590,7 +599,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	}
 
 	if failure := stream.failure(); failure != nil {
-		return stream.finishFailure(c, writerSizeBeforeStream, failure, resultWithUsage(), func() {
+		return finishAnthropicCompatStreamFailure(c, writerSizeBeforeStream, failure, resultWithUsage(), func() {
 			writeAnthropicCompatCCStreamFailure(c, failure)
 		})
 	}

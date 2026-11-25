@@ -14,7 +14,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -230,7 +229,7 @@ func (s *GatewayService) ForwardAsResponses(
 		switch {
 		case errors.As(handleErr, &sseErr):
 			policyErr := s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, mappedModel, c.Writer.Size() != writerSizeBeforeStream)
-			if result != nil || IsResponseCommitted(c) || c.Writer.Size() != writerSizeBeforeStream {
+			if result != nil || c.Writer.Size() != writerSizeBeforeStream {
 				return result, errors.New("stream usage incomplete: upstream semantic stream failure")
 			}
 			return nil, policyErr
@@ -243,7 +242,7 @@ func (s *GatewayService) ForwardAsResponses(
 		var sseErr *sseStreamErrorEventError
 		if errors.As(handleErr, &sseErr) {
 			policyErr := s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, mappedModel, c.Writer.Size() != writerSizeBeforeBody)
-			if result != nil || IsResponseCommitted(c) || c.Writer.Size() != writerSizeBeforeBody {
+			if result != nil || c.Writer.Size() != writerSizeBeforeBody {
 				return result, errors.New("stream usage incomplete: upstream semantic stream failure")
 			}
 			return nil, policyErr
@@ -522,6 +521,11 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	}
 
 	if failure := streamStatus.failure(); failure != nil {
+		var sseErr *sseStreamErrorEventError
+		if errors.As(failure.err, &sseErr) && !usage.hasObservedTokens() && !isAnthropicCompatSafetyRejection([]byte(sseErr.RawData)) {
+			return nil, failure.err
+		}
+
 		result := &ForwardResult{
 			UpstreamResponseServiceTier: observer.ServiceTier(),
 			RequestID:                   requestID,
@@ -535,7 +539,20 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 			Duration:                    time.Since(startTime),
 		}
 		applyObservedGatewayResponseModel(c, result)
-		return streamStatus.finishBufferedFailure(c, failure, result, writeResponsesError)
+		if !streamStatus.clientDisconnected {
+			if isAnthropicCompatSafetyRejection([]byte(extractCompatFailurePayload(failure.err))) {
+				writeResponsesError(c, http.StatusForbidden, "permission_error", failure.message)
+				if !usage.hasObservedTokens() {
+					result = nil
+				}
+				return result, fmt.Errorf("upstream safety rejection: %s", failure.message)
+			}
+			writeResponsesError(c, http.StatusBadGateway, failure.errType, failure.message)
+		}
+		if !usage.hasObservedTokens() {
+			result = nil
+		}
+		return result, failure.err
 	}
 
 	if finalResp == nil {
@@ -647,15 +664,9 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 		return result
 	}
 
-	timingContext := context.Background()
-	if c.Request != nil {
-		timingContext = c.Request.Context()
-	}
-
 	// processEvent handles a single parsed Anthropic SSE event.
 	processEvent := func(event *apicompat.AnthropicStreamEvent) {
 		if firstChunk {
-			requesttiming.Mark(timingContext, "bridge_first_upstream_event")
 			firstChunk = false
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
@@ -700,14 +711,15 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 				continue
 			}
 			for _, restored := range payloads {
-				if err := writeAnthropicResponsesFrame(timingContext, c.Writer, restored); err != nil {
+				eventType := gjson.GetBytes(restored, "type").String()
+				if _, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", eventType, restored); err != nil {
 					stream.markClientDisconnected()
 					return
 				}
 			}
 		}
 		if len(events) > 0 {
-			if err := flushAnthropicResponsesFrames(timingContext, c.Writer); err != nil {
+			if err := FlushGatewayResponse(c.Writer); err != nil {
 				stream.markClientDisconnected()
 			}
 		}
@@ -715,7 +727,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 
 	finalizeStream := func() (*ForwardResult, error) {
 		if failure := stream.failure(); failure != nil {
-			return stream.finishFailure(c, writerSizeBeforeStream, failure, resultWithUsage(), func() {
+			return finishAnthropicCompatStreamFailure(c, writerSizeBeforeStream, failure, resultWithUsage(), func() {
 				writeAnthropicCompatResponsesStreamFailure(c, state, clientToolRestorer, failure)
 			})
 		}
@@ -734,13 +746,13 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 					return resultWithUsage(), err
 				}
 				for _, restored := range payloads {
-					if err := writeAnthropicResponsesFrame(timingContext, c.Writer, restored); err != nil {
+					if _, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", gjson.GetBytes(restored, "type").String(), restored); err != nil {
 						stream.markClientDisconnected()
 						return resultWithUsage(), stream.failure().err
 					}
 				}
 			}
-			if err := flushAnthropicResponsesFrames(timingContext, c.Writer); err != nil {
+			if err := FlushGatewayResponse(c.Writer); err != nil {
 				stream.markClientDisconnected()
 			}
 		}
@@ -770,28 +782,6 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	}
 
 	return finalizeStream()
-}
-
-func writeAnthropicResponsesFrame(ctx context.Context, writer gin.ResponseWriter, payload []byte) error {
-	kind := gjson.GetBytes(payload, "type").String()
-	n, err := fmt.Fprintf(writer, "event: %s\ndata: %s\n\n", kind, payload)
-	if err == nil && n != len("event: \ndata: \n\n")+len(kind)+len(payload) {
-		err = io.ErrShortWrite
-	}
-	if err != nil {
-		requesttiming.Mark(ctx, "downstream_write_failed")
-		return err
-	}
-	requesttiming.Delivered(ctx, payload)
-	return nil
-}
-
-func flushAnthropicResponsesFrames(ctx context.Context, writer gin.ResponseWriter) error {
-	err := FlushGatewayResponse(writer)
-	if err != nil {
-		requesttiming.Mark(ctx, "downstream_flush_failed")
-	}
-	return err
 }
 
 // appendRawJSON appends a JSON fragment string to existing raw JSON.

@@ -30,6 +30,39 @@ func issue730Credentials(idAuth, accessAuth map[string]any, email string) map[st
 	return map[string]any{"access_token": reauthTestJWT(access), "id_token": reauthTestJWT(id), "refresh_token": "synthetic-refresh"}
 }
 
+func TestBoundAdminReauthorizationRequiresFreshConsistentClaims(t *testing.T) {
+	auth := map[string]any{"chatgpt_account_id": "workspace", "chatgpt_user_id": "owner"}
+	base := issue730Credentials(auth, auth, "owner@example.test")
+	account := &Account{Platform: PlatformOpenAI, Credentials: map[string]any{
+		"chatgpt_account_id": "workspace", "chatgpt_user_id": "owner", "email": "owner@example.test", "id_token": base["id_token"],
+	}}
+	for _, tc := range []struct {
+		name   string
+		change func(map[string]any, map[string]any)
+	}{
+		{"conflicting ID and access", func(c, _ map[string]any) {
+			c["access_token"] = issue730Credentials(nil, map[string]any{"chatgpt_account_id": "other"}, "owner@example.test")["access_token"]
+		}},
+		{"unreadable new ID", func(c, _ map[string]any) { c["id_token"] = "bad" }},
+		{"session ID is not workspace evidence", func(c, _ map[string]any) {
+			c["id_token"] = reauthTestJWT(map[string]any{"sid": "workspace", "sub": "owner", "email": "owner@example.test"})
+			c["access_token"] = "opaque"
+		}},
+		{"no access token", func(c, _ map[string]any) { delete(c, "access_token") }},
+		{"no fresh claims", func(c, _ map[string]any) { delete(c, "id_token"); c["access_token"] = "opaque" }},
+		{"contradictory workspace metadata", func(c, _ map[string]any) { c["chatgpt_account_id"] = "other" }},
+		{"contradictory extra email", func(_, e map[string]any) { e["email"] = "other@example.test" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			creds := issue730Credentials(auth, auth, "owner@example.test")
+			extra := map[string]any{}
+			tc.change(creds, extra)
+			require.Error(t, CheckBoundOpenAIReauthorization(account, creds, extra))
+		})
+	}
+	require.NoError(t, CheckBoundOpenAIReauthorization(account, base, map[string]any{"email": "Owner@example.test"}))
+}
+
 func TestIssue730ExplicitAccessIdentityPrecedesSessionFallback(t *testing.T) {
 	for _, idAuth := range []map[string]any{nil, {"user_id": "user-1"}} {
 		svc, reader, repo, updater, _, _ := newReauthTestService("acct-1")

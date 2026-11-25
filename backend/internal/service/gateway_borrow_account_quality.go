@@ -11,11 +11,12 @@ const GatewayBorrowAccountQualityModeKey = "openai_gateway_borrow_quality_mode"
 const GatewayBorrowAccountQualityMode = "astra_controls_sol_v2"
 const GatewayBorrowAccountQualityPendingKey = "openai_gateway_borrow_quality_pending"
 const gatewayBorrowAccountQualityReuseAge = 24 * time.Hour
+const gatewayBorrowSolLowModel = "gpt-6.2-sol"
+const gatewayBorrowSolLowAlgorithm = "sol-low-substring-v1"
+const gatewayBorrowSolLowPromptSHA256 = "99dae2e046ab629c7f6396794bd8c97bf8be80f377baa96f7358f22f8dab2396"
 
-// GatewayBorrowAccountQualityClassification always describes actual Astra
-// samples. Sol consumes the account's operating classification, not invented
-// Sol evidence. LatestProbeAt may refresh a completed round with a matching
-// single sample; an unfinished or contrary sample cannot change that round.
+// GatewayBorrowAccountQualityClassification carries the account-wide verdict
+// from a Sol low probe or an earlier Astra confirmation.
 type GatewayBorrowAccountQualityClassification struct {
 	State         string
 	CheckedAt     time.Time
@@ -60,7 +61,7 @@ func gatewayBorrowAccountQualityBaselineRecord(record map[string]any, credential
 		return GatewayBorrowAccountQualityClassification{}, false
 	}
 	var normalized map[string]any
-	if json.Unmarshal(b, &normalized) != nil || !validGatewayBorrowStoredClassification(normalized, "gpt-6-astra") || normalized["reasoning_effort"] != "medium" || normalized["latest_probe_credential_sha256"] != credentialHash {
+	if json.Unmarshal(b, &normalized) != nil || !validGatewayBorrowAccountQualityRecord(normalized) || normalized["latest_probe_credential_sha256"] != credentialHash {
 		return GatewayBorrowAccountQualityClassification{}, false
 	}
 	var expectedProxy any
@@ -83,7 +84,30 @@ func gatewayBorrowAccountQualityBaselineRecord(record map[string]any, credential
 	if !ok {
 		return GatewayBorrowAccountQualityClassification{}, false
 	}
-	return GatewayBorrowAccountQualityClassification{State: stringField(normalized, "state"), CheckedAt: checked, LatestProbeAt: latest, Correct: int(correct), Total: 4}, true
+	return GatewayBorrowAccountQualityClassification{State: stringField(normalized, "state"), CheckedAt: checked, LatestProbeAt: latest, Correct: int(correct), Total: int(normalized["total"].(float64))}, true
+}
+
+func validGatewayBorrowSolLowResult(r GatewayBorrowModelResult) bool {
+	return r.Model == gatewayBorrowSolLowModel && r.Algorithm == gatewayBorrowSolLowAlgorithm &&
+		r.PromptSHA256 == gatewayBorrowSolLowPromptSHA256 && r.ReasoningEffort == "low" &&
+		r.ExpectedAnswer == "大狗" && r.Total == 1 &&
+		((r.Correct == 1 && r.State == "healthy") || (r.Correct == 0 && r.State == "degraded"))
+}
+
+func validGatewayBorrowAccountQualityRecord(record map[string]any) bool {
+	if record["model"] == gatewayBorrowSolLowModel {
+		correct, ok := record["correct"].(float64)
+		if !ok || (correct != 0 && correct != 1) || record["version"] != float64(1) || record["total"] != float64(1) {
+			return false
+		}
+		return validGatewayBorrowSolLowResult(GatewayBorrowModelResult{
+			Model: gatewayBorrowSolLowModel, Algorithm: stringField(record, "algorithm"),
+			PromptSHA256: stringField(record, "prompt_sha256"), ReasoningEffort: stringField(record, "reasoning_effort"),
+			ExpectedAnswer: stringField(record, "expected_answer"), State: stringField(record, "state"),
+			Total: 1, Correct: int(correct),
+		})
+	}
+	return validGatewayBorrowStoredClassification(record, "gpt-6-astra") && record["reasoning_effort"] == "medium"
 }
 
 func gatewayBorrowSamplingPolicyMatches(extra map[string]any, state string) bool {
@@ -135,6 +159,9 @@ func gatewayBorrowReusableAstraRecord(extra map[string]any, hash string, proxy *
 	var newestAt time.Time
 	var newestProbeAt time.Time
 	for _, r := range candidates {
+		if r["model"] != "gpt-6-astra" {
+			continue
+		}
 		classification, ok := gatewayBorrowAccountQualityRecord(r, hash, proxy, now, gatewayBorrowAccountQualityReuseAge)
 		if ok && (newest == nil || classification.CheckedAt.After(newestAt) || (classification.CheckedAt.Equal(newestAt) && classification.LatestProbeAt.After(newestProbeAt))) {
 			newest, newestAt, newestProbeAt = r, classification.CheckedAt, classification.LatestProbeAt
@@ -158,14 +185,24 @@ func buildGatewayBorrowAccountQualityUpdates(extra map[string]any, o GatewayBorr
 	now := time.Now().UTC()
 	previous, hasPrevious := gatewayBorrowReusableAstraRecord(current, o.CredentialSHA256, o.ExpectedProxyID, now)
 	r, provided := o.ModelResults["gpt-6-astra"]
-	if len(o.ModelResults) > 1 || (len(o.ModelResults) == 1 && !provided) || (provided && (r.Model != "gpt-6-astra" || r.ReasoningEffort != "medium")) {
+	solLow, solLowProvided := o.ModelResults[gatewayBorrowSolLowModel]
+	if solLowProvided {
+		r, provided = solLow, true
+	}
+	if len(o.ModelResults) > 1 || (len(o.ModelResults) == 1 && !provided) ||
+		(solLowProvided && !validGatewayBorrowSolLowResult(r)) ||
+		(!solLowProvided && provided && (r.Model != "gpt-6-astra" || r.ReasoningEffort != "medium")) {
 		return nil, "invalid_account_quality_evidence", nil
+	}
+	currentRecord, _ := current["quality_candy"].(map[string]any)
+	if currentRecord["model"] == gatewayBorrowSolLowModel && !solLowProvided {
+		return nil, "account_quality_method_changed", nil
 	}
 	var record map[string]any
 	if provided && r.State == "inconclusive" {
 		return nil, "inconclusive_account_quality", nil
 	}
-	if provided && r.Total == 1 && current[GatewayBorrowAccountQualityModeKey] == GatewayBorrowAccountQualityMode {
+	if provided && !solLowProvided && r.Total == 1 && current[GatewayBorrowAccountQualityModeKey] == GatewayBorrowAccountQualityMode {
 		// A real matching sample renews evidence, not the original confirmation.
 		// Historical evidence alone still cannot migrate or admit a source.
 		baseline, _ := current["quality_candy"].(map[string]any)
@@ -181,19 +218,24 @@ func buildGatewayBorrowAccountQualityUpdates(extra map[string]any, o GatewayBorr
 		}
 		record = previous
 	} else {
-		if hasPrevious {
+		if currentRecord["model"] == gatewayBorrowSolLowModel {
+			last, err := time.Parse(time.RFC3339Nano, stringField(currentRecord, "latest_probe_at"))
+			if err == nil && !r.CheckedAt.After(last) {
+				return nil, "stale_model_result", nil
+			}
+		} else if hasPrevious {
 			prior, _ := gatewayBorrowAccountQualityBaselineRecord(previous, o.CredentialSHA256, o.ExpectedProxyID, now)
 			if !r.CheckedAt.After(prior.LatestProbeAt) {
 				return nil, "stale_model_result", nil
 			}
 		}
-		switch r.Total {
-		case 1:
+		switch {
+		case r.Total == 1 && !solLowProvided:
 			if !hasPrevious || previous["state"] != r.State {
 				return nil, "single_probe_requires_matching_classification", nil
 			}
 			record = previous
-		case 4:
+		case solLowProvided || r.Total == 4:
 			raw, _ := json.Marshal(r)
 			_ = json.Unmarshal(raw, &record)
 			record["version"] = float64(1)
@@ -204,7 +246,7 @@ func buildGatewayBorrowAccountQualityUpdates(extra map[string]any, o GatewayBorr
 		record["latest_probe_credential_sha256"] = o.CredentialSHA256
 		record["latest_probe_proxy_id"] = o.ExpectedProxyID
 	}
-	if !validGatewayBorrowStoredClassification(record, "gpt-6-astra") {
+	if !validGatewayBorrowAccountQualityRecord(record) {
 		return nil, "invalid_account_quality_evidence", nil
 	}
 	want := []string{}
@@ -224,8 +266,7 @@ func buildGatewayBorrowAccountQualityUpdates(extra map[string]any, o GatewayBorr
 		return nil, "unproven_route_change", nil
 	}
 	updates := map[string]any{GatewayBorrowAccountQualityModeKey: GatewayBorrowAccountQualityMode, GatewayBorrowAccountQualityPendingKey: false, "quality_candy": record, GatewayBorrowModelsKey: want}
-	// Keep historical Sol rows intact. Astra retains actual, identity-bound
-	// evidence for older readers; no synthetic Sol test result is produced.
+	// Keep historical per-model rows and record each observation under its actual model.
 	records := map[string]any{}
 	if stored := current[GatewayBorrowQualityKey]; stored != nil {
 		var ok bool
@@ -234,7 +275,7 @@ func buildGatewayBorrowAccountQualityUpdates(extra map[string]any, o GatewayBorr
 			return nil, "invalid_stored_policy", nil
 		}
 	}
-	records["gpt-6-astra"] = record
+	records[stringField(record, "model")] = record
 	updates[GatewayBorrowQualityKey] = records
 	if o.RetireBPS {
 		// Reuse legacy ownership checks without asking it to infer a Sol result.

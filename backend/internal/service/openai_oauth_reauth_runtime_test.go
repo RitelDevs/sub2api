@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/reauthruntime"
 	"github.com/stretchr/testify/require"
 )
 
@@ -126,4 +127,14 @@ func TestOpenAIOAuthReauthOtherBuildsKeepReleaseGate(t *testing.T) {
 			require.Equal(t, "release_required", s.WorkerStatus().Reason)
 		})
 	}
+}
+
+func TestManagedWorkerRequiresExplicitForkMapping(t *testing.T) {
+	for _, v := range []string{"2.21.5.13-ritel.forwarding1", "2.24.1-ritel.rc1", "2.24.1-ritel", "2.24.1-ritel-beta"} {
+		t.Run(v, func(t *testing.T) {
+			require.False(t, reauthruntime.IsReleaseVersion(ManagedReauthRuntimeVersion(v)))
+		})
+	}
+	require.Equal(t, "2.19.2-ritel-reauth.1", ManagedReauthRuntimeVersion("2.21.5.12-ritel"))
+	require.Equal(t, "2.24.1", ManagedReauthRuntimeVersion("2.24.1"))
 }

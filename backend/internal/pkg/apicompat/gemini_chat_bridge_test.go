@@ -102,7 +102,7 @@ func TestGeminiSSETranslatorForwardsKeepaliveComments(t *testing.T) {
 	translator := NewGeminiSSETranslator("gpt-4o")
 	out := translator.Push([]byte(": keepalive\n\n"))
 	require.Contains(t, string(out), ": keepalive\n\n")
-	out = append(out, translator.Push([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"))...)
+	out = append(out, translator.Push([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n"))...)
 	require.Contains(t, string(out), `"text":"hi"`)
 }
 
@@ -112,12 +112,12 @@ func TestGeminiSSETranslatorIsolatesToolsByChoice(t *testing.T) {
 	out = append(out, translator.Push([]byte("data: {\"choices\":["+
 		"{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"alpha\",\"arguments\":\"{\\\"a\\\":\"}}]}},"+
 		"{\"index\":1,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"beta\",\"arguments\":\"{\\\"b\\\":\"}}]}}"+
-		"]}\n\n"))...)
+		"]}\n"))...)
 	out = append(out, translator.Push([]byte("data: {\"choices\":["+
 		"{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"1}\"}}]},\"finish_reason\":\"tool_calls\"},"+
 		"{\"index\":1,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"2}\"}}]}}"+
-		"]}\n\n"))...)
-	out = append(out, translator.Push([]byte("data: {\"choices\":[{\"index\":1,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n"))...)
+		"]}\n"))...)
+	out = append(out, translator.Push([]byte("data: {\"choices\":[{\"index\":1,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n"))...)
 
 	payloads := sseDataPayloads(string(out))
 	require.Len(t, payloads, 2)

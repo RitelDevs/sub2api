@@ -15,7 +15,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -613,15 +612,9 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 		return result
 	}
 
-	timingContext := context.Background()
-	if c.Request != nil {
-		timingContext = c.Request.Context()
-	}
-
 	// processEvent handles a single parsed Anthropic SSE event.
 	processEvent := func(event *apicompat.AnthropicStreamEvent) {
 		if firstChunk {
-			requesttiming.Mark(timingContext, "bridge_first_upstream_event")
 			firstChunk = false
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
@@ -668,11 +661,9 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 			for _, restored := range payloads {
 				eventType := gjson.GetBytes(restored, "type").String()
 				if _, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", eventType, restored); err != nil {
-					requesttiming.Mark(timingContext, "downstream_write_failed")
 					stream.markClientDisconnected()
 					return
 				}
-				requesttiming.Delivered(timingContext, restored)
 			}
 		}
 		if len(events) > 0 {

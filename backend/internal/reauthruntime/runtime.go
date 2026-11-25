@@ -160,7 +160,7 @@ func (m *Manager) prepare(ctx context.Context) (string, error) {
 	// unverified download or follow an arbitrary manifest download URL.
 	name := "sub2api-reauth_" + m.version + "_linux_" + runtime.GOARCH + ".tar.gz"
 	repository := "ranxi2001/sub2api"
-	if m.version == "2.19.2-ritel-reauth.1" {
+	if strings.Contains(m.version, "-ritel") {
 		repository = "RitelDevs/sub2api"
 	}
 	url := "https://api.github.com/repos/" + repository + "/releases/tags/v" + m.version

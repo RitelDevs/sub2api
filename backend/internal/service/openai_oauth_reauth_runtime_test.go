@@ -136,5 +136,6 @@ func TestManagedWorkerRequiresExplicitForkMapping(t *testing.T) {
 		})
 	}
 	require.Equal(t, "2.19.2-ritel-reauth.1", ManagedReauthRuntimeVersion("2.21.5.12-ritel"))
+	require.Equal(t, "2.21.5-ritel-reauth.1", ManagedReauthRuntimeVersion("2.21.5.13-ritel.reauth1"))
 	require.Equal(t, "2.24.1", ManagedReauthRuntimeVersion("2.24.1"))
 }

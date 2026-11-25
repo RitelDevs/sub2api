@@ -1,6 +1,8 @@
 import hashlib
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import subprocess
+from threading import Thread
 import unittest
 from unittest.mock import patch
 
@@ -8,6 +10,46 @@ import oauth_gateway_borrow as worker
 
 
 class SolLowTest(unittest.TestCase):
+    def test_curl_transmits_exact_message(self):
+        received = []
+        model = 'gpt-6.2-sol'
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                received.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+                final = {'type': 'response.completed', 'response': {'model': model, 'output': [
+                    {'content': [{'type': 'output_text', 'text': '大狗'}]}]}}
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(f'data: {json.dumps(final)}\n\n'.encode())
+
+            def log_message(self, *_):
+                pass
+
+        run = subprocess.run
+        with HTTPServer(('127.0.0.1', 0), Handler) as server:
+            thread = Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+
+            def local_transport(args, **kwargs):
+                _, _, config = kwargs['input'].partition('\n')
+                kwargs['input'] = f'url = "http://127.0.0.1:{server.server_port}"\n{config}'
+                return run(args, **kwargs)
+
+            try:
+                with patch.object(worker.candy.subprocess, 'run', side_effect=local_transport):
+                    result = worker.candy.probe({'id': 1, 'credentials': {'access_token': 'fixture'}},
+                                                model, 'low', '大狗')
+            finally:
+                server.shutdown()
+                thread.join()
+
+        self.assertEqual(len(received), 1)
+        self.assertEqual(received[0]['input'], [{'role': 'user', 'content': [
+            {'type': 'input_text', 'text': '叮咚鸡'}]}])
+        self.assertEqual((received[0]['model'], received[0]['reasoning'], result['class']),
+                         (model, {'effort': 'low'}, 'healthy'))
+
     def test_one_exact_request_classifies_final_text(self):
         candy = worker.candy
         model = 'gpt-6.2-sol'

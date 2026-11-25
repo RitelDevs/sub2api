@@ -225,7 +225,8 @@ def probe(account, model, reasoning, expected_answer):
               'request = "POST"', 'max-time = 100', 'silent', 'show-error',
               'header = "Content-Type: application/json"',
               'header = ' + json.dumps('Authorization: Bearer ' + token),
-              'data = ' + json.dumps(json.dumps(body, ensure_ascii=False))]
+              # curl config does not interpret JSON Unicode escapes.
+              'data = ' + json.dumps(json.dumps(body, ensure_ascii=False), ensure_ascii=False)]
     if credentials.get('chatgpt_account_id'):
         config.append('header = ' + json.dumps('ChatGPT-Account-Id: ' + credentials['chatgpt_account_id']))
     proxy = account.get('proxy')
@@ -239,7 +240,7 @@ def probe(account, model, reasoning, expected_answer):
             header_path = Path(folder) / 'response.headers'
             response = subprocess.run(['curl', '--config', '-', '--dump-header', str(header_path),
                 '--write-out', '\n__HTTP_STATUS__:%{http_code}'],
-                input='\n'.join(config), capture_output=True, text=True, timeout=110, check=False)
+                input='\n'.join(config), capture_output=True, encoding='utf-8', timeout=110, check=False)
             if header_path.exists():
                 result.update(response_quota_headers(header_path.read_text(errors='replace'), result['at']))
         payload, marker, status = response.stdout.rpartition('\n__HTTP_STATUS__:')

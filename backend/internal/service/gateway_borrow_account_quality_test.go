@@ -11,14 +11,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGatewayBorrowSolLowSingleVerdict(t *testing.T) {
+func TestGatewayBorrowSolLowConfirmation(t *testing.T) {
 	now := time.Now().UTC()
 	a, old := accountQualityFixture(now, "healthy")
 	a.Extra[GatewayBorrowQualityKey] = map[string]any{"gpt-6-astra": old}
 	r := GatewayBorrowModelResult{
 		Model: "gpt-6.2-sol", ReasoningEffort: "low", ExpectedAnswer: "大狗",
 		Algorithm: "sol-low-substring-v1", PromptSHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("叮咚鸡"))),
-		State: "degraded", Total: 1, CheckedAt: now, RunID: "20261125T200000Z-test",
+		State: "degraded", Total: 4, Correct: 2, CheckedAt: now, RunID: "20261125T200000Z-test",
 	}
 	o := GatewayBorrowPolicyObservation{PolicyMode: GatewayBorrowAccountQualityMode, ObservedAt: now,
 		CredentialSHA256: GatewayBorrowCredentialSHA256(a.Credentials), ExpectedPolicy: GatewayBorrowPolicyProjection(a.Extra),
@@ -31,9 +31,9 @@ func TestGatewayBorrowSolLowSingleVerdict(t *testing.T) {
 	require.Equal(t, 1, repo.calls)
 	for _, invalid := range []func(*GatewayBorrowModelResult){
 		func(r *GatewayBorrowModelResult) { r.ReasoningEffort = "medium" },
-		func(r *GatewayBorrowModelResult) { r.Total = 4 },
+		func(r *GatewayBorrowModelResult) { r.Total = 3 },
 		func(r *GatewayBorrowModelResult) { r.PromptSHA256 = GatewayBorrowCandyPromptSHA256 },
-		func(r *GatewayBorrowModelResult) { r.Correct = 1 },
+		func(r *GatewayBorrowModelResult) { r.Correct = 3 },
 	} {
 		bad := r
 		invalid(&bad)
@@ -42,6 +42,13 @@ func TestGatewayBorrowSolLowSingleVerdict(t *testing.T) {
 		require.Error(t, err)
 	}
 	require.Equal(t, 1, repo.calls)
+	o.ModelResults[r.Model] = r
+	single := r
+	single.Total, single.Correct = 1, 0
+	o.ModelResults[r.Model] = single
+	_, reason, err := BuildGatewayBorrowPolicyUpdates(a.Extra, o)
+	require.NoError(t, err)
+	require.Equal(t, "single_probe_requires_matching_classification", reason)
 	o.ModelResults[r.Model] = r
 	u, reason, err := BuildGatewayBorrowPolicyUpdates(a.Extra, o)
 	require.NoError(t, err)
@@ -53,12 +60,24 @@ func TestGatewayBorrowSolLowSingleVerdict(t *testing.T) {
 	q, ok := GatewayBorrowAccountQuality(a, now, 24*time.Hour)
 	require.True(t, ok)
 	require.Equal(t, "degraded", q.State)
-	require.Equal(t, 1, q.Total)
+	require.Equal(t, 4, q.Total)
 	_, reason, err = BuildGatewayBorrowPolicyUpdates(a.Extra, o)
 	require.NoError(t, err)
 	require.Equal(t, "stale_model_result", reason)
+	single.CheckedAt = now.Add(time.Second)
+	o.ModelResults[r.Model] = single
+	u, reason, err = BuildGatewayBorrowPolicyUpdates(a.Extra, o)
+	require.NoError(t, err)
+	require.Equal(t, "account_quality_applied", reason)
+	require.Equal(t, float64(4), u["quality_candy"].(map[string]any)["total"])
+	single.State, single.Correct = "healthy", 1
+	o.ModelResults[r.Model] = single
+	o.BorrowModels = []string{}
+	_, reason, err = BuildGatewayBorrowPolicyUpdates(a.Extra, o)
+	require.NoError(t, err)
+	require.Equal(t, "single_probe_requires_matching_classification", reason)
 	r.CheckedAt = now.Add(time.Second)
-	r.State, r.Correct = "healthy", 1
+	r.State, r.Correct = "healthy", 3
 	o.ModelResults[r.Model] = r
 	o.BorrowModels = []string{}
 	u, reason, err = BuildGatewayBorrowPolicyUpdates(a.Extra, o)

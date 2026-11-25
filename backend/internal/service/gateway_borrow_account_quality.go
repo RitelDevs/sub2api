@@ -16,7 +16,7 @@ const gatewayBorrowSolLowAlgorithm = "sol-low-substring-v1"
 const gatewayBorrowSolLowPromptSHA256 = "99dae2e046ab629c7f6396794bd8c97bf8be80f377baa96f7358f22f8dab2396"
 
 // GatewayBorrowAccountQualityClassification carries the account-wide verdict
-// from a Sol low probe or an earlier Astra confirmation.
+// from Sol low or an earlier Astra confirmation.
 type GatewayBorrowAccountQualityClassification struct {
 	State         string
 	CheckedAt     time.Time
@@ -88,23 +88,30 @@ func gatewayBorrowAccountQualityBaselineRecord(record map[string]any, credential
 }
 
 func validGatewayBorrowSolLowResult(r GatewayBorrowModelResult) bool {
+	minimum := 1
+	if r.Total == 4 {
+		minimum = 3
+	}
 	return r.Model == gatewayBorrowSolLowModel && r.Algorithm == gatewayBorrowSolLowAlgorithm &&
 		r.PromptSHA256 == gatewayBorrowSolLowPromptSHA256 && r.ReasoningEffort == "low" &&
-		r.ExpectedAnswer == "大狗" && r.Total == 1 &&
-		((r.Correct == 1 && r.State == "healthy") || (r.Correct == 0 && r.State == "degraded"))
+		r.ExpectedAnswer == "大狗" && (r.Total == 1 || r.Total == 4) &&
+		r.Correct >= 0 && r.Correct <= r.Total &&
+		((r.Correct >= minimum && r.State == "healthy") || (r.Correct < minimum && r.State == "degraded"))
 }
 
 func validGatewayBorrowAccountQualityRecord(record map[string]any) bool {
 	if record["model"] == gatewayBorrowSolLowModel {
 		correct, ok := record["correct"].(float64)
-		if !ok || (correct != 0 && correct != 1) || record["version"] != float64(1) || record["total"] != float64(1) {
+		total, totalOK := record["total"].(float64)
+		if !ok || !totalOK || correct < 0 || correct > total || correct != float64(int(correct)) ||
+			(total != 1 && total != 4) || record["version"] != float64(1) {
 			return false
 		}
 		return validGatewayBorrowSolLowResult(GatewayBorrowModelResult{
 			Model: gatewayBorrowSolLowModel, Algorithm: stringField(record, "algorithm"),
 			PromptSHA256: stringField(record, "prompt_sha256"), ReasoningEffort: stringField(record, "reasoning_effort"),
 			ExpectedAnswer: stringField(record, "expected_answer"), State: stringField(record, "state"),
-			Total: 1, Correct: int(correct),
+			Total: int(total), Correct: int(correct),
 		})
 	}
 	return validGatewayBorrowStoredClassification(record, "gpt-6-astra") && record["reasoning_effort"] == "medium"
@@ -230,12 +237,19 @@ func buildGatewayBorrowAccountQualityUpdates(extra map[string]any, o GatewayBorr
 			}
 		}
 		switch {
+		case r.Total == 1 && solLowProvided:
+			prior, valid := gatewayBorrowAccountQualityBaselineRecord(currentRecord, o.CredentialSHA256, o.ExpectedProxyID, now)
+			if !valid || currentRecord["model"] != gatewayBorrowSolLowModel || prior.Total != 4 ||
+				prior.State != r.State || !gatewayBorrowSamplingPolicyMatches(current, r.State) {
+				return nil, "single_probe_requires_matching_classification", nil
+			}
+			record = currentRecord
 		case r.Total == 1 && !solLowProvided:
 			if !hasPrevious || previous["state"] != r.State {
 				return nil, "single_probe_requires_matching_classification", nil
 			}
 			record = previous
-		case solLowProvided || r.Total == 4:
+		case r.Total == 4:
 			raw, _ := json.Marshal(r)
 			_ = json.Unmarshal(raw, &record)
 			record["version"] = float64(1)

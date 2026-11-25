@@ -39,6 +39,12 @@ DEFAULT_MODEL = 'gpt-6-astra'
 DEFAULT_REASONING = 'medium'
 DEFAULT_ANSWER = '21'
 ALGORITHM = 'ranxi-candy-sequential-four-v1'
+SOL_LOW_MODEL = 'gpt-6.2-sol'
+SOL_LOW_EFFORT = 'low'
+SOL_LOW_PROMPT = '叮咚鸡'
+SOL_LOW_ANSWER = '大狗'
+SOL_LOW_ALGORITHM = 'sol-low-substring-v1'
+SOL_LOW_PROMPT_SHA256 = hashlib.sha256(SOL_LOW_PROMPT.encode()).hexdigest()
 BPS_MODELS = ['gpt-6-sol', 'gpt-6.1-sol', 'gpt-6-astra']
 POLICY_KEYS = ('quality_candy', 'quality_model_results', 'openai_excel_bps',
                'openai_excel_bps_models', 'openai_excel_bps_required_group_ids',
@@ -123,11 +129,14 @@ WHERE a.platform='openai' AND a.type='oauth' AND a.deleted_at IS NULL ORDER BY a
 
 
 def sample_class(sample, requested_model, expected_answer):
+    sol_low = requested_model == SOL_LOW_MODEL and expected_answer == SOL_LOW_ANSWER
     if (sample.get('completed') is not True or sample.get('http_status') != '200'
             or sample.get('curl_exit') != 0 or sample.get('error')
             or sample.get('response_model') != requested_model
-            or not str(sample.get('text') or '').strip()):
+            or (not sol_low and not str(sample.get('text') or '').strip())):
         return 'inconclusive'
+    if sol_low:
+        return 'healthy' if expected_answer in (sample.get('text') or '') else 'degraded'
     return 'healthy' if sample['text'].strip() == expected_answer else 'degraded'
 
 
@@ -156,6 +165,7 @@ def failure_metadata(error, payload, http_status, curl_exit):
 
 
 def parse_response(payload, http_status, curl_exit, model, expected_answer):
+    sol_low = model == SOL_LOW_MODEL and expected_answer == SOL_LOW_ANSWER
     parts, completed, response_model, error = [], False, None, None
     for line in payload.splitlines():
         if not line.startswith('data:'):
@@ -182,16 +192,16 @@ def parse_response(payload, http_status, curl_exit, model, expected_answer):
             error = event.get('error') or (event.get('response') or {}).get('error') or {'type': kind}
     text = ''.join(parts)
     result = {'completed': completed, 'http_status': http_status, 'curl_exit': curl_exit,
-              'response_model': response_model, 'text': text[:12000],
+              'response_model': response_model, 'text': text if sol_low else text[:12000],
               'text_sha256': hashlib.sha256(text.encode()).hexdigest(), 'text_length': len(text)}
     if not completed or error or curl_exit or http_status != '200':
         result['error'] = legacy.describe_failure(payload, http_status, error, curl_exit)
         result.update(failure_metadata(error, payload, http_status, curl_exit))
     elif response_model != model:
         result['error'] = 'response_model_mismatch'
-    elif len(text) > 12000:
+    elif not sol_low and len(text) > 12000:
         result['error'] = 'response_text_limit'
-    elif not text.strip():
+    elif not sol_low and not text.strip():
         result['error'] = 'empty_response'
     result['class'] = sample_class(result, model, expected_answer)
     return result
@@ -205,8 +215,9 @@ def probe(account, model, reasoning, expected_answer):
     token = credentials.get('access_token')
     if not token:
         return {**result, 'error': 'missing_token', 'seconds': 0}
+    prompt = SOL_LOW_PROMPT if model == SOL_LOW_MODEL and expected_answer == SOL_LOW_ANSWER else PROMPT
     body = {'model': model, 'instructions': '',
-            'input': [{'role': 'user', 'content': [{'type': 'input_text', 'text': PROMPT}]}],
+            'input': [{'role': 'user', 'content': [{'type': 'input_text', 'text': prompt}]}],
             'stream': True, 'store': False, 'tools': [], 'reasoning': {'effort': reasoning}}
     # Secrets travel on curl stdin, not argv; redirects and automatic retries
     # are intentionally disabled. This direct URL cannot invoke Sub2API BPS.
@@ -629,7 +640,10 @@ def compact(summary):
 
 def run(*, state_dir=legacy.STATE_DIR, initial=False, apply=False, account_ids=(),
         model=DEFAULT_MODEL, reasoning=DEFAULT_REASONING, expected_answer=DEFAULT_ANSWER,
-        apply_record=None, max_age_minutes=180, workers=4, route_mode="bps", pending_only=False):
+        apply_record=None, max_age_minutes=180, workers=4, route_mode="bps", pending_only=False,
+        sol_low=False):
+    if sol_low and route_mode != 'isolate':
+        raise ValueError('Sol low quality checks require isolate route mode')
     if route_mode in ("borrow", "isolate"):
         import sys
         borrow_spec = importlib.util.spec_from_file_location(
@@ -641,7 +655,7 @@ def run(*, state_dir=legacy.STATE_DIR, initial=False, apply=False, account_ids=(
         return borrow.run_borrow(state_dir=state_dir, initial=initial, apply=apply, account_ids=account_ids,
                           reasoning=reasoning, expected_answer=expected_answer,
                           apply_record=apply_record, max_age_minutes=max_age_minutes, workers=workers,
-                          pending_only=pending_only, isolation=route_mode == "isolate")
+                          pending_only=pending_only, isolation=route_mode == "isolate", sol_low=sol_low)
     if pending_only:
         raise ValueError('pending-only requires borrow route mode')
     if route_mode != "bps":
@@ -755,6 +769,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--route-mode', choices=['bps', 'borrow', 'isolate'], default='bps')
     parser.add_argument('--pending-only', action='store_true')
+    parser.add_argument('--sol-low', action='store_true')
     parser.add_argument('--initial', action='store_true')
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--apply-record', type=Path)

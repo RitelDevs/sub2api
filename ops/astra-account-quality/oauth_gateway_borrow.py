@@ -178,7 +178,8 @@ def probe_skip_reason(account):
 
 def assess_model(account, model, *, initial, reasoning, expected_answer, run_id,
                  probe_fn=None, on_sample=None, skip_reason=None):
-    prior = sampling_classification(account, model, reasoning, expected_answer)
+    sol_low = model == candy.SOL_LOW_MODEL
+    prior = None if sol_low else sampling_classification(account, model, reasoning, expected_answer)
     valid_prior = prior is not None
     previous = prior['state'] if valid_prior else None
     bootstrap = not valid_prior
@@ -186,17 +187,17 @@ def assess_model(account, model, *, initial, reasoning, expected_answer, run_id,
         'baseline_policy': owned_policy(account), 'baseline_recovery': candy.recovery_snapshot(account),
         'probe_started_at': candy.utcnow(), 'samples': [], 'run_id': run_id, 'model': model,
         'reasoning_effort': reasoning, 'expected_answer': expected_answer,
-        'sampling_mode': 'initial' if initial else 'bootstrap' if bootstrap else 'periodic'}
+        'sampling_mode': 'single' if sol_low else 'initial' if initial else 'bootstrap' if bootstrap else 'periodic'}
     skip_reason = skip_reason or probe_skip_reason(account)
     if skip_reason:
         result.update(state='inconclusive', action='preserve', total=0, correct=0,
                       checked_at=candy.utcnow(), skipped=skip_reason)
         return result
-    if model not in DETECTION_MODELS or not model_supported(account, model):
+    if model not in (*DETECTION_MODELS, candy.SOL_LOW_MODEL) or not model_supported(account, model):
         result.update(state='inconclusive', action='preserve', total=0, correct=0,
                       checked_at=candy.utcnow(), skipped='unsupported_model')
         return result
-    target = 4 if initial or bootstrap else 1
+    target = 1 if sol_low else 4 if initial or bootstrap else 1
     probe_fn = probe_fn or candy.probe
     while len(result['samples']) < target:
         sample = probe_fn(account, model, reasoning, expected_answer)
@@ -222,21 +223,23 @@ def assess_model(account, model, *, initial, reasoning, expected_answer, run_id,
             # Remaining attempts cannot establish a classification, so stop.
             result['stopped'] = 'incomplete_native_sample'
             break
-        if target == 1 and sample['class'] in ('healthy', 'degraded') and sample['class'] != previous:
+        if not sol_low and target == 1 and sample['class'] != previous:
             target = 4
     complete = all(s['class'] != 'inconclusive' for s in result['samples'])
     result.update(total=len(result['samples']), correct=sum(s['class'] == 'healthy' for s in result['samples']),
                   checked_at=candy.utcnow(), state='inconclusive', action='preserve')
     if complete:
         result['state'] = ('healthy' if result['correct'] >= 3 else 'degraded') if target == 4 else result['samples'][0]['class']
-        result['action'] = 'reconcile' if target == 4 else 'unchanged'
+        result['action'] = 'reconcile' if sol_low or target == 4 else 'unchanged'
     return result
 
 
 def evidence(result):
+    sol_low = result['model'] == candy.SOL_LOW_MODEL
     return {key: result[key] for key in ('state', 'model', 'reasoning_effort', 'expected_answer',
                                        'correct', 'total', 'checked_at', 'run_id')} | {
-        'algorithm': candy.ALGORITHM, 'prompt_sha256': candy.PROMPT_SHA256}
+        'algorithm': candy.SOL_LOW_ALGORITHM if sol_low else candy.ALGORITHM,
+        'prompt_sha256': candy.SOL_LOW_PROMPT_SHA256 if sol_low else candy.PROMPT_SHA256}
 
 
 def legacy_borrow_seed(account):
@@ -257,11 +260,11 @@ def legacy_borrow_seed(account):
 def desired_borrow(account, results):
     models = set((account.get('extra') or {}).get('openai_gateway_borrow_models') or legacy_borrow_seed(account))
     for result in results:
-        if (result.get('model') not in DETECTION_MODELS
+        if (result.get('model') not in (*DETECTION_MODELS, candy.SOL_LOW_MODEL)
                 or result['state'] not in ('healthy', 'degraded')
                 or not (complete_native(result) or result.get('action') == 'reuse_classification')):
             continue
-        # Account quality is controlled by Astra, including the legacy Sol alias.
+        # A completed probe controls all models covered by the account policy.
         return list(BORROW_MODELS) if result['state'] == 'degraded' else []
     return sorted(models)
 
@@ -280,7 +283,7 @@ def apply_account(account, results, key, backup_dir):
         return {'id': account_id, 'applied': False, 'skipped': 'concurrent_policy_change'}
     if current.get('status') != 'active' or current.get('schedulable') is not True:
         return {'id': account_id, 'applied': False, 'skipped': 'paused_or_inactive'}
-    completed = [r for r in results if r.get('model') in DETECTION_MODELS
+    completed = [r for r in results if r.get('model') in (*DETECTION_MODELS, candy.SOL_LOW_MODEL)
                  and r['state'] in ('healthy', 'degraded') and complete_native(r)]
     reused = [r for r in results if r.get('model') in DETECTION_MODELS
               and r.get('action') == 'reuse_classification']
@@ -520,11 +523,12 @@ def update_routing(accounts, results, key, backup_dir, *, pending_only=False, pa
 
 def compact(summary):
     results = summary['results']
+    models = sorted({r['model'] for r in results})
     output = {'run_id': summary['run_id'], 'route_mode': 'borrow',
         'accounts': len({r['id'] for r in results}), 'probes': sum(r['total'] for r in results),
         'quality_mode': QUALITY_MODE,
         'models': {model: {state: sum(r['model'] == model and r['state'] == state for r in results)
-            for state in ('healthy', 'degraded', 'inconclusive')} for model in DETECTION_MODELS},
+            for state in ('healthy', 'degraded', 'inconclusive')} for model in models},
         'changed': sum(bool(c.get('applied')) for c in summary.get('changes', [])),
         'apply_errors': [c['id'] for c in summary.get('changes', []) if c.get('error')],
         'skipped_concurrent': [c['id'] for c in summary.get('changes', []) if c.get('skipped') in (
@@ -543,11 +547,19 @@ def compact(summary):
 
 def run_borrow(*, state_dir, initial=False, apply=False, account_ids=(), reasoning='medium',
                expected_answer='21', apply_record=None, max_age_minutes=180, workers=4,
-               pending_only=False, isolation=False):
+               pending_only=False, isolation=False, sol_low=False):
     if workers not in range(1, 5) or not re.fullmatch(r'\d+', expected_answer):
         raise ValueError('invalid candy run arguments')
     if reasoning != 'medium' or expected_answer != '21':
         raise ValueError('account-quality mode requires Astra medium and answer 21')
+    detection_models = DETECTION_MODELS
+    algorithm, prompt_sha256 = candy.ALGORITHM, candy.PROMPT_SHA256
+    if sol_low:
+        if not isolation:
+            raise ValueError('Sol low quality checks require isolation')
+        detection_models = (candy.SOL_LOW_MODEL,)
+        reasoning, expected_answer = candy.SOL_LOW_EFFORT, candy.SOL_LOW_ANSWER
+        algorithm, prompt_sha256 = candy.SOL_LOW_ALGORITHM, candy.SOL_LOW_PROMPT_SHA256
     if apply_record:
         raise ValueError('borrow mode requires fresh native probes; replay is disabled')
     os.umask(0o077)
@@ -578,7 +590,7 @@ def run_borrow(*, state_dir, initial=False, apply=False, account_ids=(), reasoni
                 if (a.get('extra') or {}).get('openai_gateway_borrow_quality_pending') is True
                 and (a.get('extra') or {}).get('openai_gateway_borrow_initial_ready') is True
                 and a.get('status') == 'active' and a.get('schedulable') is True
-                and model_supported(a, DETECTION_MODELS[0])]
+                and model_supported(a, detection_models[0])]
             ready_count = len(selected)
             selected = [a for a in selected if not pending_retry_active(a, pending_retries.get(str(a['id'])))]
         if not selected:
@@ -592,17 +604,17 @@ def run_borrow(*, state_dir, initial=False, apply=False, account_ids=(), reasoni
         run_id = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8]
         run_dir = state_dir / 'candy-runs' / run_id
         run_dir.mkdir(mode=0o700, parents=True)
-        summary = {'at': candy.utcnow(), 'run_id': run_id, 'algorithm': candy.ALGORITHM,
-                   'prompt_sha256': candy.PROMPT_SHA256, 'route_mode': 'isolate' if isolation else 'borrow', 'results': [],
+        summary = {'at': candy.utcnow(), 'run_id': run_id, 'algorithm': algorithm,
+                   'prompt_sha256': prompt_sha256, 'route_mode': 'isolate' if isolation else 'borrow', 'results': [],
                    'quality_mode': QUALITY_MODE, 'pending_only': pending_only,
                    'isolation': isolation,
                    'changes': [], 'recoveries': [], 'quota_updates': [], 'applied': apply}
         def task(account):
             out = []
             stop_reason = None
-            for model in DETECTION_MODELS:
+            for model in detection_models:
                 path = run_dir / f"account-{account['id']}-{model}.json"
-                result = None if initial else reusable_classification(account, reasoning, expected_answer, run_id)
+                result = None if initial or sol_low else reusable_classification(account, reasoning, expected_answer, run_id)
                 if result is None:
                     result = assess_model(account, model, initial=initial or pending_only, reasoning=reasoning,
                         expected_answer=expected_answer, run_id=run_id, skip_reason=stop_reason,

@@ -10,6 +10,30 @@ import oauth_gateway_borrow as worker
 
 
 class SolLowTest(unittest.TestCase):
+    def test_periodic_probe_extends_only_on_changed_answer(self):
+        candy = worker.candy
+        model = candy.SOL_LOW_MODEL
+        account = {'id': 1, 'status': 'active', 'schedulable': True, 'proxy_id': None,
+                   'credentials': {'access_token': 'fixture', 'model_mapping': {model: model}}}
+        at = candy.utcnow()
+        account['extra'] = {'openai_gateway_borrow_quality_mode': worker.QUALITY_MODE,
+            'quality_candy': {'version': 1, 'state': 'healthy', 'total': 4, 'correct': 3,
+                'model': model, 'reasoning_effort': 'low', 'expected_answer': '大狗',
+                'algorithm': candy.SOL_LOW_ALGORITHM, 'prompt_sha256': candy.SOL_LOW_PROMPT_SHA256,
+                'run_id': '20261125T200000Z-baseline', 'checked_at': at, 'latest_probe_at': at,
+                'latest_probe_proxy_id': None,
+                'latest_probe_credential_sha256': worker.identity(account)['credential_sha256']}}
+        for answers, expected in ((['大狗'], 'healthy'), (['鸡', '大狗', '大狗', '大狗'], 'healthy'),
+                                  (['鸡', '大狗', '大狗', '鸡'], 'degraded')):
+            with self.subTest(answers=answers):
+                remaining = iter(answers)
+                def probe(*_):
+                    return {'completed': True, 'http_status': '200', 'curl_exit': 0,
+                            'response_model': model, 'text': next(remaining)}
+                result = worker.assess_model(account, model, initial=False, reasoning='low',
+                    expected_answer='大狗', run_id='20261125T200000Z-test', probe_fn=probe)
+                self.assertEqual((result['total'], result['state']), (len(answers), expected))
+
     def test_curl_transmits_exact_message(self):
         received = []
         model = 'gpt-6.2-sol'
@@ -70,7 +94,7 @@ class SolLowTest(unittest.TestCase):
                 with patch.object(candy.subprocess, 'run', return_value=response) as transport:
                     result = worker.assess_model(account, model, initial=True, reasoning='low',
                         expected_answer='大狗', run_id='20261125T200000Z-test')
-                transport.assert_called_once()
+                self.assertEqual(transport.call_count, 4 if state != 'inconclusive' else 1)
                 config = transport.call_args.kwargs['input']
                 data = next(line.removeprefix('data = ') for line in config.splitlines()
                             if line.startswith('data = '))
@@ -80,7 +104,8 @@ class SolLowTest(unittest.TestCase):
                 self.assertEqual(body['instructions'], '')
                 self.assertEqual(body['input'], [{'role': 'user', 'content': [
                     {'type': 'input_text', 'text': '叮咚鸡'}]}])
-                self.assertEqual((result['total'], result['state']), (1, state))
+                self.assertEqual((result['total'], result['state']),
+                                 (4 if state != 'inconclusive' else 1, state))
                 self.assertEqual(worker.evidence(result)['prompt_sha256'], hashlib.sha256('叮咚鸡'.encode()).hexdigest())
 
 

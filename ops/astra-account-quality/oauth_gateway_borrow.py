@@ -91,7 +91,12 @@ def sampling_classification(account, model, reasoning, answer):
     """Historical confirmation selects 1+3 sampling; it never admits a source."""
     extra = account.get('extra') or {}
     account_mode = extra.get('openai_gateway_borrow_quality_mode') == QUALITY_MODE
-    prior = previous_record(account, model, fresh=not account_mode)
+    if model == candy.SOL_LOW_MODEL:
+        if not account_mode:
+            return None
+        prior = extra.get('quality_candy')
+    else:
+        prior = previous_record(account, model, fresh=not account_mode)
     if not matching_classification(account, prior, model, reasoning, answer, fresh=not account_mode):
         return None
     if account_mode:
@@ -130,10 +135,13 @@ def reusable_classification(account, reasoning, answer, run_id):
 
 
 def classified(prior, model, reasoning, answer):
+    sol_low = model == candy.SOL_LOW_MODEL
+    algorithm = candy.SOL_LOW_ALGORITHM if sol_low else candy.ALGORITHM
+    prompt_sha = candy.SOL_LOW_PROMPT_SHA256 if sol_low else candy.PROMPT_SHA256
     return bool(isinstance(prior, dict) and type(prior.get('version')) is int and prior['version'] == 1
         and re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-[-_a-zA-Z0-9]{1,64}', str(prior.get('run_id') or ''))
-        and prior.get('algorithm') == candy.ALGORITHM
-        and prior.get('prompt_sha256') == candy.PROMPT_SHA256 and prior.get('model') == model
+        and prior.get('algorithm') == algorithm
+        and prior.get('prompt_sha256') == prompt_sha and prior.get('model') == model
         and prior.get('reasoning_effort') == reasoning and prior.get('expected_answer') == answer
         and type(prior.get('total')) is int and prior['total'] == 4 and type(prior.get('correct')) is int
         and 0 <= prior['correct'] <= 4
@@ -178,8 +186,7 @@ def probe_skip_reason(account):
 
 def assess_model(account, model, *, initial, reasoning, expected_answer, run_id,
                  probe_fn=None, on_sample=None, skip_reason=None):
-    sol_low = model == candy.SOL_LOW_MODEL
-    prior = None if sol_low else sampling_classification(account, model, reasoning, expected_answer)
+    prior = sampling_classification(account, model, reasoning, expected_answer)
     valid_prior = prior is not None
     previous = prior['state'] if valid_prior else None
     bootstrap = not valid_prior
@@ -187,7 +194,7 @@ def assess_model(account, model, *, initial, reasoning, expected_answer, run_id,
         'baseline_policy': owned_policy(account), 'baseline_recovery': candy.recovery_snapshot(account),
         'probe_started_at': candy.utcnow(), 'samples': [], 'run_id': run_id, 'model': model,
         'reasoning_effort': reasoning, 'expected_answer': expected_answer,
-        'sampling_mode': 'single' if sol_low else 'initial' if initial else 'bootstrap' if bootstrap else 'periodic'}
+        'sampling_mode': 'initial' if initial else 'bootstrap' if bootstrap else 'periodic'}
     skip_reason = skip_reason or probe_skip_reason(account)
     if skip_reason:
         result.update(state='inconclusive', action='preserve', total=0, correct=0,
@@ -197,7 +204,7 @@ def assess_model(account, model, *, initial, reasoning, expected_answer, run_id,
         result.update(state='inconclusive', action='preserve', total=0, correct=0,
                       checked_at=candy.utcnow(), skipped='unsupported_model')
         return result
-    target = 1 if sol_low else 4 if initial or bootstrap else 1
+    target = 4 if initial or bootstrap else 1
     probe_fn = probe_fn or candy.probe
     while len(result['samples']) < target:
         sample = probe_fn(account, model, reasoning, expected_answer)
@@ -223,14 +230,14 @@ def assess_model(account, model, *, initial, reasoning, expected_answer, run_id,
             # Remaining attempts cannot establish a classification, so stop.
             result['stopped'] = 'incomplete_native_sample'
             break
-        if not sol_low and target == 1 and sample['class'] != previous:
+        if target == 1 and sample['class'] != previous:
             target = 4
     complete = all(s['class'] != 'inconclusive' for s in result['samples'])
     result.update(total=len(result['samples']), correct=sum(s['class'] == 'healthy' for s in result['samples']),
                   checked_at=candy.utcnow(), state='inconclusive', action='preserve')
     if complete:
         result['state'] = ('healthy' if result['correct'] >= 3 else 'degraded') if target == 4 else result['samples'][0]['class']
-        result['action'] = 'reconcile' if sol_low or target == 4 else 'unchanged'
+        result['action'] = 'reconcile' if target == 4 else 'unchanged'
     return result
 
 

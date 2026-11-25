@@ -9,7 +9,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/sse"
 	"github.com/tidwall/gjson"
 )
 
@@ -109,11 +108,9 @@ func ChatCompletionsJSONToGemini(body []byte, fallbackModel string) ([]byte, err
 	if model == "" {
 		model = strings.TrimSpace(fallbackModel)
 	}
-	candidates, err := geminiCandidatesFromChoices(resp.Choices)
-	if err != nil {
-		return nil, err
+	payload := map[string]any{
+		"candidates": geminiCandidatesFromChoices(resp.Choices),
 	}
-	payload := map[string]any{"candidates": candidates}
 	if usage := geminiUsageFromChat(resp.Usage); usage != nil {
 		payload["usageMetadata"] = usage
 	}
@@ -125,12 +122,8 @@ func ChatCompletionsJSONToGemini(body []byte, fallbackModel string) ([]byte, err
 
 // GeminiSSETranslator 把 Chat Completions SSE 增量转成 Gemini SSE（data: {...}\n\n）。
 type GeminiSSETranslator struct {
-	model      string
-	decoder    *sse.Decoder
-	err        error
-	finished   bool
-	done       bool
-	candidates map[int]bool
+	model string
+	buf   bytes.Buffer
 	// 工具增量按候选和 tool index 分开。两个候选都会从 index 0 开始，
 	// 混在一张表里会串参数，并且先结束的候选会清掉另一个的状态。
 	tools map[geminiToolKey]*geminiToolAccum
@@ -141,58 +134,40 @@ type geminiToolKey struct {
 	tool   int
 }
 
-// The default matches the gateway's existing SSE line limit. The decoder also
-// bounds accumulated metadata and multi-data frames.
-func NewGeminiSSETranslator(model string, maxFrameBytes ...int) *GeminiSSETranslator {
-	limit := 500 * 1024 * 1024
-	if len(maxFrameBytes) > 0 && maxFrameBytes[0] > 0 {
-		limit = maxFrameBytes[0]
-	}
-	return &GeminiSSETranslator{model: strings.TrimSpace(model), decoder: sse.NewDecoder(limit), tools: map[geminiToolKey]*geminiToolAccum{}, candidates: map[int]bool{}}
+func NewGeminiSSETranslator(model string) *GeminiSSETranslator {
+	return &GeminiSSETranslator{model: strings.TrimSpace(model), tools: map[geminiToolKey]*geminiToolAccum{}}
 }
 
-// Err reports a latched protocol error; callers must stop accepting input.
-func (t *GeminiSSETranslator) Err() error { return t.err }
-
-func (t *GeminiSSETranslator) consume(event sse.Event, out *bytes.Buffer) error {
-	if len(event.Comment) > 0 {
-		out.Write(event.Comment)
-		out.WriteString("\n\n")
-		return nil
-	}
-	converted, err := t.translatePayload(event.Data)
-	out.Write(converted)
-	return err
-}
-
-// Push consumes arbitrary byte fragments. Complete events are emitted immediately.
+// Push 吃进任意切分的上游字节，返回已经可以写给 Gemini 客户端的 SSE。
 func (t *GeminiSSETranslator) Push(p []byte) []byte {
-	if t == nil || t.finished || t.err != nil {
+	if t == nil || len(p) == 0 {
 		return nil
 	}
+	_, _ = t.buf.Write(p)
 	var out bytes.Buffer
-	t.err = t.decoder.Push(p, func(event sse.Event) error { return t.consume(event, &out) })
-	if t.err != nil {
-		out.Write(geminiSSEData(map[string]any{"error": map[string]any{"code": 502, "status": "INTERNAL", "message": "Invalid upstream response stream"}}))
+	for {
+		data := t.buf.Bytes()
+		idx := bytes.IndexByte(data, '\n')
+		if idx < 0 {
+			break
+		}
+		line := strings.TrimRight(string(data[:idx]), "\r")
+		t.buf.Next(idx + 1)
+		if converted := t.translateLine(line); len(converted) > 0 {
+			_, _ = out.Write(converted)
+		}
 	}
 	return out.Bytes()
 }
 
-// Flush accepts a complete trailing event on clean completion and is idempotent.
+// Flush 处理末尾没有换行的残留行。
 func (t *GeminiSSETranslator) Flush() []byte {
-	if t == nil || t.finished || t.err != nil {
+	if t == nil || t.buf.Len() == 0 {
 		return nil
 	}
-	t.finished = true
-	var out bytes.Buffer
-	t.err = t.decoder.Finish(func(event sse.Event) error { return t.consume(event, &out) })
-	if t.err == nil {
-		t.err = t.validateTerminals()
-	}
-	if t.err != nil {
-		out.Write(geminiSSEData(map[string]any{"error": map[string]any{"code": 502, "status": "INTERNAL", "message": "Invalid upstream response stream"}}))
-	}
-	return out.Bytes()
+	line := strings.TrimRight(t.buf.String(), "\r\n")
+	t.buf.Reset()
+	return t.translateLine(line)
 }
 
 // EstimateGeminiTotalTokens 按文本长度估算 countTokens。桥接分组没有 Gemini
@@ -776,7 +751,7 @@ func convertGeminiSchemaOrBool(key string, value any) (any, error) {
 	return converted, nil
 }
 
-func geminiCandidatesFromChoices(choices []ChatChoice) ([]any, error) {
+func geminiCandidatesFromChoices(choices []ChatChoice) []any {
 	out := make([]any, 0, len(choices))
 	for _, choice := range choices {
 		parts := make([]any, 0, 2)
@@ -784,13 +759,16 @@ func geminiCandidatesFromChoices(choices []ChatChoice) ([]any, error) {
 			parts = append(parts, map[string]any{"text": text})
 		}
 		for _, call := range choice.Message.ToolCalls {
-			part, err := geminiToolPart(call.Function.Name, call.Function.Arguments, choice.FinishReason)
-			if err != nil {
-				return nil, err
+			name := strings.TrimSpace(call.Function.Name)
+			args := map[string]any{}
+			if raw := strings.TrimSpace(call.Function.Arguments); raw != "" {
+				if err := json.Unmarshal([]byte(raw), &args); err != nil {
+					args = map[string]any{"raw": raw}
+				}
 			}
-			if part != nil {
-				parts = append(parts, part)
-			}
+			parts = append(parts, map[string]any{
+				"functionCall": map[string]any{"name": name, "args": args},
+			})
 		}
 		if len(parts) == 0 {
 			parts = append(parts, map[string]any{"text": ""})
@@ -804,7 +782,7 @@ func geminiCandidatesFromChoices(choices []ChatChoice) ([]any, error) {
 			"finishReason": chatFinishReasonToGemini(choice.FinishReason),
 		})
 	}
-	return out, nil
+	return out
 }
 
 func chatMessageText(message ChatMessage) string {
@@ -854,70 +832,45 @@ func geminiUsageFromChat(usage *ChatUsage) map[string]any {
 	}
 }
 
-// Preserve the original numeric representation and reject incomplete or non-object
-// arguments. Output-limit truncation omits only the unusable call.
-func geminiToolPart(name, arguments, reason string) (map[string]any, error) {
-	name = strings.TrimSpace(name)
-	raw := strings.TrimSpace(arguments)
-	if raw == "" {
-		if reason == "length" {
-			return nil, nil
-		}
-		raw = "{}"
+func (t *GeminiSSETranslator) translateLine(line string) []byte {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "event:") {
+		return nil
 	}
-	if name == "" || !strings.HasPrefix(raw, "{") || !json.Valid([]byte(raw)) {
-		if reason == "length" {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("invalid upstream tool call")
+	// 上游转发链用 `:` 注释做 SSE keepalive。丢掉后，长时间无内容时下游连接失去保活。
+	if strings.HasPrefix(trimmed, ":") {
+		out := make([]byte, 0, len(trimmed)+2)
+		out = append(out, trimmed...)
+		out = append(out, '\n', '\n')
+		return out
 	}
-	return map[string]any{"functionCall": map[string]any{"name": name, "args": json.RawMessage(raw)}}, nil
-}
-
-func (t *GeminiSSETranslator) validateTerminals() error {
-	if len(t.candidates) == 0 {
-		return fmt.Errorf("upstream stream has no candidate")
+	line = trimmed
+	rest, ok := strings.CutPrefix(line, "data:")
+	if !ok {
+		return nil
 	}
-	for _, finished := range t.candidates {
-		if !finished {
-			return fmt.Errorf("upstream candidate is missing its terminal")
-		}
-	}
-	return nil
-}
-
-func (t *GeminiSSETranslator) translatePayload(data []byte) ([]byte, error) {
-	payload := strings.TrimSpace(string(data))
-	if payload == "" {
-		return nil, nil
-	}
-	if payload == "[DONE]" {
-		if err := t.validateTerminals(); err != nil {
-			return nil, err
-		}
-		t.done = true
-		return nil, nil
-	}
-	if t.done {
-		return nil, fmt.Errorf("upstream data after stream completion")
+	payload := strings.TrimSpace(rest)
+	if payload == "" || payload == "[DONE]" {
+		return nil
 	}
 	if gjson.Get(payload, "error").Exists() && !gjson.Get(payload, "choices").Exists() {
-		return nil, fmt.Errorf("upstream stream error")
+		message := gjson.Get(payload, "error.message").String()
+		if message == "" {
+			message = "Upstream request failed"
+		}
+		return geminiSSEData(map[string]any{
+			"error": map[string]any{"code": 502, "message": message, "status": "INTERNAL"},
+		})
 	}
 	var chunk ChatCompletionsChunk
 	if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-		return nil, fmt.Errorf("invalid upstream Chat event: %w", err)
+		return nil
 	}
-
 	if chunk.Model != "" {
 		t.model = chunk.Model
 	}
 	var events []any
 	for _, choice := range chunk.Choices {
-		if t.candidates[choice.Index] {
-			return nil, fmt.Errorf("upstream data after candidate completion")
-		}
-		t.candidates[choice.Index] = false
 		if text := choice.Delta.Content; text != nil && *text != "" {
 			events = append(events, map[string]any{
 				"candidates": []any{geminiStreamCandidate(choice.Index, []any{map[string]any{"text": *text}}, "")},
@@ -952,42 +905,49 @@ func (t *GeminiSSETranslator) translatePayload(data []byte) ([]byte, error) {
 				key := geminiToolKey{choice: choice.Index, tool: idx}
 				acc := t.tools[key]
 				delete(t.tools, key)
-				if acc == nil {
+				if acc == nil || acc.name == "" {
 					continue
 				}
-				part, err := geminiToolPart(acc.name, acc.args, *choice.FinishReason)
-				if err != nil {
-					return nil, err
+				args := map[string]any{}
+				if raw := strings.TrimSpace(acc.args); raw != "" {
+					if err := json.Unmarshal([]byte(raw), &args); err != nil {
+						args = map[string]any{"raw": raw}
+					}
 				}
-				if part != nil {
-					parts = append(parts, part)
-				}
+				parts = append(parts, map[string]any{"functionCall": map[string]any{"name": acc.name, "args": args}})
 			}
 			if len(parts) == 0 {
 				parts = append(parts, map[string]any{"text": ""})
 			}
 			candidate := geminiStreamCandidate(choice.Index, parts, chatFinishReasonToGemini(*choice.FinishReason))
 			event := map[string]any{"candidates": []any{candidate}}
+			if usage := geminiUsageFromChat(chunk.Usage); usage != nil {
+				event["usageMetadata"] = usage
+				if t.model != "" {
+					event["modelVersion"] = t.model
+				}
+			}
 			events = append(events, event)
-			t.candidates[choice.Index] = true
 			continue
 		}
 	}
-	if usage := geminiUsageFromChat(chunk.Usage); usage != nil {
-		event := map[string]any{"usageMetadata": usage}
-		if t.model != "" {
-			event["modelVersion"] = t.model
+	if len(chunk.Choices) == 0 {
+		if usage := geminiUsageFromChat(chunk.Usage); usage != nil {
+			event := map[string]any{"usageMetadata": usage}
+			if t.model != "" {
+				event["modelVersion"] = t.model
+			}
+			events = append(events, event)
 		}
-		events = append(events, event)
 	}
 	if len(events) == 0 {
-		return nil, nil
+		return nil
 	}
 	var out bytes.Buffer
 	for _, event := range events {
 		_, _ = out.Write(geminiSSEData(event))
 	}
-	return out.Bytes(), nil
+	return out.Bytes()
 }
 
 func geminiStreamCandidate(index int, parts []any, finish string) map[string]any {

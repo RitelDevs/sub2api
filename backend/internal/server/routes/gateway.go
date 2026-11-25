@@ -451,7 +451,7 @@ func RegisterGatewayRoutes(
 				return
 			}
 			chat := handler.SelectGeminiChatCompletionsHandler(getGroupPlatform(c), h.OpenAIGateway, h.Gateway)
-			handler.ServeGeminiViaChatCompletions(c, chat, cfg.Gateway.MaxLineSize)
+			handler.ServeGeminiViaChatCompletions(c, chat)
 		})
 		// 显式上下文缓存：网关自管资源 ID 与账号绑定，list/get 只读本地记录。
 		gemini.POST("/cachedContents", h.Gateway.GeminiCachedContentsCreate)

@@ -91,15 +91,14 @@ class LocalBuildTests(unittest.TestCase):
                     patch.dict(build.os.environ, {}, clear=True):
                 build.main()
             result = json.loads((output/'manifest.json').read_text())
-            self.assertEqual([command[0][0] for command in commands[:-1]], ['pnpm-fixture', 'go-fixture', 'go-fixture'])
-            self.assertEqual(commands[-1][0], [str(output/'sub2api'), '-check-reauth-runtime', '2.21.5.13-ritel.forwarding1'])
+            self.assertEqual([command[0][0] for command in commands], ['pnpm-fixture', 'go-fixture', 'go-fixture'])
             self.assertEqual(result['build_date'], '2023-11-14T22:13:20Z')
             self.assertEqual(result['source']['commit'], COMMIT)
             self.assertEqual(result['public_origins']['console'], 'https://dash.ritel.si')
-            environment = commands[-2][1]['env']
+            environment = commands[-1][1]['env']
             self.assertEqual(environment['CGO_ENABLED'], '0')
             self.assertEqual(environment['GOPROXY'], 'off')
-            self.assertIn('-trimpath', commands[-2][0])
+            self.assertIn('-trimpath', commands[-1][0])
             self.assertEqual(result['binary']['sha256'], build.sha(output/'sub2api'))
 
     def test_dirty_tree_fails_before_output_or_tool_execution(self):

@@ -157,7 +157,6 @@ func ProvideOpenAIOAuthReauthService(
 	cfg *config.Config,
 	tokenCacheInvalidator TokenCacheInvalidator,
 	runtimeBlocker AccountRuntimeBlocker,
-	buildInfo BuildInfo,
 	settings SettingRepository,
 	redisClient *redis.Client,
 ) *OpenAIOAuthReauthService {
@@ -171,7 +170,7 @@ func ProvideOpenAIOAuthReauthService(
 	if admin, ok := adminService.(*adminServiceImpl); ok {
 		admin.excelOAuthReauth = svc
 	}
-	svc.configureWorker(cfg, buildInfo)
+	svc.configureWorker(cfg)
 	if gateway, ok := runtimeBlocker.(*OpenAIGatewayService); ok {
 		gateway.excelOAuthReauth = svc
 		if gateway.rateLimitService != nil {

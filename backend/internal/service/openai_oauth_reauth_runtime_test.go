@@ -4,24 +4,23 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/reauthruntime"
 	"github.com/stretchr/testify/require"
 )
 
 func TestOpenAIOAuthReauthManagedWorkerNeedsNoEnvironmentToken(t *testing.T) {
 	t.Setenv("OPENAI_REAUTH_WORKER_TOKEN", "")
+	t.Setenv("OPENAI_REAUTH_WORKER_VERSION", "2.21.5-ritel-reauth.1")
 	t.Setenv("DATA_DIR", t.TempDir())
 	s := &OpenAIOAuthReauthService{}
 	cfg := &config.Config{}
 	cfg.Server.Host = "0.0.0.0"
 	cfg.Server.Port = 4040
-	s.configureWorker(cfg, BuildInfo{Version: "2.9.4"})
+	s.configureWorker(cfg)
 	defer s.stopWorker()
 	require.NotNil(t, s.worker)
 	require.Len(t, s.workerToken, 64)
@@ -41,8 +40,9 @@ func TestOpenAIOAuthReauthManagedWorkerNeedsNoEnvironmentToken(t *testing.T) {
 
 func TestOpenAIOAuthReauthPreservesExternalWorker(t *testing.T) {
 	t.Setenv("OPENAI_REAUTH_WORKER_TOKEN", strings.Repeat("a", 32))
+	t.Setenv("OPENAI_REAUTH_WORKER_VERSION", "2.21.5-ritel-reauth.1")
 	s := &OpenAIOAuthReauthService{}
-	s.configureWorker(nil, BuildInfo{Version: "2.9.4"})
+	s.configureWorker(nil)
 	require.Nil(t, s.worker)
 	configured, valid := s.WorkerAuthentication(strings.Repeat("a", 32))
 	require.True(t, configured)
@@ -53,7 +53,7 @@ func TestOpenAIOAuthReauthPreservesExternalWorker(t *testing.T) {
 func TestOpenAIOAuthReauthWorkerHeartbeatKeepsExternalWorkerAvailable(t *testing.T) {
 	t.Setenv("OPENAI_REAUTH_WORKER_TOKEN", strings.Repeat("a", 32))
 	s := &OpenAIOAuthReauthService{}
-	s.configureWorker(nil, BuildInfo{Version: "2.9.4"})
+	s.configureWorker(nil)
 	s.MarkWorkerSeen()
 	require.Equal(t, "running", s.WorkerStatus().State)
 }
@@ -61,7 +61,7 @@ func TestOpenAIOAuthReauthWorkerHeartbeatKeepsExternalWorkerAvailable(t *testing
 func TestOpenAIOAuthReauthShortExplicitTokenDoesNotStartCompetingWorker(t *testing.T) {
 	t.Setenv("OPENAI_REAUTH_WORKER_TOKEN", "short")
 	s := &OpenAIOAuthReauthService{}
-	s.configureWorker(nil, BuildInfo{Version: "2.9.4"})
+	s.configureWorker(nil)
 	require.Nil(t, s.worker)
 	configured, valid := s.WorkerAuthentication("short")
 	require.False(t, configured)
@@ -69,29 +69,20 @@ func TestOpenAIOAuthReauthShortExplicitTokenDoesNotStartCompetingWorker(t *testi
 	require.Equal(t, "external_not_configured", s.WorkerStatus().Reason)
 }
 
-// The fork app version must never become the upstream release asset name.
-// Intercept the release lookup so this test cannot contact GitHub.
 type offlineReauthRuntimeTransport func(*http.Request) (*http.Response, error)
 
 func (f offlineReauthRuntimeTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
 }
 
-func TestOpenAIOAuthReauthForkVersionUsesPinnedRuntimeRelease(t *testing.T) {
-	version, err := os.ReadFile("../../cmd/server/VERSION")
-	require.NoError(t, err)
-	// Use the actual release version: a version bump must keep its reviewed runtime mapping.
-	for _, tt := range []struct{ version, runtime, repository string }{
-		{strings.TrimSpace(string(version)), "2.19.2-ritel-reauth.1", "RitelDevs/sub2api"},
-		{"2.21.5.10-ritel", "2.19.2-ritel-reauth.1", "RitelDevs/sub2api"},
-		{"2.21.5.3-ritel", "2.19.2-ritel-reauth.1", "RitelDevs/sub2api"},
-		{"2.21.2.9-ritel", "2.19.2-ritel-reauth.1", "RitelDevs/sub2api"},
-		{"2.21.2.8-ritel", "2.19.2-ritel-reauth.1", "RitelDevs/sub2api"},
-		{"2.19.2.8-ritel", "2.18.0", "ranxi2001/sub2api"},
-		{"2.9.8.1-ritel", "2.9.8", "ranxi2001/sub2api"},
+func TestOpenAIOAuthReauthManagedWorkerUsesConfiguredRelease(t *testing.T) {
+	for _, tt := range []struct{ version, release, repository string }{
+		{" v2.21.5-ritel-reauth.1 ", "v2.21.5-ritel-reauth.1", "RitelDevs/sub2api"},
+		{"2.18.0", "v2.18.0", "ranxi2001/sub2api"},
 	} {
 		t.Run(tt.version, func(t *testing.T) {
 			t.Setenv("OPENAI_REAUTH_WORKER_TOKEN", "")
+			t.Setenv("OPENAI_REAUTH_WORKER_VERSION", tt.version)
 			t.Setenv("DATA_DIR", t.TempDir())
 			originalTransport := http.DefaultTransport
 			requests := make(chan string, 1)
@@ -101,41 +92,31 @@ func TestOpenAIOAuthReauthForkVersionUsesPinnedRuntimeRelease(t *testing.T) {
 			})
 			s := &OpenAIOAuthReauthService{}
 			defer func() { s.stopWorker(); http.DefaultTransport = originalTransport }()
-			s.configureWorker(&config.Config{}, BuildInfo{Version: tt.version})
+			s.configureWorker(&config.Config{})
 			s.EnsureWorker()
 			select {
 			case got := <-requests:
-				require.Equal(t, "https://api.github.com/repos/"+tt.repository+"/releases/tags/v"+tt.runtime, got)
+				require.Equal(t, "https://api.github.com/repos/"+tt.repository+"/releases/tags/"+tt.release, got)
 			case <-time.After(3 * time.Second):
-				t.Fatal("managed worker did not request the pinned upstream release")
+				t.Fatal("managed worker did not request the configured release")
 			}
 			s.stopWorker()
-			require.NotEqual(t, "release_required", s.WorkerStatus().Reason)
+			require.Equal(t, "runtime_install_failed", s.WorkerStatus().Reason)
 		})
 	}
 }
 
-func TestOpenAIOAuthReauthOtherBuildsKeepReleaseGate(t *testing.T) {
-	for _, version := range []string{"dev", "2.9.8.2-ritel", "2.9.8.1-custom", "2.9.6.5-ritel", "2.9.5.1-ritel"} {
+func TestOpenAIOAuthReauthManagedWorkerRequiresConfiguredRelease(t *testing.T) {
+	for _, version := range []string{"", "latest", "../../worker"} {
 		t.Run(version, func(t *testing.T) {
 			t.Setenv("OPENAI_REAUTH_WORKER_TOKEN", "")
+			t.Setenv("OPENAI_REAUTH_WORKER_VERSION", version)
 			t.Setenv("DATA_DIR", t.TempDir())
 			s := &OpenAIOAuthReauthService{}
 			defer s.stopWorker()
-			s.configureWorker(&config.Config{}, BuildInfo{Version: version})
-			s.EnsureWorker()
+			s.configureWorker(&config.Config{})
 			require.Equal(t, "release_required", s.WorkerStatus().Reason)
+			require.Error(t, s.checkWorkerMode(OpenAIOAuthReauthModePasswordTOTP))
 		})
 	}
-}
-
-func TestManagedWorkerRequiresExplicitForkMapping(t *testing.T) {
-	for _, v := range []string{"2.21.5.13-ritel.forwarding1", "2.24.1-ritel.rc1", "2.24.1-ritel", "2.24.1-ritel-beta"} {
-		t.Run(v, func(t *testing.T) {
-			require.False(t, reauthruntime.IsReleaseVersion(ManagedReauthRuntimeVersion(v)))
-		})
-	}
-	require.Equal(t, "2.19.2-ritel-reauth.1", ManagedReauthRuntimeVersion("2.21.5.12-ritel"))
-	require.Equal(t, "2.21.5-ritel-reauth.1", ManagedReauthRuntimeVersion("2.21.5.13-ritel.reauth1"))
-	require.Equal(t, "2.24.1", ManagedReauthRuntimeVersion("2.24.1"))
 }

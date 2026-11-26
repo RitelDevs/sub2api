@@ -1,4 +1,4 @@
-// Package reauthruntime installs and supervises the release-matched login
+// Package reauthruntime installs and supervises the configured login
 // runtime. Account credentials remain in the authenticated worker protocol.
 package reauthruntime
 
@@ -26,9 +26,6 @@ const maxExtracted = 768 << 20
 
 var releaseVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$`)
 
-// IsReleaseVersion reports whether the runtime manager accepts this version.
-func IsReleaseVersion(version string) bool { return releaseVersionPattern.MatchString(version) }
-
 type Status struct {
 	StartedAt int64  `json:"-"`
 	Mode      string `json:"mode"`
@@ -51,9 +48,14 @@ type Manager struct {
 func New(root, version, baseURL, token string) *Manager {
 	root, _ = filepath.Abs(root)
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{root: root, version: strings.TrimPrefix(version, "v"), baseURL: baseURL, token: token,
-		ctx: ctx, cancel: cancel, client: &http.Client{Timeout: 5 * time.Minute},
-		status: Status{Mode: "managed", State: "idle"}}
+	version = strings.TrimPrefix(version, "v")
+	status := Status{Mode: "managed", State: "idle"}
+	if !releaseVersionPattern.MatchString(version) {
+		status.State = "unavailable"
+		status.Reason = "release_required"
+	}
+	return &Manager{root: root, version: version, baseURL: baseURL, token: token,
+		ctx: ctx, cancel: cancel, client: &http.Client{Timeout: 5 * time.Minute}, status: status}
 }
 
 func (m *Manager) Status() Status { m.mu.Lock(); defer m.mu.Unlock(); return m.status }
@@ -72,17 +74,12 @@ func (m *Manager) set(state, reason string) {
 func (m *Manager) Ensure() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.started || m.ctx.Err() != nil || time.Now().Before(m.retryAt) {
+	if m.started || m.ctx.Err() != nil || time.Now().Before(m.retryAt) || m.status.Reason == "release_required" {
 		return
 	}
 	if runtime.GOOS != "linux" || (runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64") {
 		m.status.State = "unavailable"
 		m.status.Reason = "unsupported_platform"
-		return
-	}
-	if !IsReleaseVersion(m.version) {
-		m.status.State = "unavailable"
-		m.status.Reason = "release_required"
 		return
 	}
 	m.started = true

@@ -46,6 +46,7 @@ services:
       # Auto Setup (REQUIRED for Docker deployment)
       # =======================================================================
       - AUTO_SETUP=true
+      - OPENAI_REAUTH_WORKER_VERSION
 
       # =======================================================================
       # Server Configuration

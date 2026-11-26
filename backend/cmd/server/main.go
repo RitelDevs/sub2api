@@ -21,10 +21,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	"github.com/Wei-Shaw/sub2api/internal/mihomo"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	"github.com/Wei-Shaw/sub2api/internal/reauthruntime"
 	"github.com/Wei-Shaw/sub2api/internal/server"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/Wei-Shaw/sub2api/internal/setup"
 	"github.com/Wei-Shaw/sub2api/internal/web"
 
@@ -64,21 +62,9 @@ func main() {
 	// Parse command line flags
 	setupMode := flag.Bool("setup", false, "Run setup wizard in CLI mode")
 	showVersion := flag.Bool("version", false, "Show version information")
-	checkReauthRuntime := flag.String("check-reauth-runtime", "", "Verify this binary's core version and managed worker release mapping offline")
 	migrateMihomo := flag.String("migrate-mihomo", "", "Stage legacy Mihomo into the specified Sub2API data directory (root deployment only)")
 	checkMihomo := flag.String("check-managed-mihomo", "", "Check managed Mihomo in the specified data directory")
 	flag.Parse()
-	if *checkReauthRuntime != "" {
-		if *checkReauthRuntime != Version {
-			log.Fatalf("expected core version %q, binary contains %q", *checkReauthRuntime, Version)
-		}
-		runtimeVersion := service.ManagedReauthRuntimeVersion(Version)
-		if !reauthruntime.IsReleaseVersion(strings.TrimPrefix(runtimeVersion, "v")) {
-			log.Fatalf("core %s has no compatible managed worker release mapping", Version)
-		}
-		log.Printf("core %s maps to managed worker release %s", Version, runtimeVersion)
-		return
-	}
 	if *checkMihomo != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()

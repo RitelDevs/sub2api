@@ -166,7 +166,7 @@ sessionExport: {
   runtimeExternal: '当前使用已有的独立重登服务。',
   runtimeReasons: {
     unsupported_platform: '此平台暂不支持内置重登运行环境。',
-    release_required: '此开发构建没有对应的已发布运行环境。',
+    release_required: '请通过 OPENAI_REAUTH_WORKER_VERSION 配置已发布的 Worker 版本。',
     runtime_install_failed: '运行环境下载、校验或准备失败，稍后会自动重试。',
     worker_start_failed: '重登进程启动失败，稍后会自动重试。',
     worker_exited: '重登进程意外退出，稍后会自动恢复。',

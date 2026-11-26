@@ -85,7 +85,7 @@ class MigrationTests(unittest.TestCase):
         architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(os.uname().machine)
         if not architecture:
             self.skipTest("Linux architecture fixture")
-        metadata = json.dumps({"assets": [{"name": "sub2api-reauth_2.11.1_linux_" + architecture + ".tar.gz", "digest": digest}]}).encode()
+        metadata = json.dumps({"assets": [{"name": "sub2api-reauth_2.21.5-ritel-reauth.1_linux_" + architecture + ".tar.gz", "digest": digest}]}).encode()
         worker_env = {b"OPENAI_TOTP_JOURNAL_DIR": os.fsencode(source), b"OPENAI_REAUTH_CONCURRENCY": b"4"}
         if protocol:
             worker_env[b"TURB_ROOT"] = b"/synthetic/custom"
@@ -105,8 +105,6 @@ class MigrationTests(unittest.TestCase):
 
         def command(*args):
             calls.append(args)
-            if args[-1] == "--version":
-                return "Sub2API 2.11.1 (commit: synthetic)"
             return ""
 
         patches = [patch.object(migration, "SYSTEMD_DIR", base / "units"),
@@ -121,7 +119,8 @@ class MigrationTests(unittest.TestCase):
         for item in patches:
             item.start()
             self.addCleanup(item.stop)
-        return argparse.Namespace(data_dir=str(data), service="sub2api.service", worker_service="legacy.service"), calls, base
+        return argparse.Namespace(data_dir=str(data), worker_version="v2.21.5-ritel-reauth.1",
+                                  service="sub2api.service", worker_service="legacy.service"), calls, base
 
     def test_success_keeps_recovery_and_switches_only_after_checks(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -132,6 +131,10 @@ class MigrationTests(unittest.TestCase):
             self.assertNotIn(("systemctl", "start", "legacy.service"), calls)
             dropin = (base / "units/sub2api.service.d/90-managed-reauth.conf").read_text()
             self.assertIn("UnsetEnvironment=OPENAI_REAUTH_WORKER_TOKEN", dropin)
+            self.assertIn("Environment=OPENAI_REAUTH_WORKER_VERSION=2.21.5-ritel-reauth.1", dropin)
+            release_lookup, archive_download = migration.download.call_args_list
+            self.assertIn("/RitelDevs/sub2api/releases/", release_lookup.args[0])
+            self.assertIn("/RitelDevs/sub2api/releases/", archive_download.args[0])
             self.assertIn("OPENAI_REAUTH_CONCURRENCY=4", dropin)
             self.assertEqual((base / "data/credential-worker/totp-recovery/key.bin").read_bytes(), b"synthetic-key")
             self.assertTrue((base / "old-journal/history.enc").is_file())

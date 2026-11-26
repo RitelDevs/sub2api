@@ -1,4 +1,5 @@
 """Collect a relocatable runtime and glibc loader without archive symlinks."""
+import hashlib
 import json
 from pathlib import Path
 import platform
@@ -59,6 +60,8 @@ for name, binary in (("python", "python-root/bin/python3"), ("node", "node.bin")
     )
     script.chmod(0o755)
 manifest = {"tosub2_commit": "8548397e89bf80e508eda64a87e0d556d43abc84",
+            "protocol_sha256": hashlib.sha256((out / "tosub2/src/protocol-login.mjs").read_bytes()).hexdigest(),
+            "totp_factor_binding": True,
             "architecture": platform.machine(), "python": platform.python_version(),
             "node": subprocess.check_output(["node", "--version"], text=True).strip(),
             "python_packages": subprocess.check_output([sys.executable, "-m", "pip", "freeze"], text=True).splitlines()}

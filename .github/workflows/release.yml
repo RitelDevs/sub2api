@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+      - '!v*-ritel-reauth.*'
   workflow_dispatch:
     inputs:
       tag:

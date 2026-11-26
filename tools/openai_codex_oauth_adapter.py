@@ -16,6 +16,7 @@ except ImportError:
     from openai_excel_oauth_adapter import replace_exact
 
 PINNED_PROTOCOL_BLOB = 'ff2db2507e401c29fa78705e44f5b40a3108a8c6'
+BOUND_PROTOCOL_BLOB = '7d5143da87e36ad79c2d050003df99319736b866'
 STAGES = frozenset(('starting', 'web_login', 'email_verification', 'password_accepted', 'mfa_challenge',
                    'mfa_accepted', 'web_redirect', 'oauth_authorize', 'session_select',
                    'workspace_select', 'callback_validation', 'token_exchange', 'oauth_output', 'completed'))
@@ -35,8 +36,12 @@ def valid_stage_reason(stage, reason):
 
 def codex_source(source):
     raw = source.encode('utf-8')
-    if hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest() != PINNED_PROTOCOL_BLOB:
+    blob = hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest()
+    if blob not in (PINNED_PROTOCOL_BLOB, BOUND_PROTOCOL_BLOB):
         raise ValueError('unsupported_codex_runtime_layout')
+    totp_rejection = ('      if (!(error instanceof TotpRejectionError)) throw error;'
+                      if blob == BOUND_PROTOCOL_BLOB else
+                      '      if (!isRejectedTotpError(error)) throw error;')
     source = replace_exact(source, 'import crypto from "node:crypto";', '''import crypto from "node:crypto";
 import {createProtocolDiagnostics, validateCodexCallback, observeProtocolResponse, prepareCodexProxy} from "./openai_codex_diagnostics.mjs";
 const protocolDiagnostic = createProtocolDiagnostics(process.env.SUB2API_PROTOCOL_DIAGNOSTIC_PATH,
@@ -86,8 +91,7 @@ console.log = console.warn = console.error = () => {};''')
         ('async function ask(rl, prompt) {', 'async function ask(rl, prompt) {\n  throw new Error("interaction_required");'),
         ('      if (!isRejectedPasswordError(error)) throw error;',
          '      if (!isRejectedPasswordError(error)) throw error;\n      throw new Error("password_rejected");'),
-        ('      if (!isRejectedTotpError(error)) throw error;',
-         '      if (!isRejectedTotpError(error)) throw error;\n      throw new Error("totp_rejected");'),
+        (totp_rejection, totp_rejection + '\n      throw new Error("totp_rejected");'),
         ('    maxProxySessionAttempts: process.env.CHATGPT_PROXY_MAX_ATTEMPTS || 10,',
          '    maxProxySessionAttempts: 1,\n    sameProxyRiskRetries: 0,\n    cloudflareSolver: false,'),
         ('    if (!data[key]) throw new Error(`Token response missing ${key}.`);',

@@ -6,6 +6,22 @@
 VERSION=0.0.0-test ARCH=amd64 bash tools/reauth-runtime/build.sh
 ```
 
+## Ritel v2.25.3 Worker
+
+独立运行包版本为 `2.25.3-ritel-reauth.1`。构建固定下载 toSub2
+`8548397e89bf80e508eda64a87e0d556d43abc84`，校验原协议 SHA-256 后应用
+`totp-factor-binding.patch`。包内 manifest 记录补丁后的协议 SHA-256 和
+`totp_factor_binding=true`。Codex 适配器只接受原始协议及此补丁的两个精确 Git blob，
+两种版本均保留已有失败诊断和交互终止行为。
+
+打包时运行现有 Python、Node 回归及实际补丁协议的 TOTP 因子绑定测试和 Worker HTTP／加密日志
+集成测试，再执行 Alpine 和 Ubuntu 便携运行验证。`-ritel-reauth.*` 专用标签由独立 Worker
+发布流程维护，核心 Release workflow 已排除此类标签。
+
+`2.25.3-ritel.rc1` 核心仍需要在其自身发布映射中显式选择此 Worker 版本。
+独立 Worker 发包及 API 联调通过后，由核心维护线登记映射并运行实际核心的
+`-check-reauth-runtime 2.25.3-ritel.rc1`。本目录的 Worker 构建不修改该映射。
+
 ## 本地 API 与数据库验收
 
 `test_deployment.py` 只能连接回环地址。使用隔离 PostgreSQL / Redis、测试管理员和测试 Worker token，应用初始化及迁移不得连接生产数据。API 的 `OPENAI_REAUTH_WORKER_TOKEN` 必须与脚本相同，以便独立运行包报到。后台不要同时启动其他 Worker；脚本会主动创建虚构 OAuth 账号及 2FA 任务。

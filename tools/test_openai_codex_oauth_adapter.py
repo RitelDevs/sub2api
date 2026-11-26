@@ -121,6 +121,12 @@ class CodexDiagnosticTests(unittest.TestCase):
 
 @unittest.skipUnless(os.getenv('EXCEL_TEST_TOSUB2_ROOT'), 'pinned runtime supplied by packaging CI')
 class PinnedCodexProtocolTests(unittest.TestCase):
+    def test_reviewed_runtime_rejects_source_drift(self):
+        source = (Path(os.environ['EXCEL_TEST_TOSUB2_ROOT']) / 'src/protocol-login.mjs').read_text()
+        self.assertIn('protocolDiagnostic', adapter.codex_source(source))
+        with self.assertRaisesRegex(ValueError, '^unsupported_codex_runtime_layout$'):
+            adapter.codex_source(source + '\n// unreviewed change\n')
+
     def test_interactive_pages_exit_before_input_or_further_requests(self):
         for mode, page, stage, reason in (
             ('email-prompt', '/email-verification', 'email_verification', 'email_otp_required'),

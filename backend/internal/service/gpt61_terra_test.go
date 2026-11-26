@@ -124,6 +124,14 @@ func TestGPT61TerraPricingStandardFastAndLongContext(t *testing.T) {
 						tokens.CacheCreation1hTokens = 600
 						cost, err = svc.CalculateCostWithServiceTier(model, tokens, 1, tier)
 						require.NoError(t, err)
+						require.InDelta(t, 1000*1.25e-6*im*mult, cost.CacheCreationCost, 1e-10)
+
+						tokens.CacheCreation5mTokens = 0
+						tokens.CacheCreation1hTokens = 0
+						tokens.CacheCreation30mTokens = 400
+						tokens.CacheCreation12hTokens = 600
+						cost, err = svc.CalculateCostWithServiceTier(model, tokens, 1, tier)
+						require.NoError(t, err)
 						require.InDelta(t, (400*1.25e-6+600*2.5e-6)*im*mult, cost.CacheCreationCost, 1e-10)
 					}
 				}

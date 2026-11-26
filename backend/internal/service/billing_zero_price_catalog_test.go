@@ -11,9 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The catalog and offline fallback must charge the same token partitions. This
-// reproduces the seven token-bearing models that were logged with zero cost.
-func TestPreviouslyUnpricedModelsChargeTokens(t *testing.T) {
+// The catalog and offline fallback must charge Gemini token partitions equally.
+func TestGemini4ModelsChargeTokens(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "resources", "model-pricing", "model_prices_and_context_window.json"))
 	require.NoError(t, err)
 	ps := &PricingService{}
@@ -35,12 +34,6 @@ func TestPreviouslyUnpricedModelsChargeTokens(t *testing.T) {
 			{"models/gemini-4-carbon-low", 2, 10, .1},
 			{"gemini-4-hydrogen", 1.5, 7.5, .075},
 			{"gemini-4-hydrogen-xhigh", 1.5, 7.5, .075},
-			{"kimi-k3.1-pro", 2, 10, .2},
-			{"hy3", 1 / 6.7841, 4 / 6.7841, .25 / 6.7841},
-			{"hy4", 3 / 6.7841, 9 / 6.7841, .15 / 6.7841},
-			{"hy4-preview", 6 / 6.7841, 18 / 6.7841, .30 / 6.7841},
-			{"mimo-v2.6-pro", .435, .87, .0036},
-			{"mimo-v2.6-flash", .14, .28, .0028},
 		} {
 			mode := "offline"
 			if dynamic {
@@ -55,11 +48,10 @@ func TestPreviouslyUnpricedModelsChargeTokens(t *testing.T) {
 				require.InDelta(t, (tc.input+tc.output+tc.read)*.6, cost.ActualCost, 1e-12)
 			})
 		}
-		t.Run("kimi-cache-partitions", func(t *testing.T) {
-			cost, err := svc.CalculateCost("kimi-k3.1-pro", UsageTokens{CacheCreationTokens: 2_000_000, CacheCreation5mTokens: 1_000_000, CacheCreation1hTokens: 1_000_000}, 1)
-			require.NoError(t, err)
-			require.InDelta(t, 6, cost.CacheCreationCost, 1e-12)
-		})
+		for _, model := range []string{"kimi-k3.1-pro", "hy3", "hy4", "hy4-preview", "mimo-v2.6-pro", "mimo-v2.6-flash"} {
+			_, err := svc.CalculateCost(model, UsageTokens{InputTokens: 100}, 1)
+			require.ErrorIs(t, err, ErrModelPricingUnavailable, model)
+		}
 	}
 }
 

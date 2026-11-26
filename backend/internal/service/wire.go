@@ -1251,7 +1251,11 @@ var ProviderSet = wire.NewSet(
 // ProvideUsageBillingRepository 以按用户合并结算的通道作为各服务使用的计费仓储。
 func ProvideUsageBillingRepository(lanes *UsageBillingLaneCombiner) UsageBillingRepository {
 	if durable, ok := lanes.repo.(DurableUsageBillingRepository); ok {
-		return &durableUsageBillingLanes{UsageBillingLaneCombiner: lanes, DurableUsageBillingRepository: durable}
+		wrapped := &durableUsageBillingLanes{UsageBillingLaneCombiner: lanes, DurableUsageBillingRepository: durable}
+		if stager, ok := durable.(imageBillingStageRepository); ok {
+			return &imageReceiptUsageBillingLanes{durableUsageBillingLanes: wrapped, imageBillingStageRepository: stager}
+		}
+		return wrapped
 	}
 	return lanes
 }
@@ -1261,6 +1265,12 @@ func ProvideUsageBillingRepository(lanes *UsageBillingLaneCombiner) UsageBilling
 type durableUsageBillingLanes struct {
 	*UsageBillingLaneCombiner
 	DurableUsageBillingRepository
+}
+
+// Preserve the stage ownership required to deliver a newly billed image receipt.
+type imageReceiptUsageBillingLanes struct {
+	*durableUsageBillingLanes
+	imageBillingStageRepository
 }
 
 func (r *durableUsageBillingLanes) RecoverStagedUsageBilling(ctx context.Context, key UsageBillingEventKey) (*UsageBillingRecovery, error) {

@@ -103,6 +103,9 @@ func TestImageReceiptRecoveryWinsBeforeForegroundApply(t *testing.T) {
 	accounts := imageRecoveryAccounts{account: account}
 	journal := fixture.NewJournal()
 	barrier := &imageRecoveryBarrierRepo{ImageBillingRecoveryTestRepository: journal, staged: make(chan service.UsageBillingEventKey, 1), resume: make(chan struct{})}
+	lanes := service.NewUsageBillingLaneCombiner(barrier)
+	t.Cleanup(lanes.Stop)
+	billing := service.ProvideUsageBillingRepository(lanes)
 	var resume sync.Once
 	unblock := func() { resume.Do(func() { close(barrier.resume) }) }
 	defer unblock()
@@ -122,7 +125,7 @@ func TestImageReceiptRecoveryWinsBeforeForegroundApply(t *testing.T) {
 	cache := service.NewBillingCacheService(nil, users, nil, nil, nil, nil, cfg, nil)
 	defer cache.Stop()
 	pricing := service.NewBillingService(cfg, nil)
-	gateway := service.NewOpenAIGatewayService(accounts, nil, nil, barrier, users, nil, nil, nil, cfg,
+	gateway := service.NewOpenAIGatewayService(accounts, nil, nil, billing, users, nil, nil, nil, cfg,
 		nil, nil, pricing, nil, cache, imageRecoveryTransport{target: target, client: upstream.Client()},
 		nil, nil, nil, service.NewModelPricingResolver(nil, pricing), nil, nil, nil, nil)
 	h := handler.NewOpenAIGatewayHandler(gateway, service.NewConcurrencyService(nil), cache,

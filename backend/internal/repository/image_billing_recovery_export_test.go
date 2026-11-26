@@ -14,7 +14,7 @@ import (
 // This integration-only bridge exposes the isolated database and concrete
 // journal through interfaces without importing the HTTP handler into repository.
 type ImageBillingRecoveryTestRepository interface {
-	service.UsageBillingRepository
+	service.UsageBillingBatchRepository
 	service.DurableUsageBillingRepository
 	StageUsageBillingForReceipt(context.Context, *service.UsageBillingCommand, *service.UsageLog) (bool, error)
 }

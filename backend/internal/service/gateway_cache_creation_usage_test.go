@@ -663,14 +663,17 @@ func TestAnthropicCacheOnlyBufferedSSEUsage(t *testing.T) {
 		{"explicit zero partial TTL", `{"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":20}}`, `{"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_1h_input_tokens":30}}`, 50},
 	} {
 		for _, adapter := range []string{"responses", "chat", "native responses", "native chat"} {
-			for _, terminal := range []string{"message_stop", "eof"} {
+			for _, terminal := range []string{"complete", "message_stop", "eof"} {
 				t.Run(test.name+"/"+adapter+"/"+terminal, func(t *testing.T) {
 					stream := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_cache\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4\",\"content\":[],\"usage\":" + strings.Replace(test.start, "{", `{"input_tokens":0,"output_tokens":0,`, 1) + "}}\n\n"
 					stream = withAnthropicFixtureContent(stream)
 					for range 2 {
 						stream += "event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":" + test.delta + "}\n\n"
 					}
-					if terminal == "message_stop" {
+					if terminal == "complete" {
+						stream += "event: message_delta\ndata: " + `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}` + "\n\n"
+					}
+					if terminal != "eof" {
 						stream += "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 					}
 					recorder := httptest.NewRecorder()
@@ -717,6 +720,12 @@ func TestAnthropicCacheOnlyBufferedSSEUsage(t *testing.T) {
 						}
 					}
 					require.Equal(t, test.wantAggregate, aggregate)
+					if terminal == "message_stop" && (adapter == "responses" || adapter == "chat") {
+						require.ErrorContains(t, err, "missing Anthropic message start or final stop reason")
+						require.Equal(t, http.StatusBadGateway, recorder.Code)
+						require.Contains(t, recorder.Body.String(), "stream_protocol_error")
+						return
+					}
 					// Incomplete streams retain collected usage but must not report success.
 					if terminal == "eof" {
 						require.EqualError(t, err, "stream usage incomplete: missing terminal event")

@@ -48,7 +48,8 @@ func TestIssue985AdapterBoundaries(t *testing.T) {
 		{"missing", missing, true, 0, 0},
 		{"field_missing", strings.ReplaceAll(canonical, `"input_tokens":17,`, ""), true, 0, 3},
 		{"stop_reason_only", strings.TrimSuffix(canonical, stop), true, 17, 3},
-		{"terminal_error", canonical + issue985Frame("error", `{"type":"error","error":{"type":"overloaded_error","message":"synthetic"}}`), true, 17, 3},
+		{"error_before_terminal", strings.TrimSuffix(canonical, stop) + issue985Frame("error", `{"type":"error","error":{"type":"overloaded_error","message":"synthetic"}}`), true, 17, 3},
+		{"error_after_terminal", canonical + issue985Frame("error", `{"type":"error","error":{"type":"overloaded_error","message":"synthetic"}}`), true, 17, 3},
 		{"malformed", strings.TrimSuffix(canonical, stop) + issue985Frame("message_stop", `{`), true, 17, 3},
 		{"mismatch", strings.ReplaceAll(canonical, "event: message_stop", "event: ping"), true, 17, 3},
 	} {
@@ -104,7 +105,10 @@ func TestIssue985AdapterBoundaries(t *testing.T) {
 							input, output = result.Usage.InputTokens, result.Usage.OutputTokens
 						}
 					}
-					if tc.fail {
+					// GatewayService completes a validated turn at message_stop.
+					// Native adapters retain their existing transport-drain behavior.
+					expectFailure := tc.fail && !(tc.name == "error_after_terminal" && !strings.HasPrefix(adapter, "native"))
+					if expectFailure {
 						require.Error(t, err)
 						var replay *UpstreamFailoverError
 						require.False(t, errors.As(err, &replay))

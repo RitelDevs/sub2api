@@ -23,6 +23,20 @@ type rawChatTestSink struct {
 	short bool
 }
 
+func TestRawChatFrameUsageAndDeliveryCacheWriteSentinel(t *testing.T) {
+	for _, details := range []string{"prompt_tokens_details", "input_tokens_details"} {
+		t.Run(details, func(t *testing.T) {
+			usage := extractCCStreamUsage(`{"usage":{"prompt_tokens":10,"` + details + `":{"cached_tokens":3,"cache_write_tokens":-2,"cache_creation_tokens":4}}}`)
+			require.NotNil(t, usage)
+			require.Equal(t, 10, usage.InputTokens)
+			require.Equal(t, 3, usage.CacheReadInputTokens)
+			require.Zero(t, usage.CacheCreationInputTokens)
+			require.Nil(t, extractCCStreamUsage(`{"usage":{"`+details+`":{"cache_write_tokens":-2}}}`))
+			require.Nil(t, extractCCStreamUsage(`{"usage":{"prompt_tokens":-2,"`+details+`":{"cached_tokens":3}}}`))
+		})
+	}
+}
+
 func (w *rawChatTestSink) WriteString(p string) (int, error) {
 	if w.err != nil {
 		return 0, w.err

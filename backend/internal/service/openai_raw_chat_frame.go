@@ -198,6 +198,11 @@ func rawChatUsageReported(value gjson.Result) bool {
 		"prompt_tokens_details.cache_creation_tokens", "input_tokens_details.cache_creation_tokens",
 	} {
 		v := value.Get(key)
+		// Some providers use a negative cache-write sentinel. The cache parser
+		// clamps it to zero ahead of the creation alias; other buckets still count.
+		if (key == "prompt_tokens_details.cache_write_tokens" || key == "input_tokens_details.cache_write_tokens") && v.Type == gjson.Number && v.Num < 0 && math.Trunc(v.Num) == v.Num {
+			continue
+		}
 		if v.Exists() && v.Type != gjson.Null && (v.Type != gjson.Number || v.Num < 0 || math.Trunc(v.Num) != v.Num || v.Num >= float64(int(^uint(0)>>1))) {
 			return false
 		}

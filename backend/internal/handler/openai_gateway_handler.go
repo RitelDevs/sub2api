@@ -1355,7 +1355,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		// #5148 对齐：错误返回携带的部分 result（流中断前上游已计量的 usage）照常
 		// 入账；failover 错误恒定 result=nil，不会重复计费。
 		submitResponsesUsage := func(res *service.OpenAIForwardResult) {
-			if res == nil {
+			// The dedicated error path above settles marked policy failures.
+			if res == nil || res.UsageUnavailable || (err != nil && service.GetOpsCyberPolicy(c) != nil) {
 				return
 			}
 			stampOpenAIRequestedReasoningEffort(res, c)

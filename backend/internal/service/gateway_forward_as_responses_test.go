@@ -260,6 +260,9 @@ func TestHandleResponsesBufferedStreamingResponse_PreservesMessageStartCacheUsag
 			`event: message_delta`,
 			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}`,
 			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
 		}, "\n"))),
 	}
 
@@ -388,10 +391,20 @@ func TestHandleResponsesStreamingResponse_NormalizesTerminalUsage(t *testing.T) 
 				resp := &http.Response{Body: io.NopCloser(strings.NewReader(strings.Join(lines, "\n")))}
 
 				result, err := (&GatewayService{}).handleResponsesStreamingResponse(resp, c, "k3", "k3", nil, time.Now(), apicompat.ResponsesClientToolMapping{})
-				require.NoError(t, err)
+				if terminal == "eof" {
+					require.ErrorContains(t, err, "missing terminal event")
+				} else {
+					require.NoError(t, err)
+				}
+				require.NotNil(t, result)
 				require.Equal(t, tt.wantInput, result.Usage.InputTokens)
 				require.Equal(t, tt.wantCached, result.Usage.CacheReadInputTokens)
 				require.Equal(t, tt.wantCacheCreation, result.Usage.CacheCreationInputTokens)
+				if terminal == "eof" {
+					require.Contains(t, rec.Body.String(), "event: response.failed")
+					require.NotContains(t, rec.Body.String(), "event: response.completed")
+					return
+				}
 
 				var completed apicompat.ResponsesStreamEvent
 				for _, line := range strings.Split(rec.Body.String(), "\n") {
@@ -516,6 +529,9 @@ func TestHandleResponsesBufferedStreamingResponse_CompactSSEFormat(t *testing.T)
 			``,
 			`event:message_delta`,
 			`data:{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
 			``,
 		}, "\n"))),
 	}

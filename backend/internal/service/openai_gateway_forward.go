@@ -1704,6 +1704,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		var firstTokenMs *int
 		var clientDisconnected bool
 		var downstreamDeliveryErr error
+		var partialEvidence openAIResponsesAttemptEvidence
 		agentCompleted := false
 		responseID := ""
 		imageCount := 0
@@ -1718,12 +1719,16 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			streamResult, err := s.handleStreamingResponseWithReasoning(streamCtx, resp, c, account, startTime, originalModel, upstreamModel, reasoningEffortValue)
 			if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
-				return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
+				if streamResult == nil || !streamResult.evidence.noReplay {
+					return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
+				}
+				err = phaseErr
 			}
 
 			var agentRecoveryErr *OpenAIAgentRecoveryError
-			if streamResult != nil && errors.As(err, &agentRecoveryErr) {
-				downstreamDeliveryErr = err
+			if err != nil && streamResult != nil && (streamResult.evidence.noReplay || errors.As(err, &agentRecoveryErr)) {
+				partialEvidence = streamResult.evidence
+				downstreamDeliveryErr = partialEvidence.failure(err)
 				streamResult.agentCompleted = false
 				err = nil
 			}
@@ -1803,10 +1808,16 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		} else {
 			nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
 			if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
-				return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
+				if nonStreamResult == nil || !nonStreamResult.evidence.noReplay {
+					return nil, handleOpenAIHTTPPhaseError(c, account, phaseErr)
+				}
+				err = phaseErr
 			}
 			var deliveryErr *openAINonStreamingDeliveryError
-			if nonStreamResult != nil && errors.As(err, &deliveryErr) {
+			if err != nil && nonStreamResult != nil && nonStreamResult.evidence.noReplay {
+				partialEvidence = nonStreamResult.evidence
+				downstreamDeliveryErr = partialEvidence.failure(err)
+			} else if nonStreamResult != nil && errors.As(err, &deliveryErr) {
 				downstreamDeliveryErr = err
 				var recoveryErr *OpenAIAgentRecoveryError
 				clientDisconnected = !errors.As(err, &recoveryErr)
@@ -1833,7 +1844,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			imageOutputSizes = nonStreamResult.imageOutputSizes
 			searchCount = nonStreamResult.searchCount
 		}
-		s.bindHTTPResponseAccount(ctx, c, account, responseID)
+		if !partialEvidence.noReplay {
+			s.bindHTTPResponseAccount(ctx, c, account, responseID)
+		}
 		completeAgentRecovery(agentCompleted && !clientDisconnected && c.Request.Context().Err() == nil && !OpenAIHeaderWaitDisconnected(c))
 
 		// Extract and save Codex usage snapshot from response headers (for OAuth accounts).
@@ -1881,6 +1894,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		// when search_price_per_1k is configured (nil price → $0 from CalculateSearchCost).
 		if searchCount > 0 && account != nil && account.IsGrok() {
 			forwardResult.SearchCount = searchCount
+		}
+		if partialEvidence.noReplay {
+			partialEvidence.applyPartial(forwardResult)
 		}
 		stampOpenAIResponsesUpstreamEndpoint(c, forwardResult)
 		return forwardResult, downstreamDeliveryErr

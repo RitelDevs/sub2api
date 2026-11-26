@@ -69,8 +69,9 @@ func openAIFirstOutputEventQueueSize(guardFirstOutput bool) int {
 }
 
 func openAIFirstOutputDynamicScanLines(guardActive *atomic.Bool) bufio.SplitFunc {
+	split := newOpenAIResponsesLineSplit()
 	return func(data []byte, atEOF bool) (advance int, token []byte, err error) {
-		advance, token, err = bufio.ScanLines(data, atEOF)
+		advance, token, err = split(data, atEOF)
 		if err != nil || guardActive == nil || !guardActive.Load() {
 			return advance, token, err
 		}

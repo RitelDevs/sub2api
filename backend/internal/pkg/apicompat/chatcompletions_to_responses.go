@@ -265,8 +265,8 @@ func chatAssistantToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
 		}
 	}
 
-	if content != "" {
-		parts := []ResponsesContentPart{{Type: "output_text", Text: content}}
+	if content != "" || m.Refusal != "" {
+		parts := chatReplyParts(content, m.Refusal)
 		partsJSON, err := json.Marshal(parts)
 		if err != nil {
 			return nil, err
@@ -465,6 +465,7 @@ func convertChatContentPartsToResponses(parts []ChatContentPart) []ResponsesCont
 					PromptCacheBreakpoint: p.PromptCacheBreakpoint,
 					Type:                  "input_image",
 					ImageURL:              p.ImageURL.URL,
+					Detail:                p.ImageURL.Detail,
 				})
 			}
 		case "file":

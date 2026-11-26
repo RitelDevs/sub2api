@@ -139,7 +139,7 @@ func TestResponsesToAnthropic_UserMessageWithOnlyUnknownPartsIsDropped(t *testin
 func TestResponsesToAnthropic_AssistantMessageWithOnlyUnknownPartsIsDropped(t *testing.T) {
 	messages := responsesToAnthropicMessages(t, `[
 		{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},
-		{"type":"message","role":"assistant","content":[{"type":"refusal","refusal":"no"}]}
+		{"type":"message","role":"assistant","content":[{"type":"unknown_extension"}]}
 	]`)
 
 	requireAnthropicMessagesAreSendable(t, messages)

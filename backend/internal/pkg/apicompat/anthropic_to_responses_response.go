@@ -187,6 +187,12 @@ type AnthropicEventToResponsesState struct {
 	// TextAccum accumulates the current text part so that output_text.done and
 	// content_part.done can carry the full text (deltas carry increments only).
 	TextAccum string
+	// The public strings are immutable snapshots of the current prefixes.
+	// Reset drops the builder's storage when an output item takes ownership.
+	textFragments      strings.Builder
+	argumentFragments  strings.Builder
+	summaryFragments   strings.Builder
+	signatureFragments strings.Builder
 
 	// For function_call: track per-output info
 	CurrentCallID string
@@ -332,6 +338,10 @@ func anthToResHandleContentBlockStart(evt *AnthropicStreamEvent, state *Anthropi
 		state.CurrentItemType = "reasoning"
 		state.CurrentThinking = *evt.ContentBlock
 		state.CurrentSummary = evt.ContentBlock.Thinking
+		state.summaryFragments.WriteString(state.CurrentSummary)
+		if state.PreserveThinkingSignatures {
+			state.signatureFragments.WriteString(state.CurrentThinking.Signature)
+		}
 		state.ContentIndex = 0
 
 		events = append(events, makeResponsesEvent(state, "response.output_item.added", &ResponsesStreamEvent{
@@ -380,6 +390,7 @@ func anthToResHandleContentBlockStart(evt *AnthropicStreamEvent, state *Anthropi
 			Part:         &ResponsesContentPart{Type: "output_text", Text: ""},
 		}))
 		state.TextAccum = ""
+		state.textFragments.Reset()
 
 	case "tool_use":
 		// Close previous item if any
@@ -421,7 +432,8 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 		if evt.Delta.Text == "" {
 			return nil
 		}
-		state.TextAccum += evt.Delta.Text
+		state.textFragments.WriteString(evt.Delta.Text)
+		state.TextAccum = state.textFragments.String()
 		return []ResponsesStreamEvent{makeResponsesEvent(state, "response.output_text.delta", &ResponsesStreamEvent{
 			OutputIndex:  state.OutputIndex,
 			ContentIndex: state.ContentIndex,
@@ -433,7 +445,8 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 		if evt.Delta.Thinking == "" {
 			return nil
 		}
-		state.CurrentSummary += evt.Delta.Thinking
+		state.summaryFragments.WriteString(evt.Delta.Thinking)
+		state.CurrentSummary = state.summaryFragments.String()
 		return []ResponsesStreamEvent{makeResponsesEvent(state, "response.reasoning_summary_text.delta", &ResponsesStreamEvent{
 			OutputIndex:  state.OutputIndex,
 			SummaryIndex: 0,
@@ -448,7 +461,8 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 		// A real delta supersedes whatever content_block_start carried; keeping
 		// both would splice two complete JSON documents together.
 		state.PendingToolInput = ""
-		state.CurrentArgs += evt.Delta.PartialJSON
+		state.argumentFragments.WriteString(evt.Delta.PartialJSON)
+		state.CurrentArgs = state.argumentFragments.String()
 		return []ResponsesStreamEvent{makeResponsesEvent(state, "response.function_call_arguments.delta", &ResponsesStreamEvent{
 			OutputIndex: state.OutputIndex,
 			Delta:       evt.Delta.PartialJSON,
@@ -460,7 +474,8 @@ func anthToResHandleContentBlockDelta(evt *AnthropicStreamEvent, state *Anthropi
 	case "signature_delta":
 		// Keep signatures in the opaque bridge envelope, never in visible text.
 		if state.PreserveThinkingSignatures {
-			state.CurrentThinking.Signature += evt.Delta.Signature
+			state.signatureFragments.WriteString(evt.Delta.Signature)
+			state.CurrentThinking.Signature = state.signatureFragments.String()
 		}
 		return nil
 	}
@@ -521,6 +536,7 @@ func anthToResHandleContentBlockStop(evt *AnthropicStreamEvent, state *Anthropic
 		// item itself stays open since more blocks may follow.
 		text := state.TextAccum
 		state.TextAccum = ""
+		state.textFragments.Reset()
 		contentIndex := state.ContentIndex
 		state.CurrentContent = append(state.CurrentContent, ResponsesContentPart{Type: "output_text", Text: text})
 		// 关掉一个 part 就推进 content_index：上面那句注释说的「item 保持打开，
@@ -652,6 +668,10 @@ func closeCurrentResponsesItem(state *AnthropicEventToResponsesState) []Response
 	state.CurrentSummary = ""
 	state.CurrentThinking = AnthropicContentBlock{}
 	state.TextAccum = ""
+	state.argumentFragments.Reset()
+	state.summaryFragments.Reset()
+	state.signatureFragments.Reset()
+	state.textFragments.Reset()
 	state.OutputIndex++
 	state.ContentIndex = 0
 

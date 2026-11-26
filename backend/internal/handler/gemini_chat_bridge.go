@@ -2,7 +2,9 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/googleapi"
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requestmodel"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -58,7 +61,7 @@ func SelectGeminiChatCompletionsHandler(platform string, openAI *OpenAIGatewayHa
 
 // ServeGeminiViaChatCompletions 把 /v1beta/models/{model}:{action} 转成 Chat
 // Completions 请求，复用对应网关的调度、计费和上游协议分流，再把响应写回 Gemini 格式。
-func ServeGeminiViaChatCompletions(c *gin.Context, chat gin.HandlerFunc) {
+func ServeGeminiViaChatCompletions(c *gin.Context, chat gin.HandlerFunc, maxFrameBytes ...int) {
 	if c == nil {
 		return
 	}
@@ -121,9 +124,19 @@ func ServeGeminiViaChatCompletions(c *gin.Context, chat gin.HandlerFunc) {
 		return
 	}
 	requestmodel.ResetRequestBody(c.Request, chatBody)
-	writer := newGeminiChatResponseWriter(c.Writer, modelName)
+	writer := newGeminiChatResponseWriter(c.Writer, modelName, maxFrameBytes...)
+	writer.ctx = c.Request.Context()
+	writer.wantStream = stream
+	writer.expected = max(1, int(gjson.GetBytes(chatBody, "n").Int()))
+	writer.translator.ExpectCandidates(writer.expected)
+	c.Request = c.Request.WithContext(requesttiming.WithOuterDelivery(writer.ctx))
 	c.Writer = writer
-	defer writer.finish()
+	defer func() {
+		writer.finish()
+		if writer.err != nil {
+			_ = c.Error(writer.err)
+		}
+	}()
 	chat(c)
 }
 
@@ -183,13 +196,18 @@ type geminiChatResponseWriter struct {
 	committed  bool
 	finished   bool
 	translator *apicompat.GeminiSSETranslator
+	ctx        context.Context
+	expected   int
+	wantStream bool
+	err        error
 }
 
-func newGeminiChatResponseWriter(base gin.ResponseWriter, model string) *geminiChatResponseWriter {
+func newGeminiChatResponseWriter(base gin.ResponseWriter, model string, maxFrameBytes ...int) *geminiChatResponseWriter {
 	return &geminiChatResponseWriter{
 		ResponseWriter: base,
 		model:          model,
-		translator:     apicompat.NewGeminiSSETranslator(model),
+		translator:     apicompat.NewGeminiSSETranslator(model, maxFrameBytes...),
+		ctx:            context.Background(),
 	}
 }
 
@@ -211,19 +229,21 @@ func (w *geminiChatResponseWriter) Size() int {
 }
 
 func (w *geminiChatResponseWriter) Written() bool {
+	if w.streaming {
+		return w.committed || w.ResponseWriter.Written()
+	}
 	return w.sawWrite || w.committed || w.ResponseWriter.Written()
 }
 
 func (w *geminiChatResponseWriter) WriteHeader(code int) {
-	if code > 0 {
+	if code > 0 && !w.committed {
 		w.status = code
 	}
 }
 
 func (w *geminiChatResponseWriter) WriteHeaderNow() {
-	if w.streaming {
-		w.commitStreamHeader()
-	}
+	// The inner Chat handler can flush role/tool prefixes that have produced no
+	// Gemini bytes. Until conversion writes data, its HTTP status can change.
 }
 
 func (w *geminiChatResponseWriter) WriteString(s string) (int, error) {
@@ -231,6 +251,12 @@ func (w *geminiChatResponseWriter) WriteString(s string) (int, error) {
 }
 
 func (w *geminiChatResponseWriter) Write(p []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	if w.finished {
+		return 0, io.ErrClosedPipe
+	}
 	if len(p) == 0 {
 		return 0, nil
 	}
@@ -238,21 +264,8 @@ func (w *geminiChatResponseWriter) Write(p []byte) (int, error) {
 		w.streaming = true
 	}
 	if w.streaming {
-		w.commitStreamHeader()
-		converted := w.translator.Push(p)
-		if len(converted) == 0 {
-			w.sawWrite = true
-			return len(p), nil
-		}
-		_, err := w.ResponseWriter.Write(converted)
-		w.sawWrite = true
-		if err != nil {
-			return 0, err
-		}
-		if bytes.HasPrefix(converted, []byte(":")) || bytes.Contains(converted, []byte("\n:")) {
-			w.ResponseWriter.Flush()
-		}
-		return len(p), nil
+		w.convert(p, false)
+		return len(p), w.err
 	}
 	_, _ = w.buf.Write(p)
 	w.sawWrite = true
@@ -260,9 +273,80 @@ func (w *geminiChatResponseWriter) Write(p []byte) (int, error) {
 }
 
 func (w *geminiChatResponseWriter) Flush() {
-	if w.streaming && w.committed {
-		w.ResponseWriter.Flush()
+	_ = w.FlushError()
+}
+
+func (w *geminiChatResponseWriter) FlushError() error {
+	if w.err == nil && w.streaming && w.committed {
+		w.err = service.FlushGatewayResponse(w.ResponseWriter)
+		if w.err != nil {
+			requesttiming.Mark(w.ctx, "downstream_flush_failed")
+		}
 	}
+	return w.err
+}
+
+func (w *geminiChatResponseWriter) deliver(p []byte, stream bool) {
+	n, err := w.ResponseWriter.Write(p)
+	if n != len(p) && err == nil {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		w.err = err
+		requesttiming.Mark(w.ctx, "downstream_write_failed")
+		return
+	}
+	if stream {
+		requesttiming.DeliveredSSE(w.ctx, p)
+	} else {
+		requesttiming.Delivered(w.ctx, p)
+	}
+}
+
+func (w *geminiChatResponseWriter) convert(p []byte, eof bool) {
+	if err := w.ctx.Err(); err != nil {
+		w.err = err
+		return
+	}
+	out, conversionErr := w.translator.Convert(p, eof)
+	if len(out) > 0 {
+		w.commitStreamHeader()
+		w.deliver(out, true)
+		if bytes.HasPrefix(out, []byte(":")) || bytes.Contains(out, []byte("\n:")) {
+			_ = w.FlushError()
+		}
+	}
+	if w.err != nil || conversionErr == nil {
+		return
+	}
+	body := googleErrorBody(http.StatusBadGateway, "Invalid upstream response stream")
+	if w.committed || w.ResponseWriter.Written() {
+		frame := append([]byte("data: "), body...)
+		frame = append(frame, '\n', '\n')
+		w.deliver(frame, true)
+		_ = w.FlushError()
+	} else {
+		w.status = http.StatusBadGateway
+		w.committed = true
+		w.Header().Del("Content-Length")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.ResponseWriter.WriteHeader(w.status)
+		w.deliver(body, false)
+	}
+	if w.err == nil {
+		w.err = conversionErr
+	}
+}
+
+// Called by streaming services before they return a result for accounting.
+func (w *geminiChatResponseWriter) FinalizeGatewayStream() error {
+	if !w.finished && w.err == nil {
+		w.streaming = true
+		w.finished = true
+		w.convert(nil, true)
+		_ = w.FlushError()
+	}
+	return w.err
 }
 
 func (w *geminiChatResponseWriter) commitStreamHeader() {
@@ -281,17 +365,11 @@ func (w *geminiChatResponseWriter) finish() {
 	if w == nil || w.finished {
 		return
 	}
-	w.finished = true
-	if w.streaming {
-		if extra := w.translator.Flush(); len(extra) > 0 {
-			w.commitStreamHeader()
-			_, _ = w.ResponseWriter.Write(extra)
-		}
-		if w.committed {
-			w.ResponseWriter.Flush()
-		}
+	if w.streaming || (!w.sawWrite && w.wantStream && w.Status() < 400) {
+		_ = w.FinalizeGatewayStream()
 		return
 	}
+	w.finished = true
 	if !w.sawWrite {
 		if w.status != 0 {
 			w.ResponseWriter.WriteHeader(w.status)
@@ -302,20 +380,21 @@ func (w *geminiChatResponseWriter) finish() {
 	body := w.buf.Bytes()
 	header := w.Header()
 	header.Del("Content-Length")
-	out, status := geminiBodyFromChatResponse(status, body, w.model)
+	out, status := geminiBodyFromChatResponse(status, body, w.model, w.expected)
+	w.status = status
 	header.Set("Content-Type", "application/json; charset=utf-8")
 	w.ResponseWriter.WriteHeader(status)
-	_, _ = w.ResponseWriter.Write(out)
+	w.deliver(out, false)
 }
 
-func geminiBodyFromChatResponse(status int, body []byte, model string) ([]byte, int) {
-	if status >= 400 || gjson.GetBytes(body, "error").Exists() && !gjson.GetBytes(body, "choices").Exists() {
+func geminiBodyFromChatResponse(status int, body []byte, model string, expected ...int) ([]byte, int) {
+	if status >= 400 || gjson.GetBytes(body, "error").IsObject() {
 		if status < 400 {
 			status = http.StatusBadGateway
 		}
 		return googleErrorBody(status, openAIErrorMessage(body)), status
 	}
-	converted, err := apicompat.ChatCompletionsJSONToGemini(body, model)
+	converted, err := apicompat.ChatCompletionsJSONToGemini(body, model, expected...)
 	if err != nil {
 		return googleErrorBody(http.StatusBadGateway, "Failed to convert upstream response"), http.StatusBadGateway
 	}

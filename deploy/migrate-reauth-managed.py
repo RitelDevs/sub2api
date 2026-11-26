@@ -147,17 +147,16 @@ def migrate(args):
 
 
 def migrate_locked(args):
+    version = args.worker_version.strip().removeprefix("v")
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?", version):
+        raise ValueError("--worker-version must name a published Worker release")
+    repository = "RitelDevs/sub2api" if "-ritel" in version else "ranxi2001/sub2api"
     service, sidecar = args.service, args.worker_service
     if any(not re.fullmatch(r"[A-Za-z0-9_@.-]+\.service", name) for name in (service, sidecar)) or service == sidecar:
         raise ValueError("invalid service names")
     if property_value(service, "ActiveState") != "active":
         raise ValueError("application must be running before migration")
     pid = property_value(service, "MainPID")
-    version_output = command("/proc/" + pid + "/exe", "--version")
-    match = re.search(r"Sub2API (\d+\.\d+\.\d+(?:-[\w.-]+)?)\b", version_output)
-    if not match:
-        raise ValueError("application must be a released build")
-    version = match.group(1)
     architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(os.uname().machine)
     if not architecture:
         raise ValueError("unsupported architecture")
@@ -188,12 +187,12 @@ def migrate_locked(args):
     if root.is_symlink() or dropin.exists() or target.exists() or (root / "totp-recovery").exists():
         raise ValueError("managed migration files already exist; inspect before retrying")
     asset_name = "sub2api-reauth_" + version + "_linux_" + architecture + ".tar.gz"
-    release = json.loads(download("https://api.github.com/repos/ranxi2001/sub2api/releases/tags/v" + version, 4 << 20))
+    release = json.loads(download(f"https://api.github.com/repos/{repository}/releases/tags/v{version}", 4 << 20))
     asset = next(item for item in release["assets"] if item["name"] == asset_name)
     digest = asset.get("digest", "")
     if not isinstance(digest, str) or not re.fullmatch(r"sha256:[a-f0-9]{64}", digest):
         raise ValueError("release has no valid runtime SHA-256")
-    body = download("https://github.com/ranxi2001/sub2api/releases/download/v" + version + "/" + asset_name, 256 << 20)
+    body = download(f"https://github.com/{repository}/releases/download/v{version}/{asset_name}", 256 << 20)
     if hashlib.sha256(body).hexdigest() != digest[7:]:
         raise ValueError("runtime checksum mismatch")
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -240,6 +239,7 @@ def migrate_locked(args):
                 os.chown(path, account.pw_uid, account.pw_gid)
             dropin.parent.mkdir(parents=True, exist_ok=True)
             settings = "[Service]\nUnsetEnvironment=OPENAI_REAUTH_WORKER_TOKEN\n"
+            settings += f"Environment=OPENAI_REAUTH_WORKER_VERSION={version}\n"
             if b"OPENAI_REAUTH_CONCURRENCY" not in app_env and b"OPENAI_REAUTH_CONCURRENCY" in worker_env:
                 settings += "Environment=OPENAI_REAUTH_CONCURRENCY=" + str(int(concurrency)) + "\n"
             dropin.write_text(settings)
@@ -265,6 +265,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--drained", action="store_true", help="confirm active tasks finished and new submissions paused")
     parser.add_argument("--data-dir", required=True, help="the application's actual persistent DATA_DIR")
+    parser.add_argument("--worker-version", required=True, help="the published Worker release to install")
     parser.add_argument("--service", default="sub2api.service")
     parser.add_argument("--worker-service", default="sub2api-openai-reauth-worker.service")
     args = parser.parse_args()

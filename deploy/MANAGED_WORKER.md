@@ -1,8 +1,8 @@
 # 登录 Worker 随主程序自动管理
 
-Linux amd64 / arm64 的内置管理器已经支持自动下载、校验、启动与重试。主程序升级并重启后，按自身版本使用对应的 owner Release 运行包；旧版本目录仍保留，2FA 恢复日志放在版本目录外。服务器不编译应用，也不安装 Python/Node 依赖。
+Linux amd64 / arm64 的内置管理器根据 `OPENAI_REAUTH_WORKER_VERSION` 安装并启动已发布的 Worker。设置为当前安装使用的 Worker 版本，v2.25.3 的 Linux amd64 可用 `2.25.3-ritel-reauth.1`。应用升级时保留这一设置和持久化 `DATA_DIR`，重启后管理器复用原安装目录。首次安装会下载该架构的发布资产，核对发布摘要并执行离线自检。2FA 恢复日志放在版本目录外。
 
-旧部署若设置了 `OPENAI_REAUTH_WORKER_TOKEN`，会保留外部 Worker 模式。单独升级主程序不会接管这个 systemd 服务，可能出现主程序已有 2FA 功能、外部 Worker 仍是旧版的情况。
+从旧版的自动配对方式升级时，在部署配置中一次性补上现用 Worker 版本。Docker Compose 使用配套模板的环境变量透传，自定义模板需在应用容器的 `environment` 中加入 `OPENAI_REAUTH_WORKER_VERSION`。systemd 可在应用的 `EnvironmentFile` 或 drop-in 设置。版本留空时托管 Worker 不启动，应用照常启动。已设置 `OPENAI_REAUTH_WORKER_TOKEN` 的部署继续使用外部 Worker。
 
 ## 将标准旧 sidecar 一次迁入自动管理
 
@@ -14,23 +14,23 @@ Linux amd64 / arm64 的内置管理器已经支持自动下载、校验、启动
 
    ```bash
    sudo bash /opt/sub2api/install.sh manage-worker \
-     --data-dir /opt/sub2api/data --drained
+     --data-dir /opt/sub2api/data --worker-version 2.25.3-ritel-reauth.1 --drained
    ```
 
    如果安装包没有包含 `install.sh`，直接运行同包中的脚本：
 
    ```bash
    sudo python3 /opt/sub2api/migrate-reauth-managed.py \
-     --data-dir /opt/sub2api/data --drained
+     --data-dir /opt/sub2api/data --worker-version 2.25.3-ritel-reauth.1 --drained
    ```
 
-迁移前先下载与当前应用相同版本/架构的官方运行包，要求 Release asset SHA-256，拒绝缺摘要、篡改、越界路径、符号链接和特殊文件；完成 `--check` 后才停止旧服务。该检查不领取任务，不调用真实登录或更换接口。
+迁移前先下载 `--worker-version` 指定版本中适用于本机架构的官方运行包，要求 Release asset SHA-256，拒绝缺摘要、篡改、越界路径、符号链接和特殊文件。完成 `--check` 后才停止旧服务。该检查不领取任务，不调用真实登录或更换接口。
 
 脚本持有 `/run/lock/sub2api-deploy.lock`，切换前复核 API/Worker PID，将原恢复目录及其 key 完整复制到 `<DATA_DIR>/credential-worker/totp-recovery` 并限制权限；原目录不删除。存在目标恢复目录、目标运行包或迁移 drop-in 时拒绝覆盖，必须先核对上次迁移结果。恢复目录来自旧 Worker 的进程环境，缺省为 `/var/lib/sub2api-reauth/totp-recovery`。
 
-停用旧 sidecar 的开机启动，写入 `90-managed-reauth.conf`，使用 systemd 的 `UnsetEnvironment` 在最终进程环境中去掉旧共享 Token，无须编辑或输出已有密钥文件。原有 Worker 并发启动值会保留，页面保存过的并发值继续优先。
+停用旧 sidecar 的开机启动，在 `90-managed-reauth.conf` 写入选定的 Worker 版本，并用 systemd 的 `UnsetEnvironment` 去掉旧共享 Token。原有 Worker 并发启动值会保留，页面保存过的并发值继续优先。
 
-**迁移会重启一次主 API。** 持有凭证运营记录的实例启动时会准备 Worker；验收要求主 API 的托管子进程存活，且该 API 收到一次成功鉴权的 `totp-claim`，证明持久恢复存储可用。原配置、旧运行包、原恢复目录和迁移记录均保留；失败自动撤除本次 drop-in、重启原模式并恢复旧 sidecar。后续升级主程序即可由内置管理器自动跟随版本，不再单独更换外部 `current` 链接。
+**迁移会重启一次主 API。** 持有凭证运营记录的实例启动时会准备 Worker。验收要求主 API 的托管子进程存活，且该 API 收到一次成功鉴权的 `totp-claim`，证明持久恢复存储可用。原配置、旧运行包、原恢复目录和迁移记录均保留。失败自动撤除本次 drop-in、重启原模式并恢复旧 sidecar。后续升级主程序会继续使用已配置的 Worker 版本。
 
 迁移不创建 2FA 任务、不重新申请密钥、不撤销会话，也不证明真实 OpenAI MFA 协议成功。重新开始处理任务属于已有凭证运营行为。恢复暂时关闭的巡检/自动重登设置后，按原任务状态继续。
 

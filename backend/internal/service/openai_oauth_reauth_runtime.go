@@ -16,13 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/reauthruntime"
 )
 
-// Only releases reviewed against an upstream worker protocol are mapped to
-// its published runtime. Unknown fork/development versions keep the release
-// gate; update this list when the worker protocol or fork version changes.
-const managedReauthRuntimeVersion = "2.18.0"
-const managedReauthForkVersion = "2.21.5.12-ritel"
-
-func (s *OpenAIOAuthReauthService) configureWorker(cfg *config.Config, info BuildInfo) {
+func (s *OpenAIOAuthReauthService) configureWorker(cfg *config.Config) {
 	token := strings.TrimSpace(os.Getenv("OPENAI_REAUTH_WORKER_TOKEN"))
 	if token != "" {
 		s.workerToken = token
@@ -53,32 +47,8 @@ func (s *OpenAIOAuthReauthService) configureWorker(cfg *config.Config, info Buil
 			host = cfg.Server.Host
 		}
 	}
-	s.worker = reauthruntime.New(filepath.Join(dir, "credential-worker"), ManagedReauthRuntimeVersion(info.Version), "http://"+net.JoinHostPort(host, strconv.Itoa(port)), s.workerToken)
-}
-
-// ManagedReauthRuntimeVersion is shared by startup and offline release checks.
-func ManagedReauthRuntimeVersion(coreVersion string) string {
-	runtimeVersion := coreVersion
-	switch runtimeVersion {
-	case "2.21.5.13-ritel.reauth1":
-		runtimeVersion = "2.21.5-ritel-reauth.1"
-	case managedReauthForkVersion, "2.21.5.11-ritel", "2.21.5.10-ritel", "2.21.5.9-ritel", "2.21.5.8-ritel", "2.21.5.7-ritel", "2.21.5.6-ritel", "2.21.5.5-ritel", "2.21.5.4-ritel", "2.21.5.3-ritel", "2.21.5.2-ritel", "2.21.5.1-ritel", "2.21.2.10-ritel", "2.21.2.9-ritel", "2.21.2.8-ritel", "2.21.2.7-ritel", "2.21.2.6-ritel", "2.21.2.5-ritel", "2.21.2.4-ritel", "2.21.2.3-ritel", "2.21.2.2-ritel", "2.21.2.1-ritel", "2.21.1.4-ritel", "2.21.1.3-ritel", "2.21.1.2-ritel", "2.21.1.1-ritel", "2.19.2.28-ritel", "2.19.2.26-ritel", "2.19.2.25-ritel", "2.19.2.24-ritel", "2.19.2.22-ritel", "2.19.2.21-ritel", "2.19.2.20-ritel", "2.19.2.18-ritel", "2.19.2.17-ritel", "2.19.2.15-ritel", "2.19.2.14-ritel", "2.19.2.13-ritel", "2.19.2.12-ritel", "2.19.2.11-ritel", "2.19.2.10-ritel", "2.19.2.9-ritel":
-		runtimeVersion = "2.19.2-ritel-reauth.1"
-	case "2.19.2.8-ritel", "2.19.2.7-ritel", "2.19.2.6-ritel", "2.19.2.5-ritel", "2.19.2.4-ritel", "2.19.2.3-ritel":
-		runtimeVersion = managedReauthRuntimeVersion
-	case "2.9.8.1-ritel":
-		runtimeVersion = "2.9.8"
-	case "2.9.6.1-ritel":
-		runtimeVersion = "2.9.6"
-	case "2.9.4.1-ritel", "2.9.4.2-ritel", "2.9.4.3-ritel":
-		runtimeVersion = "2.9.4"
-	default:
-		_, suffix, _ := strings.Cut(coreVersion, "-")
-		if suffix == "ritel" || strings.HasPrefix(suffix, "ritel.") || strings.HasPrefix(suffix, "ritel-") {
-			return ""
-		}
-	}
-	return runtimeVersion
+	version := strings.TrimSpace(os.Getenv("OPENAI_REAUTH_WORKER_VERSION"))
+	s.worker = reauthruntime.New(filepath.Join(dir, "credential-worker"), version, "http://"+net.JoinHostPort(host, strconv.Itoa(port)), s.workerToken)
 }
 
 // WorkerAuthentication verifies the private protocol without exposing the key.

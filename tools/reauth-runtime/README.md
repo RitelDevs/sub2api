@@ -6,21 +6,17 @@
 VERSION=0.0.0-test ARCH=amd64 bash tools/reauth-runtime/build.sh
 ```
 
+## 独立发布
+
+需要更新 Worker 时，在明确的源码提交上运行同一构建脚本，将 `VERSION` 设为独立版本，例如 `2.21.5-ritel-reauth.2`。为每个要支持的架构验证便携包，然后将同一份已验归档发布到 `RitelDevs/sub2api` 的 `v<版本>` Release，并核对发布资产摘要。Worker 专用标签不会触发应用 Release。托管部署按 [部署配置](../../deploy/MANAGED_WORKER.md) 选择包，应用发版沿用当前版本。
+
 ## Ritel v2.25.3 Worker
 
-独立运行包版本为 `2.25.3-ritel-reauth.1`。构建固定下载 toSub2
-`8548397e89bf80e508eda64a87e0d556d43abc84`，校验原协议 SHA-256 后应用
-`totp-factor-binding.patch`。包内 manifest 记录补丁后的协议 SHA-256 和
-`totp_factor_binding=true`。Codex 适配器只接受原始协议及此补丁的两个精确 Git blob，
-两种版本均保留已有失败诊断和交互终止行为。
+此集成线已验证的 Linux amd64 Worker 为 `2.25.3-ritel-reauth.1`。托管部署用 `OPENAI_REAUTH_WORKER_VERSION=2.25.3-ritel-reauth.1` 选用该包。
 
-打包时运行现有 Python、Node 回归及实际补丁协议的 TOTP 因子绑定测试和 Worker HTTP／加密日志
-集成测试，再执行 Alpine 和 Ubuntu 便携运行验证。`-ritel-reauth.*` 专用标签由独立 Worker
-发布流程维护，核心 Release workflow 已排除此类标签。
+构建固定下载 toSub2 `8548397e89bf80e508eda64a87e0d556d43abc84`，校验原协议 SHA-256 后应用 `totp-factor-binding.patch`。包内 manifest 记录补丁后的协议 SHA-256 和 `totp_factor_binding=true`。Codex 适配器只接受原协议及该补丁的两个精确 Git blob，两种版本均保留已有失败诊断和交互终止行为。
 
-`2.25.3-ritel.rc1` 核心仍需要在其自身发布映射中显式选择此 Worker 版本。
-独立 Worker 发包及 API 联调通过后，由核心维护线登记映射并运行实际核心的
-`-check-reauth-runtime 2.25.3-ritel.rc1`。本目录的 Worker 构建不修改该映射。
+打包时运行现有 Python、Node、TOTP 因子绑定及 Worker HTTP／加密日志集成回归，再执行 Alpine 和 Ubuntu 便携运行验证。
 
 ## 本地 API 与数据库验收
 
@@ -49,8 +45,8 @@ CI `Re-login runtime` 在两种架构构建后，将 amd64 包部署到 Ubuntu 2
 
 ## 已有独立 Worker
 
-主程序网页升级不会替换外部 systemd Worker。已设置 `OPENAI_REAUTH_WORKER_TOKEN` 的实例须同步升级独立 Worker 脚本及运行依赖，并配置绝对路径 `OPENAI_TOTP_JOURNAL_DIR`。沿用原恢复目录和加密 key；目录 0700、key/档案 0600。旧 Worker 或不可用的恢复存储不会报到 2FA 能力，API 将拒绝新任务，不能靠反复点击更换按钮解决。
+设置 `OPENAI_REAUTH_WORKER_TOKEN` 的实例由外部 systemd Worker 提供服务。Worker 独立更新，并通过绝对路径 `OPENAI_TOTP_JOURNAL_DIR` 沿用原恢复目录和加密 key。目录使用 0700，key 和档案使用 0600。Worker 未报到 2FA 能力时，API 拒绝新的 2FA 任务。
 
 Worker 切换前排空活跃任务，保留原 `current` 和配置，按部署流程执行预检、切换和失败回滚。运行包的修复不改变 MFA 协议、任务状态或已有恢复档案格式。
 
-标准密码/TOTP sidecar 可用 [托管迁移工具](../../deploy/MANAGED_WORKER.md) 一次转入主程序自动管理。该迁移保留原 key/恢复记录并预校验当前版本运行包；以后主程序升级会自动选择配套 Worker。自定义邮箱协议继续使用外部模式。
+标准密码/TOTP sidecar 可用 [托管迁移工具](../../deploy/MANAGED_WORKER.md) 一次转入主程序自动管理。该迁移保留原 key 和恢复记录，并预校验指定版本的运行包。自定义邮箱协议继续使用外部模式。

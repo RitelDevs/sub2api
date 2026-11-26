@@ -86,12 +86,10 @@ def main():
     frontend = [args.pnpm, '--dir', 'frontend', 'run', 'build', '--outDir', 'dist']
     flags = f'-s -w -X main.Version={version} -X main.Commit={before["commit"]} -X main.Date={date} -X main.BuildType=release'
     backend = [args.go, 'build', '-mod=readonly', '-tags', 'embed', '-trimpath', '-ldflags', flags, '-o', str(output/'sub2api'), './cmd/server']
-    worker_check = [str(output/'sub2api'), '-check-reauth-runtime', version]
-    check_worker = args.arch == 'amd64' and re.split(r'[.-]', version.partition('-')[2], maxsplit=1)[0] == 'ritel'
     if args.plan:
         print(json.dumps({'source': before, 'version': version, 'date': date, 'output': str(output),
                           'public_origins': {'account': account, 'console': console},
-                          'steps': [frontend, backend] + ([worker_check] if check_worker else [])}, indent=2))
+                          'steps': [frontend, backend]}, indent=2))
         return
     if not before['clean']:
         parser.error('release builds require a clean, committed source tree')
@@ -139,8 +137,6 @@ def main():
         raise ValueError('frontend embed copy differs')
     run('web-embed-test', [args.go, 'test', '-mod=readonly', '-tags', 'embed', './internal/web'], ROOT/'backend')
     run('backend', backend, ROOT/'backend')
-    if check_worker:
-        run('reauth-runtime-check', worker_check, ROOT)
     info = capture([args.go, 'version', '-m', str(output/'sub2api')])
     if before['commit'] not in info or 'vcs.modified=false' not in info:
         raise ValueError('binary VCS provenance differs')

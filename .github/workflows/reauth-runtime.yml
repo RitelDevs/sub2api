@@ -27,6 +27,18 @@ on:
       - 'tools/test_openai_oauth_reauth_runtime_controls.py'
       - 'tools/reauth-runtime/**'
       - 'backend/internal/reauthruntime/**'
+      - 'backend/internal/handler/admin/openai_oauth_reauth_handler.go'
+      - 'backend/internal/handler/admin/openai_totp_rotation_handler.go'
+      - 'backend/internal/handler/admin/account_session_export.go'
+      - 'backend/internal/service/openai_oauth_reauth*.go'
+      - 'backend/internal/service/openai_totp_*.go'
+      - 'backend/internal/service/openai_session_export*.go'
+      - 'backend/internal/repository/openai_oauth_reauth*.go'
+      - 'backend/internal/repository/openai_totp_*.go'
+      - 'backend/internal/repository/openai_session_export*.go'
+      - 'backend/migrations/*_openai_oauth_reauth*.sql'
+      - 'backend/migrations/*_openai_totp_*.sql'
+      - 'backend/migrations/*_openai_session_export*.sql'
       - '.github/workflows/reauth-runtime.yml'
   workflow_dispatch:
 permissions:

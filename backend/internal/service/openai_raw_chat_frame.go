@@ -25,23 +25,25 @@ type rawChatLines interface {
 // Keep the original SSE fields and formatting for passthrough. Provider
 // normalizers and accounting receive the joined data from one event only.
 type rawChatFrame struct {
-	lines []string
-	data  []string
-	name  string
+	lines     []string
+	data      []string
+	name      string
+	delimited bool
 }
 
-func readRawChatFrame(src rawChatLines, limit int) (f rawChatFrame, err error) {
-	var size int
+func readRawChatFrame(src rawChatLines, limit int64) (f rawChatFrame, err error) {
+	var size int64
 	for src.Scan() {
 		line := src.Text()
 		if line == "" {
+			f.delimited = true
 			return f, nil
 		}
-		// Bound retained line headers as well as content, including empty data fields.
-		if len(line)+1 > limit-size || len(f.lines) >= max(1024, limit/32) {
+		// Budget the string headers retained in both slices as well as wire bytes.
+		if int64(len(line))+1+int64(len(f.lines)+len(f.data)+2)*16 > limit-size {
 			return f, bufio.ErrTooLong
 		}
-		size += len(line) + 1
+		size += int64(len(line)) + 1
 		f.lines = append(f.lines, line)
 		field, value, _ := strings.Cut(line, ":")
 		value = strings.TrimPrefix(value, " ")
@@ -183,20 +185,22 @@ func (st *rawChatObservation) observe(f *rawChatFrame, payload string, ctx conte
 	}
 }
 
+var openAIUsageCounterPaths = [...]string{
+	"input_tokens", "output_tokens", "prompt_tokens", "completion_tokens",
+	"cache_read_input_tokens", "cache_read_tokens", "cached_tokens", "prompt_cache_hit_tokens",
+	"cache_creation_input_tokens", "cache_write_tokens", "cache_write_input_tokens", "cache_creation_tokens",
+	"prompt_tokens_details.cached_tokens", "input_tokens_details.cached_tokens",
+	"prompt_tokens_details.image_tokens", "input_tokens_details.image_tokens", "completion_tokens_details.image_tokens", "output_tokens_details.image_tokens",
+	"prompt_tokens_details.cache_creation_input_tokens", "input_tokens_details.cache_creation_input_tokens",
+	"prompt_tokens_details.cache_write_tokens", "input_tokens_details.cache_write_tokens",
+	"prompt_tokens_details.cache_creation_tokens", "input_tokens_details.cache_creation_tokens",
+}
+
 // Empty objects and malformed counters are not measured zero usage. Apply the
 // same validation to canonical counters, cached inputs and media outputs.
 func rawChatUsageReported(value gjson.Result) bool {
 	reported := false
-	for _, key := range []string{
-		"input_tokens", "output_tokens", "prompt_tokens", "completion_tokens",
-		"cache_read_input_tokens", "cache_read_tokens", "cached_tokens", "prompt_cache_hit_tokens",
-		"cache_creation_input_tokens", "cache_write_tokens", "cache_write_input_tokens", "cache_creation_tokens",
-		"prompt_tokens_details.cached_tokens", "input_tokens_details.cached_tokens",
-		"prompt_tokens_details.image_tokens", "input_tokens_details.image_tokens", "completion_tokens_details.image_tokens", "output_tokens_details.image_tokens",
-		"prompt_tokens_details.cache_creation_input_tokens", "input_tokens_details.cache_creation_input_tokens",
-		"prompt_tokens_details.cache_write_tokens", "input_tokens_details.cache_write_tokens",
-		"prompt_tokens_details.cache_creation_tokens", "input_tokens_details.cache_creation_tokens",
-	} {
+	for _, key := range openAIUsageCounterPaths {
 		v := value.Get(key)
 		// Some providers use a negative cache-write sentinel. The cache parser
 		// clamps it to zero ahead of the creation alias; other buckets still count.
@@ -221,10 +225,11 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(c *gin.Context, resp *ht
 		observer = beginUpstreamResponseModelObservation(c)
 	}
 	id := resp.Header.Get("x-request-id")
-	maxFrame := defaultMaxLineSize
+	maxLineSize := defaultMaxLineSize
 	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
-		maxFrame = s.cfg.Gateway.MaxLineSize
+		maxLineSize = s.cfg.Gateway.MaxLineSize
 	}
+	maxFrame := SSEFrameLimit(maxLineSize)
 	refusal := newOpenAIChatSilentRefusalDetector(requestBodyLen)
 	sink := rawChatSink{writer: c.Writer, headers: s.newStreamHeaderWriter(c, resp.Header)}
 	var obs rawChatObservation
@@ -246,6 +251,14 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(c *gin.Context, resp *ht
 			break
 		}
 		payload := strings.Join(frame.data, "\n")
+		errorPayload := gjson.Get(payload, "error").IsObject() || gjson.Get(payload, "type").String() == "error" ||
+			(strings.Contains(payload, `"error"`) && gjson.Get(payload, `choices.#(finish_reason=="error")`).Exists())
+		if frame.name == "error" || errorPayload {
+			// A partial or malformed error frame must not hide a later transport failure.
+			if !frame.delimited || !errorPayload || !gjson.Valid(payload) {
+				continue
+			}
+		}
 		obs.observe(&frame, payload, ctx, c, observer, start)
 		if obs.semanticFailure || sink.err != nil {
 			if strings.TrimSpace(payload) == "[DONE]" {
@@ -256,10 +269,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(c *gin.Context, resp *ht
 		line := "data: " + payload
 		out := line
 		if len(frame.data) > 0 {
-			if frame.name == "error" || gjson.Get(payload, "error").IsObject() || gjson.Get(payload, "type").String() == "error" || (strings.Contains(payload, `"error"`) && gjson.Get(payload, `choices.#(finish_reason=="error")`).Exists()) {
-				if !gjson.Valid(payload) {
-					continue
-				}
+			if errorPayload {
 				obs.semanticFailure = true
 			} else {
 				out, err = normalizeMistralChatSSELine(account, line)

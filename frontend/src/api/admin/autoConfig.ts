@@ -13,6 +13,8 @@ export type OAuthInitialQualityRule = Pick<ScheduledTestPlan, 'model_id' | 'cron
 export interface AutoConfig {
  openai_account_defaults?: OpenAIAccountDefaultsConfig
 
+ json_import_auto_schedule?: Record<string, boolean>
+ two_fa_login_auto_schedule?: Record<string, boolean>
  apikey_disposition?: import('@/utils/oauthAPIKeyDisposition').OAuthAPIKeyDispositionConfig
  degradation_action?: import('@/utils/oauthDegradation').OAuthDegradationConfig
  openai_two_fa_admission?: OpenAITwoFAAdmissionConfig

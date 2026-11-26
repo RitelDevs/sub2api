@@ -1,4 +1,6 @@
 export default {
+  "rateLimitDegraded": "HTTP 429 · 連續三輪，策略計入降智",
+  "rateLimitPending": "HTTP 429 · 連續 {n}/3 輪",
   "oauth401MaxRounds": "OAuth 連續 401 後清理規則（輪）",
   "oauth401MaxRoundsHint": "僅對 OAuth 帳號生效，API Key 帳號不會自動清理。新規則默認 6 輪，可填 1–100；0 關閉，舊規則默認關閉。自身直連 401 當前支持 OpenAI OAuth，整輪樣本均滿足時計數；含 model_unavailable 跳過的輪次，還須帳號明確 401 且憑據已撤銷，其餘樣本均為自身直連 401。BPS 或借用憑據的 401 不計數，成功或其他錯誤清零。達到上限後刪除檢測規則及其歷史，保留帳號；規則仍持有隔離或冷卻狀態時會保留規則。",
   "invalidOAuth401MaxRounds": "上限須為 0–100 之間的整數輪數。",

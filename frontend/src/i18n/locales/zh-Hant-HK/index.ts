@@ -22,7 +22,7 @@ import gelv from './gelv'
 import paymentRetail from './paymentRetail'
 import squarespaceProvider from './squarespaceProvider'
 import ipAudit from './ipAudit'
-import traffic from './traffic'
+import usageApi from './usageApi'
 import connections from './connections'
 import securityRecords from './securityRecords'
 import siwc from './siwc'
@@ -69,7 +69,7 @@ export default {
   accountTestTiming,
   openaiAuth,
   upstreamEntities,
-  traffic,
+  usageApi,
   qq,
   gelv,
   paymentRetail,

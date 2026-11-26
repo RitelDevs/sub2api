@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -29,17 +30,13 @@ func TestGPT62ModelIdentityAndDescriptor(t *testing.T) {
 			require.Equal(t, base, normalizeKnownOpenAICodexModel(model))
 			require.Equal(t, base, NormalizeOpenAICompatRequestedModel(model))
 		}
-		descriptor := newConfiguredCodexModelDescriptor(base)
-		require.EqualValues(t, 1_050_000, descriptor.ContextWindow)
-		require.EqualValues(t, 1_050_000, descriptor.MaxContextWindow)
-		require.EqualValues(t, 128_000, descriptor.MaxOutputTokens)
-		require.Equal(t, []string{"text", "image"}, descriptor.InputModalities)
-		require.Empty(t, descriptor.officialMetadata)
-		var levels []string
-		for _, level := range descriptor.SupportedReasoningLevels {
-			levels = append(levels, level.Effort)
-		}
-		require.Equal(t, []string{"low", "medium", "high", "xhigh", "max"}, levels)
+		i := slices.IndexFunc(openai.DefaultModels, func(m openai.Model) bool { return m.ID == base })
+		require.NotEqual(t, -1, i)
+		model := openai.DefaultModels[i]
+		require.EqualValues(t, 1_050_000, model.ContextWindow)
+		require.EqualValues(t, 128_000, model.MaxOutputTokens)
+		require.Equal(t, []string{"text", "image"}, model.InputModalities)
+		require.Equal(t, []string{"low", "medium", "high", "xhigh", "max"}, model.ReasoningEfforts)
 		require.True(t, configuredCodexSupportsUltrafastServiceTier(base))
 	}
 	require.Equal(t, "gpt-6-astra", normalizeCodexModel("gpt-6-astra"))

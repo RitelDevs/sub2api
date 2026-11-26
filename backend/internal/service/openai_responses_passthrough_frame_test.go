@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/sse"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,14 +33,13 @@ func TestResponsesPassthroughObservesWholeFrame(t *testing.T) {
 
 func TestResponsesFrameLineEndingsAndAssemblyLimit(t *testing.T) {
 	const limit = 1024 * 1024
-	require.Equal(t, int64(9*limit), openAIResponsesFrameLimit(limit))
 	data := `data: {"delta":"` + strings.Repeat("x", limit-19) + `"}`
 	require.Less(t, len(data), limit)
 	wire := "event: response.output_text.delta\rid: 7\r\n" + data + "\n\r"
 	scanner := bufio.NewScanner(strings.NewReader(wire))
-	scanner.Split(newOpenAIResponsesLineSplit())
+	scanner.Split(sse.SplitLines())
 	scanner.Buffer(make([]byte, 4096), limit)
-	reader := openAIResponsesFrameReader{limit: openAIResponsesFrameLimit(limit)}
+	reader := openAIResponsesFrameReader{limit: SSEFrameLimit(limit)}
 	seen := 0
 	for scanner.Scan() {
 		err := reader.push(scanner.Text(), func(f *openAIResponsesFrame) {
@@ -52,4 +52,11 @@ func TestResponsesFrameLineEndingsAndAssemblyLimit(t *testing.T) {
 	}
 	require.NoError(t, scanner.Err())
 	require.Equal(t, 1, seen)
+	// Legal individual lines must still stop at the logical event budget.
+	comment := ":" + strings.Repeat("x", limit-2)
+	var assemblyErr error
+	for i := 0; i < 12 && assemblyErr == nil; i++ {
+		assemblyErr = reader.push(comment, func(*openAIResponsesFrame) { t.Fatal("incomplete event delivered") })
+	}
+	require.ErrorContains(t, assemblyErr, "assembly limit")
 }

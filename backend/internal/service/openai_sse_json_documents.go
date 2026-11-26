@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/sse"
 )
 
 const (
@@ -59,7 +60,6 @@ type openAISSEJSONDocumentScanner struct {
 	scanner *bufio.Scanner
 	pending []string
 	current string
-	started bool
 
 	// Diagnostic state only: emitted lines and the repair queue are unchanged.
 	timingEventType string
@@ -69,6 +69,9 @@ type openAISSEJSONDocumentScanner struct {
 }
 
 func newOpenAISSEJSONDocumentScanner(scanner *bufio.Scanner) *openAISSEJSONDocumentScanner {
+	if scanner != nil {
+		scanner.Split(sse.SplitLines())
+	}
 	return &openAISSEJSONDocumentScanner{scanner: scanner}
 }
 
@@ -94,10 +97,6 @@ func (s *openAISSEJSONDocumentScanner) Scan() (ok bool) {
 	}
 
 	line := s.scanner.Text()
-	if !s.started {
-		s.started = true
-		line = strings.TrimPrefix(line, "\xef\xbb\xbf")
-	}
 	data, ok := extractOpenAISSEDataLine(line)
 	if !ok {
 		s.current = line

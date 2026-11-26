@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -11,6 +12,41 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAccountUsageHistoryUserTimezone(t *testing.T) {
+	const zone = "America/New_York"
+	const accountID int64 = 27
+	ctx := timezone.WithUserDay(context.Background(), zone)
+	start := time.Date(2026, 11, 1, 4, 0, 0, 0, time.UTC)
+	end := start.Add(25 * time.Hour)
+	queryErr := errors.New("stop after daily history query")
+	for _, tc := range []struct {
+		name    string
+		pending bool
+	}{{"rollup", false}, {"backfill", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+			repo := newUsageLogRepositoryWithSQL(nil, db)
+			mock.ExpectBegin()
+			mock.ExpectQuery(`SELECT EXISTS\(SELECT 1 FROM account_usage_financial_pending`).
+				WithArgs(start, end).WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(tc.pending))
+			if tc.pending {
+				mock.ExpectRollback()
+				mock.ExpectQuery(`TO_CHAR\(created_at AT TIME ZONE \$4,`).
+					WithArgs(accountID, start, end, zone).WillReturnError(queryErr)
+			} else {
+				mock.ExpectQuery(`TO_CHAR\(at AT TIME ZONE \$4,`).
+					WithArgs(start, end, accountID, zone).WillReturnError(queryErr)
+				mock.ExpectRollback()
+			}
+			_, err = repo.GetAccountUsageStats(ctx, accountID, start, end)
+			require.ErrorIs(t, err, queryErr)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
 
 func TestDashboardTodayStats_BoundedDSTDaysPreserveLifetime(t *testing.T) {
 	loc, err := time.LoadLocation("America/New_York")

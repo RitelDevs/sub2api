@@ -22,7 +22,7 @@ func anthropicSSELineSplit() bufio.SplitFunc { return sse.SplitLines() }
 type anthropicSSEFrameAssembler struct {
 	name    string
 	data    strings.Builder
-	bytes   int
+	bytes   int64
 	hasData bool
 }
 
@@ -35,10 +35,10 @@ func (a *anthropicSSEFrameAssembler) line(line string, limit int) (name, payload
 	if limit <= 0 {
 		limit = defaultMaxLineSize
 	}
-	if len(line)+1 > limit-a.bytes {
+	if int64(len(line)) >= int64(limit)-a.bytes {
 		return "", "", false, errAnthropicSSEFrameTooLarge
 	}
-	a.bytes += len(line) + 1
+	a.bytes += int64(len(line)) + 1
 	field, value, _ := strings.Cut(line, ":")
 	value = strings.TrimPrefix(value, " ")
 	switch field {
@@ -71,7 +71,7 @@ func (st *anthropicCompatStream) nextEvent() (apicompat.AnthropicStreamEvent, st
 		if !ok && !errors.Is(st.readErr, io.EOF) {
 			break
 		}
-		name, payload, ready, err := st.frame.line(line, st.maxLineSize)
+		name, payload, ready, err := st.frame.line(line, st.frameLimit())
 		if err != nil {
 			st.readErr = err
 			_ = st.body.Close()

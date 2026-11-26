@@ -40,6 +40,36 @@ func finishBudgetTask(t *testing.T, taskID int64, status string, finished time.T
 	require.NoError(t, err)
 }
 
+func TestExpiredCodexClaimRequiresReconciliation(t *testing.T) {
+	for _, state := range []string{service.OpenAIOAuthReauthStatusRunning, service.OpenAIOAuthReauthStatusCallbackProcessing} {
+		t.Run(state, func(t *testing.T) {
+			ctx := context.Background()
+			guard, tasks, id, rules := newBudgetFixture(t)
+			original, err := tasks.CreateTask(ctx, id, "synthetic")
+			require.NoError(t, err)
+			claimed, err := tasks.ClaimNextTask(ctx, "first", time.Minute)
+			require.NoError(t, err)
+			require.NotNil(t, claimed)
+			require.Equal(t, original.ID, claimed.ID)
+			_, err = integrationDB.ExecContext(ctx, `UPDATE openai_oauth_reauth_tasks SET status=$1, claimed_at=NOW()-INTERVAL '2 minutes' WHERE id=$2`, state, claimed.ID)
+			require.NoError(t, err)
+			claim, err := tasks.ClaimNextTask(ctx, "replacement", time.Minute)
+			require.NoError(t, err)
+			require.Nil(t, claim)
+			record, err := tasks.GetTask(ctx, original.ID)
+			require.NoError(t, err)
+			require.Equal(t, service.OpenAIOAuthReauthStatusFailed, record.Status)
+			require.Equal(t, 1, record.Attempt)
+			require.Equal(t, service.ReloginOutcomeUnknown, record.Error)
+			_, err = guard.CreateAutomaticRelogin(ctx, id, "synthetic", "budget-owner", rules, time.Now().Add(30*time.Minute))
+			require.Equal(t, 409, infraerrors.Code(err))
+			stored, _, err := guard.ReconcileReloginBudget(ctx, id, "budget-owner", rules, time.Now(), service.AccountTokenGuardV2ProbeAuth)
+			require.NoError(t, err)
+			require.True(t, stored.AutoReloginExhausted)
+		})
+	}
+}
+
 func TestReloginBudgetAtomicGatePersistenceAndExplicitResume(t *testing.T) {
 	ctx := context.Background()
 	guard, tasks, id, rules := newBudgetFixture(t)

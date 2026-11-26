@@ -15,7 +15,18 @@ import (
 )
 
 func isMultiGroupBillingInfoRequest(c *gin.Context, key *service.APIKey) bool {
-	return c.Request.URL.Path == "/v1/sub2api/billing" && len(key.ConfiguredGroupIDs()) > 1
+	return (c.Request.URL.Path == "/v1/sub2api/billing" || isKeyGroupHealthRequest(c)) && len(key.ConfiguredGroupIDs()) > 1
+}
+
+func isKeyGroupHealthRequest(c *gin.Context) bool {
+	return c.Request.Method == http.MethodGet && c.FullPath() == "/v1/sub2api/group-health"
+}
+
+const gatewayUsageRecordsPath = "/v1/usage/records"
+
+// IsGatewayUsagePath identifies the two read-only accounting endpoints.
+func IsGatewayUsagePath(path string) bool {
+	return path == "/v1/usage" || path == gatewayUsageRecordsPath
 }
 
 const modelListingRefreshKey = "api_key.model_listing_refresh"
@@ -57,7 +68,7 @@ func selectAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subsc
 	if target, ok := c.Get("security_penalty.original_group_id"); ok && target != nil {
 		return key, nil
 	}
-	if len(key.ConfiguredGroupIDs()) < 2 || isMultiGroupBillingInfoRequest(c, key) || c.Request.URL.Path == "/v1/usage" || isAsyncImageTaskRead(c.Request.Method, c.Request.URL.Path) {
+	if len(key.ConfiguredGroupIDs()) < 2 || isMultiGroupBillingInfoRequest(c, key) || IsGatewayUsagePath(c.Request.URL.Path) || isAsyncImageTaskRead(c.Request.Method, c.Request.URL.Path) {
 		return key, nil
 	}
 	var models []string

@@ -81,6 +81,16 @@ func openAIWSHTTPBridgeRawField(body []byte, name string) (json.RawMessage, bool
 	return append(json.RawMessage(nil), raw...), present
 }
 
+// The bridge encodes the request as an object with unique keys before looking
+// up tools. The returned field borrows body until the tool-state setter copies it.
+func openAIWSHTTPBridgeNormalizedTools(body []byte) json.RawMessage {
+	tools := gjson.Get(openAIWSPayloadStringView(body), "tools")
+	if !tools.Exists() {
+		return nil
+	}
+	return openAIWSRawMessageFromResult(body, tools)
+}
+
 func openAIWSHTTPBridgeToolUpstreamName(account *Account) string {
 	if account != nil && account.Platform == PlatformGrok {
 		return "Grok WS HTTP bridge"
@@ -297,7 +307,7 @@ func prepareOpenAIWSHTTPBridgeSessionBody(account *Account, payload []byte, pres
 	if !preservePrevious {
 		delete(body, "previous_response_id")
 	}
-	if !shouldPreserveOpenAIResponsesNoneReasoningEffort(account) {
+	if !shouldPreserveOpenAIResponsesNoneReasoningEffort(account, gjson.ParseBytes(body["model"]).String()) {
 		if effort := gjson.ParseBytes(body["reasoning_effort"]); effort.Type == gjson.String && strings.EqualFold(strings.TrimSpace(effort.String()), "none") {
 			delete(body, "reasoning_effort")
 		}
@@ -343,15 +353,19 @@ func (c *openAIWSToolCallReplayCollector) AddEvent(eventType string, message []b
 		if !output.IsArray() {
 			return
 		}
-		if openAIAgentCompletedResponse(message, true) && len(output.Array()) > 0 {
+		items := output.Array()
+		if len(items) == 0 {
+			return
+		}
+		if openAIAgentCompletedResponse(message, true) {
 			// A nonempty terminal is authoritative, including updated message
 			// contents and exclusions from previously streamed done items.
 			c.finalItems = nil
-			for _, item := range output.Array() {
+			for _, item := range items {
 				c.finalItems = append(c.finalItems, json.RawMessage(item.Raw))
 			}
 		}
-		for _, item := range output.Array() {
+		for _, item := range items {
 			c.addAllItem(item)
 			c.addItem(item)
 		}
@@ -549,13 +563,15 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	if err != nil {
 		return nil, fmt.Errorf("prepare http bridge body: %w", err)
 	}
-	grokIntentSourceBody := append([]byte(nil), body...)
-	_, grokExplicitToolsField := openAIWSHTTPBridgeRawField(grokIntentSourceBody, "tools")
-	grokExplicitToolIntent := account.Platform == PlatformGrok && hasGrokResponsesToolIntent(grokIntentSourceBody)
+	var grokIntentSourceBody []byte
 	var clientToolMapping apicompat.ResponsesClientToolMapping
 	functionToolUpstream := (account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey) || account.Platform == PlatformGrok
 	if functionToolUpstream {
+		var grokExplicitToolsField, grokExplicitToolIntent bool
 		if account.Platform == PlatformGrok {
+			grokIntentSourceBody = append([]byte(nil), body...)
+			grokExplicitToolsField = openAIWSHTTPBridgeNormalizedTools(grokIntentSourceBody) != nil
+			grokExplicitToolIntent = hasGrokResponsesToolIntent(grokIntentSourceBody)
 			body, err = sanitizeGrokResponsesInput(body)
 			if err != nil {
 				return nil, fmt.Errorf("sanitize Grok WS HTTP bridge input: %w", err)
@@ -563,7 +579,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 		inheritedState, _ := openAIWSHTTPBridgeToolStateFromContext(c)
 		clientTools := inheritedState.ClientTools
-		if currentTools, present := openAIWSHTTPBridgeRawField(body, "tools"); present {
+		if currentTools := openAIWSHTTPBridgeNormalizedTools(body); currentTools != nil {
 			clientTools = currentTools
 		}
 		inheritedLoweredTools := decodeOpenAIWSHTTPBridgeLoweredTools(inheritedState.LoweredTools)
@@ -585,7 +601,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			grokIntentSourceBody = append(grokIntentSourceBody[:0], body...)
 		}
 		loweredTools := inheritedState.LoweredTools
-		if currentTools, present := openAIWSHTTPBridgeRawField(body, "tools"); present {
+		if currentTools := openAIWSHTTPBridgeNormalizedTools(body); currentTools != nil {
 			loweredTools = currentTools
 		}
 		setOpenAIWSHTTPBridgeToolState(c, openAIWSHTTPBridgeToolState{
@@ -594,7 +610,8 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			LoweredTools:  loweredTools,
 		})
 	}
-	if account.Platform != PlatformGrok && isOpenAIResponsesLiteWebSocketPayload(payload) {
+	responsesLite := account.Platform != PlatformGrok && isOpenAIResponsesLiteWebSocketPayload(payload)
+	if responsesLite {
 		liteBody, liteChanged, liteErr := normalizeOpenAIResponsesLitePayloadForAccount(body, account)
 		if liteErr != nil {
 			return nil, fmt.Errorf("normalize responses Lite payload: %w", liteErr)
@@ -667,7 +684,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if buildErr != nil {
 			return nil, buildErr
 		}
-		if account.Platform != PlatformGrok && isOpenAIResponsesLiteWebSocketPayload(payload) {
+		if responsesLite {
 			upstreamReq.Header.Set(responsesLiteHeader, "true")
 		}
 		if err := applyMappedGPT55LiteCompatibility(upstreamReq, account, requestBody); err != nil {
@@ -866,6 +883,8 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	tokenEventCount := 0
 	terminalEventCount := 0
 	replayCollector := &openAIWSToolCallReplayCollector{}
+	var deliveredOutput openAIWSHTTPBridgeOutputHistory
+	preserveOAuthOutput := account.IsOpenAIOAuth() && openAIWSPlaintextBridgeAccount(account)
 	firstEventType := ""
 	lastEventType := ""
 	upstreamTerminalEvent := ""
@@ -932,6 +951,18 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			result.wsReplayInputExists = true
 		}
 		result.wsAccountFailoverReplayInput = replayCollector.AllItems()
+		if preserveOAuthOutput {
+			// Both continuation and account-failover history must exclude failed,
+			// incomplete and undelivered turns, including disconnect usage drains.
+			result.wsReplayInput = nil
+			result.wsReplayInputExists = false
+			result.wsAccountFailoverReplayInput = nil
+			if deliveredOutput.completed && !clientDisconnected && ctx.Err() == nil && deliveredOutput.responseID == responseID {
+				result.wsReplayInput = slices.Clone(deliveredOutput.output)
+				result.wsReplayInputExists = true
+				result.wsAccountFailoverReplayInput = slices.Clone(deliveredOutput.output)
+			}
+		}
 		if imageCount > 0 {
 			result.ImageCount = imageCount
 			result.ImageSize = imageSizeTier
@@ -1217,6 +1248,9 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 					}
 					if !isKeepalive {
 						wroteDownstream = true
+					}
+					if preserveOAuthOutput {
+						deliveredOutput.delivered(message)
 					}
 				}
 			}

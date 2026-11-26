@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
@@ -439,11 +440,19 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 		c.Writer.Header().Set("Content-Type", "application/json")
 	}
 	c.Writer.WriteHeader(http.StatusOK)
-	_, observationWriteErr := c.Writer.Write(respBody)
-	operationProtocolOutputFlushed(observationCtx)
+	n, observationWriteErr := c.Writer.Write(respBody)
+	if observationWriteErr == nil && n != len(respBody) {
+		observationWriteErr = io.ErrShortWrite
+	}
+	if observationWriteErr == nil {
+		observationWriteErr = finalizeBufferedChatDelivery(c)
+	}
+	if observationWriteErr == nil {
+		operationProtocolOutputFlushed(observationCtx)
+	}
 	operationProtocolDelivered(observationCtx, observationWriteErr)
 
-	return &OpenAIForwardResult{
+	result := &OpenAIForwardResult{
 		RequestID:                     requestID,
 		UpstreamHeaders:               resp.Header,
 		Usage:                         usage,
@@ -457,7 +466,14 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 		ServiceTier:                   resolvedOpenAIUpstreamServiceTier(c, serviceTier),
 		Stream:                        false,
 		Duration:                      requesttiming.Now(c.Request.Context()).Sub(startTime),
-	}, nil
+	}
+	if observationWriteErr != nil {
+		result.streamReadIncomplete = true
+		result.ClientDisconnect = !errors.Is(observationWriteErr, apicompat.ErrGeminiResponseConversion)
+		result.ObservedUsageOnError = rawChatUsageReported(gjson.GetBytes(respBody, "usage"))
+		result.UsageUnavailable = !result.ObservedUsageOnError
+	}
+	return result, observationWriteErr
 }
 
 // buildOpenAIChatCompletionsURL 拼接上游 Chat Completions 端点 URL。

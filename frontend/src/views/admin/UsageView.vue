@@ -27,7 +27,7 @@
           {{ tab.label }}
         </button>
       </div>
-      <UsageFilters v-if="activeTab !== 'traffic'" v-model="filters" ref="usageFiltersRef" :notice-user-id="props.observerMode ? undefined : authStore.user?.id" :show-record-actions="usagePage === 'records'" flat :mode="activeTab === 'analysis' ? 'usage' : activeTab" class="admin-usage-filters" data-testid="admin-usage-filters" :start-date="startDate" :end-date="endDate" :exporting="exporting" :model-options="modelNameOptions" @change="applyFilters" @refresh="refreshData" @reset="resetFilters" @cleanup="openCleanupDialog" @export="exportToExcel">
+      <UsageFilters v-model="filters" ref="usageFiltersRef" :notice-user-id="props.observerMode ? undefined : authStore.user?.id" :show-record-actions="usagePage === 'records'" flat :mode="activeTab === 'analysis' ? 'usage' : activeTab" class="admin-usage-filters" data-testid="admin-usage-filters" :start-date="startDate" :end-date="endDate" :exporting="exporting" :model-options="modelNameOptions" @change="applyFilters" @refresh="refreshData" @reset="resetFilters" @cleanup="openCleanupDialog" @export="exportToExcel">
         <template #before-filters>
           <div class="usage-time-filter">
             <label class="input-label">{{ t('admin.dashboard.timeRange') }}</label>
@@ -159,7 +159,6 @@
           :filters="connectionFilters"
           :refresh-key="connectionRefreshKey"
         />
-        <TrafficPanel v-if="!props.observerMode && activeTab === 'traffic'" admin />
         <LatencyObservabilityPanel
           v-if="!props.observerMode && activeTab === 'latency'"
           flat
@@ -238,7 +237,6 @@ import UsageStatsCards from '@/components/admin/usage/UsageStatsCards.vue'; impo
 import UsageTable from '@/components/admin/usage/UsageTable.vue'; import UsageExportProgress from '@/components/admin/usage/UsageExportProgress.vue'
 import UsageConnections from '@/components/admin/usage/UsageConnections.vue'
 import LatencyObservabilityPanel from '@/components/admin/usage/LatencyObservabilityPanel.vue'
-import TrafficPanel from '@/components/usage/TrafficPanel.vue'
 import UserTokenRanking from '@/components/admin/usage/UserTokenRanking.vue'
 import UsageCleanupDialog from '@/components/admin/usage/UsageCleanupDialog.vue'
 import UserBalanceHistoryModal from '@/components/admin/user/UserBalanceHistoryModal.vue'
@@ -830,7 +828,6 @@ const detailTabs = computed(() => usagePage.value === 'analysis' ? [
   { key: 'usage' as const, label: t('usage.tabs.usage'), icon: 'document' as const },
   ...(canViewErrors.value ? [{ key: 'errors' as const, label: t('usage.tabs.errors'), icon: 'exclamationTriangle' as const }] : []),
   ...(!props.observerMode ? [{ key: 'connections' as const, label: t('connections.title'), icon: 'clock' as const }] : []),
-  ...(!props.observerMode ? [{ key: 'traffic' as const, label: t('traffic.title'), icon: 'chart' as const }] : []),
   ...(!props.observerMode ? [{ key: 'latency' as const, label: t('latencyObservability.title'), icon: 'clock' as const }] : []),
 ])
 const usageFiltersRef = ref<InstanceType<typeof UsageFilters> | null>(null)

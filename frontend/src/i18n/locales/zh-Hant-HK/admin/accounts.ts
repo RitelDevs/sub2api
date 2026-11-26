@@ -1,5 +1,7 @@
 export default {
     accounts: {
+      domesticRouteAutoScheduleHint: '每小時沿此帳號的出口發送一次短流式請求，可能消耗上游額度。首字低於 3 秒啟用調度，達到 3 秒、超時或上游失敗時關閉。暫停調度期間繼續復測。',
+      domesticRouteAutoSchedule: '國模線路測試自動調度',
     platformSwitch: {
       hint: "可切換到相容當前憑證類型的平台。API Key 和自訂地址保留，請確認目標平台支援該上游。",
       resetHint: "切換後將重置模型映射、平台專屬設定及不相容分組。請檢查目標平台配置，儲存後再同步模型或重新整理用量。",
@@ -344,6 +346,14 @@ export default {
         }
       },
       upstreamBilling: {
+        groupSynced: '帳號名稱與備注已同步',
+        groupFailed: '同步上游分組資料失敗',
+        groupUnavailable: '上游沒有返回可同步的分組名稱或描述。',
+        groupCredentials: '請填寫上游地址和 API Key。更換地址或代理後需重新輸入金鑰。',
+        saveGroup: '同步並儲存上游分組名稱與備注',
+        syncGroup: '同步上游分組名稱與備注',
+        autoSyncGroupHint: '成功探測後，上游提供的名稱和描述會覆蓋本地名稱與備注。帳號倍率由單獨的開關控制。',
+        autoSyncGroup: '自動同步上游分組名稱與備注',
         newAPI: {
           upstreamVerificationFailed: "無法完成上游查詢。請檢查站點是否可訪問、用戶 ID 和訪問權杖是否有效，以及權杖是否允許查詢錢包和完整權杖列表。",
           keyNotOwned: "該帳戶的 API Key 未出現在此用戶的權杖列表中。",
@@ -1420,6 +1430,24 @@ export default {
       interceptWarmupRequests: '攔截預熱請求',
       interceptWarmupRequestsDesc: '啟用後，標題生成等預熱請求將返回 mock 響應，不消耗上游 token',
       headerOverride: {
+        variableNotes: {
+          unresolved: '取不到值時（測試連接、模型同步等沒有用戶的後台請求）整條請求頭不發送，也不會沿用客戶端自帶的同名頭。',
+          apiKeyOnly: '僅對 API Key 帳號生效，OAuth 帳號永遠不會上報。',
+          websocket: 'OpenAI WebSocket 模式下握手頭按連接發送：含請求 ID 的請求頭不發送，不同上報身份的請求不會共用上游連接。'
+        },
+        variables: {
+          user_id: { label: '用戶 ID', desc: '發起請求的網關用戶' },
+          api_key_id: { label: 'API Key ID', desc: '本次請求使用的 Key，同一用戶多把 Key 時可區分' },
+          group_id: { label: '分組 ID', desc: 'Key 綁定的分組；未綁定分組時該請求頭不發送' },
+          request_id: { label: '請求 ID', desc: '與錯誤記錄里的「請求 ID」一致，可直接對帳；字母數字和 . _ - 以外的字符會替換為下划線' }
+        },
+        variablesUnavailable: 'OAuth 帳號不支持身份上報變量：訂閱上游不會收到網關內的用戶身份，這裡只能填寫固定值。',
+        variablesHint: '把網關內的用戶身份隨請求頭報給上游，方便逐層定位到具體用戶。游標在某個值輸入框內時點擊變量會插入到游標處，否則新增一行。',
+        variablesTitle: '身份上報變量',
+        previewLabel: '發送示例',
+        removeRow: '刪除該請求頭',
+        variableNotAllowed: 'OAuth 帳號不支持身份上報變量，請刪除該行或改為固定值',
+        invalidVariable: '變量寫法不正確：請從下方「身份上報變量」中選擇，不支持其它變量名',
         title: '請求頭覆寫',
         hint: '轉發時用配置值覆蓋同名請求頭（不區分大小寫）',
         info: '僅對本帳戶的出站請求生效：配置的請求頭會在轉發前覆蓋用戶端/網關生成的同名頭。認證頭（authorization、x-api-key）與連接控制頭不允許覆寫。',

@@ -74,7 +74,8 @@ func finishAPIKeyModelDiscoveryAuth(c *gin.Context, key *service.APIKey, google 
 			abortWithAPIKeyQuotaError(c)
 		}
 	default:
-		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), ctxkey.UserID, key.User.ID))
+		ctx := context.WithValue(c.Request.Context(), ctxkey.UserID, key.User.ID)
+		c.Request = c.Request.WithContext(service.WithHeaderOverrideRequestScope(ctx, key.User.ID, key.ID, key.GroupID))
 		c.Set(string(ContextKeyAPIKey), key)
 		c.Set(string(ContextKeyUser), AuthSubject{UserID: key.User.ID, Concurrency: key.User.Concurrency})
 		c.Set(string(ContextKeyUserRole), key.User.Role)

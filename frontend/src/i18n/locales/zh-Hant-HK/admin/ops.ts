@@ -385,6 +385,12 @@ export default {
       },
       // Error Detail Modal
       errorDetail: {
+        reportedHeaders: {
+          title: '身份上報請求頭',
+          hint: '本次請求轉發時實際發給上游的身份請求頭（由帳號「請求頭覆寫」中的變量生成），可拿去與上游逐層對帳。覆寫值里混有固定文本時，固定文本以 … 代替、變量以「名稱=值」顯示，避免金鑰進入日誌。',
+          copy: '複製',
+          copied: '已複製'
+        },
         title: '錯誤詳情',
         titleWithId: '錯誤 #{id}',
         noErrorSelected: '未選擇錯誤。',

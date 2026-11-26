@@ -3,8 +3,8 @@ import type { AdminUsageQueryParams } from '@/api/admin/usage'
 import { objectQueryId } from './objectContext'
 
 export type UsagePage = 'analysis' | 'records'
-export type UsageDetailTab = 'analysis' | 'usage' | 'errors' | 'connections' | 'ranking' | 'traffic' | 'latency'
-const recordTabs = ['usage', 'errors', 'connections', 'traffic', 'latency']
+export type UsageDetailTab = 'analysis' | 'usage' | 'errors' | 'connections' | 'ranking' | 'latency'
+const recordTabs = ['usage', 'errors', 'connections', 'latency']
 const boolKeys = ['stream', 'native_compaction_v2', 'upstream_model_mismatch'] as const
 const idKeys = ['user_id', 'api_key_id', 'account_id', 'group_id'] as const
 const stringKeys = ['model', 'request_id', 'billing_mode', 'error_phase', 'error_category', 'timezone', 'platform'] as const
@@ -23,7 +23,7 @@ export function parseAdminUsageLocation(query: LocationQuery, defaults: { start:
   const page: UsagePage = legacy === 'analysis' || tabQuery === 'ranking' ? 'analysis' : 'records'
   let tab: UsageDetailTab = page === 'analysis' ? tabQuery === 'ranking' ? 'ranking' : 'analysis'
     : recordTabs.includes(tabQuery ?? '') ? tabQuery as UsageDetailTab : 'usage'
-  if (observer && ['connections', 'ranking', 'traffic', 'latency'].includes(tab)) tab = page === 'analysis' ? 'analysis' : 'usage'
+  if (observer && ['connections', 'ranking', 'latency'].includes(tab)) tab = page === 'analysis' ? 'analysis' : 'usage'
   const queryStart = queryValue(query.start_date)
   const queryEnd = queryValue(query.end_date)
   const calendarBoundary = (queryStart && !queryStart.includes('T')) || (queryEnd && !queryEnd.includes('T'))
@@ -34,7 +34,7 @@ export function parseAdminUsageLocation(query: LocationQuery, defaults: { start:
   for (const key of idKeys) filters[key] = observer && ['user_id', 'account_id'].includes(key) ? undefined : objectQueryId(query[key])
   for (const key of boolKeys) filters[key] = optionalBool(query[key])
   for (const key of stringKeys) filters[key] = queryValue(query[key])
-  if (observer || !['usage', 'analysis'].includes(tab)) filters.platform = undefined
+  if (observer || !['usage', 'analysis', 'errors'].includes(tab)) filters.platform = undefined
   const type = queryValue(query.request_type)
   if (type && requestTypes.includes(type)) filters.request_type = type as AdminUsageQueryParams['request_type']
   const billing = queryValue(query.billing_type)
@@ -56,7 +56,7 @@ export function adminUsageLocationQuery(state: {
     start_date: state.start, end_date: state.end, preset: state.preset ?? undefined,
     granularity: state.granularity, sort_by: state.sortBy, sort_order: state.sortOrder }
   for (const key of [...idKeys, ...boolKeys, ...stringKeys, 'request_type', 'billing_type', 'status_code'] as const) {
-    const value = key === 'platform' && !['usage', 'analysis'].includes(state.tab) ? undefined : state.filters[key]
+    const value = key === 'platform' && !['usage', 'analysis', 'errors'].includes(state.tab) ? undefined : state.filters[key]
     query[key] = value == null || value === '' ? undefined : String(value)
   }
   return query

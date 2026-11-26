@@ -82,11 +82,12 @@
                   <input type="checkbox" :checked="row.balanceRule?.enabled ?? row.quotaRule?.enabled" :disabled="busy" :aria-label="`${row.group.name} ${t('accountOps.ruleEnabled')}`" @change="emit('toggle', row.group, row.accounts, ($event.target as HTMLInputElement).checked)" />
                   {{ t('accountOps.channelEnabled') }}
                 </label>
-                <button type="button" class="text-sm text-primary-600 hover:underline" :data-testid="`edit-rule-${row.group.id}`" :disabled="selectionUnavailable" @click="editRow(row)">{{ t('common.edit') }}</button>
+                <button type="button" class="text-sm text-primary-600 hover:underline" :data-testid="`edit-rule-${row.group.id}`" :disabled="selectionUnavailable" @click="editRow(row)">{{ t(row.group.mode === 'account' ? 'accountOps.manageGroups' : 'accountOps.editRule') }}</button>
               </div></template>
-      <template #empty><p v-if="!error" class="p-8 text-center text-sm text-gray-500">{{ t('accountOps.noThresholdAccounts') }}</p></template>
+      <template #empty><p v-if="!error" class="p-8 text-center text-sm text-gray-500">{{ t(channelView && activeView === 'wallets' ? 'channelConfig.emptyWallets' : 'accountOps.noThresholdAccounts') }}</p></template>
     </DataTable>
-    <Pagination v-if="channelView && filtered.length > pageSize" :page="page" :page-size="pageSize" :total="filtered.length" :show-page-size-selector="false" @update:page="page = $event" />
+    <Pagination v-if="channelView && filtered.length > pageSize" :page="page" :page-size="pageSize" :total="filtered.length" :show-page-size-selector="false" :show-jump="false" @update:page="page = $event" />
+    <details class="border-t border-gray-100 dark:border-dark-700" data-testid="failure-settings"><summary class="cursor-pointer px-5 py-3 text-sm text-gray-500">{{ t('accountOps.failureSettingsSummary') }}</summary><slot name="global-settings" /></details>
   </section>
 </template>
 

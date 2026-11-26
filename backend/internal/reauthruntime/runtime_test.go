@@ -103,6 +103,40 @@ func TestPrepareVerifiesDigestBeforeExecutingAndReusesCache(t *testing.T) {
 	}
 }
 
+func TestPrepareFetchesRitelReleasesFromForkRepository(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux runtime")
+	}
+	script := "#!/bin/sh\nexit 0\n"
+	data := archive(t, []*tar.Header{{Name: "python", Typeflag: tar.TypeReg, Size: int64(len(script)), Mode: 0755}}, []string{script})
+	sum := sha256.Sum256(data)
+	digest := hex.EncodeToString(sum[:])
+	for version, repository := range map[string]string{
+		"2.21.5-ritel-reauth.1": "RitelDevs/sub2api",
+		"2.19.2-ritel-reauth.1": "RitelDevs/sub2api",
+		"1.2.3":                 "ranxi2001/sub2api",
+	} {
+		t.Run(version, func(t *testing.T) {
+			var requested []string
+			m := New(t.TempDir(), version, "http://127.0.0.1:4040", strings.Repeat("x", 64))
+			m.client = &http.Client{Transport: transportFunc(func(req *http.Request) (*http.Response, error) {
+				requested = append(requested, req.URL.String())
+				body := data
+				if strings.Contains(req.URL.Path, "/releases/tags/") {
+					body, _ = json.Marshal(map[string]any{"assets": []map[string]string{{"name": "sub2api-reauth_" + version + "_linux_" + runtime.GOARCH + ".tar.gz", "digest": "sha256:" + digest}}})
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body)), Header: http.Header{}}, nil
+			})}
+			_, err := m.prepare(context.Background())
+			require.NoError(t, err)
+			require.Len(t, requested, 2)
+			for _, url := range requested {
+				require.Contains(t, url, repository)
+			}
+		})
+	}
+}
+
 func TestStopCancelsPreparationAndCannotRestart(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux runtime preparation")

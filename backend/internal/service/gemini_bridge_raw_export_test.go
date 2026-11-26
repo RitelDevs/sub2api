@@ -11,5 +11,10 @@ import (
 
 // This test-only entry connects the real Chat pump to the public Gemini handler.
 func ForwardGeminiRawFixture(c *gin.Context, resp *http.Response) (*OpenAIForwardResult, error) {
-	return (&OpenAIGatewayService{}).streamRawChatCompletions(c, resp, &Account{ID: 101}, "fixture", "fixture", "fixture", nil, nil, time.Now(), 64)
+	s := &OpenAIGatewayService{}
+	account := &Account{ID: 101}
+	if resp.Header.Get("Content-Type") == "application/json" {
+		return s.bufferRawChatCompletions(c, resp, account, "fixture", "fixture", "fixture", nil, nil, time.Now())
+	}
+	return s.streamRawChatCompletions(c, resp, account, "fixture", "fixture", "fixture", nil, nil, time.Now(), 64)
 }

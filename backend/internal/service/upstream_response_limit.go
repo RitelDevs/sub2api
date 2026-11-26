@@ -24,6 +24,16 @@ func resolveUpstreamResponseReadLimit(cfg *config.Config) int64 {
 }
 
 func readUpstreamResponseBodyLimited(reader io.Reader, maxBytes int64) ([]byte, error) {
+	body, err := readUpstreamResponseBodyPrefix(reader, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+// Return only bytes within the configured limit, including on read failure.
+// Buffered Responses can recover usage from events dispatched before the error.
+func readUpstreamResponseBodyPrefix(reader io.Reader, maxBytes int64) ([]byte, error) {
 	if reader == nil {
 		return nil, errors.New("response body is nil")
 	}
@@ -32,13 +42,13 @@ func readUpstreamResponseBodyLimited(reader io.Reader, maxBytes int64) ([]byte, 
 	}
 
 	body, err := io.ReadAll(io.LimitReader(reader, maxBytes+1))
-	if err != nil {
-		return nil, err
-	}
 	if int64(len(body)) > maxBytes {
-		return nil, fmt.Errorf("%w: limit=%d", ErrUpstreamResponseBodyTooLarge, maxBytes)
+		body = body[:maxBytes]
+		if err == nil {
+			err = fmt.Errorf("%w: limit=%d", ErrUpstreamResponseBodyTooLarge, maxBytes)
+		}
 	}
-	return body, nil
+	return body, err
 }
 
 // TooLargeWriter 在响应超限时向客户端写格式化的错误响应。
@@ -51,14 +61,18 @@ func ReadUpstreamResponseBody(reader io.Reader, cfg *config.Config, c *gin.Conte
 	body, err := readUpstreamResponseBodyLimited(reader, maxBytes)
 	if err != nil {
 		if errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
-			setOpsUpstreamError(c, http.StatusBadGateway, "upstream response too large", "")
-			if onTooLarge != nil {
-				onTooLarge(c)
-			}
+			writeUpstreamResponseTooLarge(c, onTooLarge)
 		}
 		return nil, err
 	}
 	return body, nil
+}
+
+func writeUpstreamResponseTooLarge(c *gin.Context, onTooLarge TooLargeWriter) {
+	setOpsUpstreamError(c, http.StatusBadGateway, "upstream response too large", "")
+	if onTooLarge != nil {
+		onTooLarge(c)
+	}
 }
 
 // anthropicTooLargeError 以 Anthropic Messages API 格式写入超限错误。

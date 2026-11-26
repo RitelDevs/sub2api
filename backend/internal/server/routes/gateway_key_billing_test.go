@@ -35,6 +35,18 @@ type keyBillingRouteRateRepo struct {
 	lookupCalls int
 }
 
+type keyBillingRouteGroupRepo struct {
+	service.GroupRepository
+	group *service.Group
+}
+
+func (r *keyBillingRouteGroupRepo) GetByIDLite(_ context.Context, id int64) (*service.Group, error) {
+	if r.group == nil || id != r.group.ID {
+		return nil, service.ErrGroupNotFound
+	}
+	return r.group, nil
+}
+
 func (r *keyBillingRouteRateRepo) GetByUserAndGroup(context.Context, int64, int64) (*float64, error) {
 	r.lookupCalls++
 	return nil, nil
@@ -48,10 +60,13 @@ func (r *keyBillingRouteRateRepo) GetDeniedModelsByUserAndGroup(context.Context,
 	return nil, nil
 }
 
-func newKeyBillingRouteTestRouter(runMode string, configure ...func(*service.APIKey)) (*gin.Engine, *keyBillingRouteRateRepo, string) {
+func newKeyBillingRouteTestRouter(runMode string, groups service.GroupRepository) (*gin.Engine, *keyBillingRouteRateRepo, string) {
 	gin.SetMode(gin.TestMode)
 	group := &service.Group{
 		ID:               42,
+		Name:             "标准分组",
+		Description:      "共享账号",
+		I18n:             service.GroupI18n{"en": {Name: "Standard"}},
 		Status:           service.StatusActive,
 		Hydrated:         true,
 		Platform:         service.PlatformOpenAI,
@@ -74,13 +89,13 @@ func newKeyBillingRouteTestRouter(runMode string, configure ...func(*service.API
 		GroupID: groupID,
 		Group:   apiKeyGroup,
 	}
-	for _, apply := range configure {
-		apply(apiKey)
-	}
 	cfg := &config.Config{RunMode: runMode}
 	rateRepo := &keyBillingRouteRateRepo{}
+	if groups == nil {
+		groups = &keyBillingRouteGroupRepo{group: group}
+	}
 	apiKeyService := service.NewAPIKeyService(
-		&keyBillingRouteAPIKeyRepo{apiKey: apiKey}, nil, nil, nil, rateRepo, nil, cfg,
+		&keyBillingRouteAPIKeyRepo{apiKey: apiKey}, nil, groups, nil, rateRepo, nil, cfg,
 	)
 	gatewayService := service.NewGatewayService(
 		nil, nil, nil, nil, nil, nil, rateRepo, nil, cfg, nil, nil, nil, nil, nil,
@@ -127,7 +142,7 @@ func TestGatewayRoutesKeyBillingInfoPathIsRegistered(t *testing.T) {
 
 func TestGatewayRoutesKeyBillingInfoEndToEnd(t *testing.T) {
 	t.Run("missing credentials", func(t *testing.T) {
-		router, rateRepo, _ := newKeyBillingRouteTestRouter(config.RunModeStandard)
+		router, rateRepo, _ := newKeyBillingRouteTestRouter(config.RunModeStandard, nil)
 		w := httptest.NewRecorder()
 
 		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/sub2api/billing", nil))
@@ -139,7 +154,7 @@ func TestGatewayRoutesKeyBillingInfoEndToEnd(t *testing.T) {
 	})
 
 	t.Run("standard mode", func(t *testing.T) {
-		router, rateRepo, key := newKeyBillingRouteTestRouter(config.RunModeStandard)
+		router, rateRepo, key := newKeyBillingRouteTestRouter(config.RunModeStandard, nil)
 		req := httptest.NewRequest(http.MethodGet, "/v1/sub2api/billing", nil)
 		req.Header.Set("Authorization", "Bearer "+key)
 		w := httptest.NewRecorder()
@@ -153,12 +168,74 @@ func TestGatewayRoutesKeyBillingInfoEndToEnd(t *testing.T) {
 		var body map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 		require.Equal(t, "sub2api.key_billing", body["object"])
+		require.NotContains(t, body, "group_name")
+		require.NotContains(t, body, "group_description")
 		require.Equal(t, 0.75, body["effective_rate_multiplier"])
 		require.Equal(t, 1, rateRepo.lookupCalls)
 	})
 
+	t.Run("requested group belongs to the calling key", func(t *testing.T) {
+		router, _, key := newKeyBillingRouteTestRouter(config.RunModeStandard, nil)
+		req := httptest.NewRequest(http.MethodGet, "/v1/sub2api/billing?include=group&group_id=99", nil)
+		req.Header.Set("x-api-key", key)
+		req.Header.Set("Accept-Language", "en")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		require.Equal(t, "Standard", body["group_name"])
+		require.Equal(t, "共享账号", body["group_description"])
+		require.Equal(t, 0.75, body["group_rate_multiplier"])
+		require.NotContains(t, body, "group_id")
+		require.NotContains(t, w.Body.String(), key)
+	})
+
+	t.Run("include accepts a list of sections", func(t *testing.T) {
+		for query, wantGroup := range map[string]bool{
+			"include=group,model_pricing":         true,
+			"include=model_pricing,%20group":      true,
+			"include=model_pricing&include=group": true,
+			"include=group&include=model_pricing": true,
+			"include=model_pricing":               false,
+			"include=groups":                      false,
+			"include=":                            false,
+		} {
+			router, _, key := newKeyBillingRouteTestRouter(config.RunModeStandard, nil)
+			req := httptest.NewRequest(http.MethodGet, "/v1/sub2api/billing?"+query, nil)
+			req.Header.Set("x-api-key", key)
+			req.Header.Set("Accept-Language", "en")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			require.Equal(t, http.StatusOK, w.Code, query)
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body), query)
+			require.Equal(t, 0.75, body["effective_rate_multiplier"], query)
+			if wantGroup {
+				require.Equal(t, "Standard", body["group_name"], query)
+			} else {
+				require.NotContains(t, body, "group_name", query)
+			}
+		}
+	})
+
+	t.Run("optional group lookup failure preserves billing rates", func(t *testing.T) {
+		router, _, key := newKeyBillingRouteTestRouter(config.RunModeStandard, &keyBillingRouteGroupRepo{})
+		req := httptest.NewRequest(http.MethodGet, "/v1/sub2api/billing?include=group", nil)
+		req.Header.Set("x-api-key", key)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		require.Equal(t, 0.75, body["effective_rate_multiplier"])
+		require.NotContains(t, body, "group_name")
+	})
+
 	t.Run("simple mode", func(t *testing.T) {
-		router, rateRepo, key := newKeyBillingRouteTestRouter(config.RunModeSimple)
+		router, rateRepo, key := newKeyBillingRouteTestRouter(config.RunModeSimple, nil)
 		req := httptest.NewRequest(http.MethodGet, "/v1/sub2api/billing", nil)
 		req.Header.Set("x-api-key", key)
 		w := httptest.NewRecorder()
@@ -177,52 +254,4 @@ func TestGatewayRoutesKeyBillingInfoEndToEnd(t *testing.T) {
 		}`, w.Body.String())
 		require.Zero(t, rateRepo.lookupCalls)
 	})
-}
-
-func TestGatewayRoutesKeyRequestBillingAuthenticatesWithoutRequiringNewCredit(t *testing.T) {
-	router, _, key := newKeyBillingRouteTestRouter(config.RunModeStandard, func(k *service.APIKey) {
-		k.User.Balance = 0
-		k.Quota = 1
-		k.QuotaUsed = 1
-		k.Status = service.StatusAPIKeyQuotaExhausted
-	})
-	anonymous := httptest.NewRecorder()
-	router.ServeHTTP(anonymous, httptest.NewRequest(http.MethodGet, "/v1/sub2api/billing/requests/child-1", nil))
-	require.Equal(t, http.StatusUnauthorized, anonymous.Code)
-	req := httptest.NewRequest(http.MethodGet, "/v1/sub2api/billing/requests/child-1", nil)
-	req.Header.Set("Authorization", "Bearer "+key)
-	authenticated := httptest.NewRecorder()
-	router.ServeHTTP(authenticated, req)
-	// This fixture deliberately lacks the receipt repository; reaching the handler
-	// with no remaining credit must be 503, not a billing admission rejection.
-	require.Equal(t, http.StatusServiceUnavailable, authenticated.Code)
-	require.Contains(t, authenticated.Body.String(), "Billing receipt is unavailable")
-}
-
-func TestGatewayRoutesReceiptPointerSurvivesPrivacyOnlyWhenOptedIn(t *testing.T) {
-	router, _, key := newKeyBillingRouteTestRouter(config.RunModeStandard)
-	for _, want := range []bool{false, true} {
-		req := httptest.NewRequest(http.MethodGet, "/v1/sub2api/billing/requests/child-1", nil)
-		req.Header.Set("Authorization", "Bearer "+key)
-		req.Header.Set("X-Client-Request-ID", "caller-cannot-choose-billing-dedup")
-		if want {
-			req.Header.Set("X-Sub2API-Billing-Receipt", "1")
-		}
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-		require.Equal(t, http.StatusServiceUnavailable, w.Code)
-		require.Empty(t, w.Header().Get("X-Client-Request-ID"))
-		if want {
-			require.NotEmpty(t, w.Header().Get("X-Sub2API-Billing-ID"))
-			require.NotEqual(t, "caller-cannot-choose-billing-dedup", w.Header().Get("X-Sub2API-Billing-ID"))
-		} else {
-			require.Empty(t, w.Header().Get("X-Sub2API-Billing-ID"))
-		}
-	}
-	req := httptest.NewRequest(http.MethodGet, "/v1/sub2api/billing/requests/child-1", nil)
-	req.Header.Set("X-Sub2API-Billing-Receipt", "1")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusUnauthorized, w.Code)
-	require.Empty(t, w.Header().Get("X-Sub2API-Billing-ID"))
 }

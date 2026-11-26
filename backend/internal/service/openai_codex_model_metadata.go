@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 var codexToolCapabilityFields = []string{
@@ -118,12 +120,18 @@ func accountCodexToolCapabilities(account *Account, modelID string) map[string]j
 			capabilities["use_responses_lite"] = json.RawMessage("false")
 		}
 	}
-	// Preserve provider-declared tiers. Only fill missing official API metadata;
-	// OAuth capability data comes from the account manifest.
-	apiUltra := account.IsOpenAIApiKey() && isOfficialOpenAIModelsBaseURL(baseURL) && (openai.GPT62ModelID(modelID) != "" || isOpenAIGPT6AstraModel(modelID))
-	if apiUltra && len(capabilities["service_tiers"]) == 0 {
+	// An OAuth snapshot can predate the plan's Ultrafast entitlement. Extend it
+	// without replacing a workspace grant or its provider-specific fields.
+	base := openai.GPT62ModelID(modelID)
+	planUltra := gpt62PlanIncludesUltrafast(account, base)
+	apiUltra := account.IsOpenAIApiKey() && isOfficialOpenAIModelsBaseURL(baseURL) && (base != "" || isOpenAIGPT6AstraModel(modelID))
+	declared := capabilities["service_tiers"]
+	description := "Lowest latency; increased subscription usage."
+	if (apiUltra || planUltra) && len(declared) == 0 {
 		tiers := configuredCodexServiceTiersForModel(modelID)
-		description := fmt.Sprintf("Lowest latency; %gx Standard token pricing.", openAIUltrafastMultiplier(modelID, time.Now()))
+		if apiUltra {
+			description = fmt.Sprintf("Lowest latency; %gx Standard token pricing.", openAIUltrafastMultiplier(modelID, time.Now()))
+		}
 		if i := slices.IndexFunc(tiers, func(tier configuredCodexServiceTier) bool { return tier.ID == OpenAIFastTierUltrafast }); i >= 0 {
 			tiers[i].Description = description
 		} else {
@@ -134,6 +142,12 @@ func accountCodexToolCapabilities(account *Account, modelID string) map[string]j
 			panic(err)
 		}
 		applyCodexToolCapabilities(capabilities, map[string]json.RawMessage{"service_tiers": encoded}, false)
+	} else if planUltra && !gjson.GetBytes(declared, `#(id=="ultrafast")`).Exists() {
+		tiers, err := sjson.SetBytes(declared, "-1", configuredCodexServiceTier{ID: OpenAIFastTierUltrafast, Name: "Ultrafast", Description: description})
+		if err != nil {
+			panic(err)
+		}
+		capabilities["service_tiers"] = tiers
 	}
 	// This function receives the mapped upstream model. A BPS relay does not
 	// implement Codex's native encrypted multi-agent message contract, even

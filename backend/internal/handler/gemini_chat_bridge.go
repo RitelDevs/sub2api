@@ -369,36 +369,49 @@ func (w *geminiChatResponseWriter) finish() {
 		_ = w.FinalizeGatewayStream()
 		return
 	}
+	_ = w.FinalizeGatewayBuffered()
+}
+
+// Complete the outer JSON conversion before the Chat forwarder settles the attempt.
+func (w *geminiChatResponseWriter) FinalizeGatewayBuffered() error {
+	if w.finished {
+		return w.err
+	}
 	w.finished = true
-	if !w.sawWrite {
-		if w.status != 0 {
-			w.ResponseWriter.WriteHeader(w.status)
-		}
-		return
+	if w.err = w.ctx.Err(); w.err != nil {
+		return w.err
+	}
+	if !w.sawWrite && w.status >= 400 {
+		w.ResponseWriter.WriteHeader(w.status)
+		return nil
 	}
 	status := w.Status()
 	body := w.buf.Bytes()
 	header := w.Header()
 	header.Del("Content-Length")
-	out, status := geminiBodyFromChatResponse(status, body, w.model, w.expected)
+	out, status, conversionErr := geminiBodyFromChatResponse(status, body, w.model, w.expected)
 	w.status = status
 	header.Set("Content-Type", "application/json; charset=utf-8")
 	w.ResponseWriter.WriteHeader(status)
 	w.deliver(out, false)
+	if w.err == nil {
+		w.err = conversionErr
+	}
+	return w.err
 }
 
-func geminiBodyFromChatResponse(status int, body []byte, model string, expected ...int) ([]byte, int) {
-	if status >= 400 || gjson.GetBytes(body, "error").IsObject() {
-		if status < 400 {
-			status = http.StatusBadGateway
-		}
-		return googleErrorBody(status, openAIErrorMessage(body)), status
+func geminiBodyFromChatResponse(status int, body []byte, model string, expected ...int) ([]byte, int, error) {
+	if status >= 400 {
+		return googleErrorBody(status, openAIErrorMessage(body)), status, nil
+	}
+	if gjson.GetBytes(body, "error").IsObject() {
+		return googleErrorBody(http.StatusBadGateway, openAIErrorMessage(body)), http.StatusBadGateway, apicompat.ErrGeminiResponseConversion
 	}
 	converted, err := apicompat.ChatCompletionsJSONToGemini(body, model, expected...)
 	if err != nil {
-		return googleErrorBody(http.StatusBadGateway, "Failed to convert upstream response"), http.StatusBadGateway
+		return googleErrorBody(http.StatusBadGateway, "Failed to convert upstream response"), http.StatusBadGateway, err
 	}
-	return converted, status
+	return converted, status, nil
 }
 
 func openAIErrorMessage(body []byte) string {

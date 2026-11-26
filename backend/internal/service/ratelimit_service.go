@@ -391,6 +391,9 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 // handleUpstreamErrorAfterStreakReset keeps account policy handling shared with
 // the OpenAI gateway, which resets the streak before its early-return policies.
 func (s *RateLimitService) handleUpstreamErrorAfterStreakReset(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) (shouldDisable bool) {
+	if isOpenAIWrappedConcurrency401(account, statusCode, responseBody) {
+		return false
+	}
 	ctx, disabledOn429 := s.maybeDisableOpenAISchedulingOn429(ctx, account, statusCode, headers)
 	if disabledOn429 {
 		defer func() { shouldDisable = true }()
@@ -426,25 +429,6 @@ func (s *RateLimitService) handleUpstreamErrorAfterStreakReset(ctx context.Conte
 	if isAnthropicSafeguardPolicy403(account, statusCode, responseBody) {
 		slog.Info("anthropic_safeguard_policy_403_skips_account_penalty", "account_id", account.ID)
 		return false
-	}
-	// DeepSeek balance exhaustion is an operator-owned pause, never an
-	// authentication failure or a self-expiring cooldown.
-	if account.Platform == PlatformDeepseek && (statusCode == 402 || statusCode == 403 || statusCode == 429) {
-		if category, _ := classifyAccountOpsFailure(account.Platform, statusCode, headers, responseBody); category == "balance_low" {
-			if err := s.accountRepo.SetSchedulable(ctx, account.ID, false); err != nil {
-				slog.Warn("deepseek_balance_pause_failed", "account_id", account.ID, "error", err)
-				return false
-			}
-			account.Schedulable = false
-			s.notifyAccountSchedulingBlocked(account, time.Time{}, "deepseek_balance_manual_pause")
-			if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{
-				"deepseek_balance_pause_reason": "Upstream balance exhausted; administrator must restore scheduling",
-			}); err != nil {
-				slog.Warn("deepseek_balance_pause_reason_failed", "account_id", account.ID, "error", err)
-			}
-			slog.Warn("deepseek_balance_manual_pause", "account_id", account.ID)
-			return true
-		}
 	}
 	// Team 联动熔断必须先于池模式/自定义错误码/临时不可调度的各类早退；
 	// 同请求内与 fastpath 调用点的重复触发由方法内去重吸收。

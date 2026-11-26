@@ -126,7 +126,8 @@ func TestUsageBillingDeliveryOverflowPersistsNoticeAndNeverReplaysIt(t *testing.
 			}
 			recovered, err := repo.ApplyStagedUsageBilling(context.Background(), key)
 			require.NoError(t, err)
-			require.True(t, recovered.Result.Applied)
+			require.True(t, recovered.Settled)
+			require.Equal(t, !lostCommit, recovered.Result.Applied)
 			require.True(t, recovered.NeedsCache)
 			require.Equal(t, cmd.SubscriptionOverflow, recovered.Event.Command.SubscriptionOverflow)
 			// Neither cache recovery nor a later completed replay may charge or

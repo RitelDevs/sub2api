@@ -1,4 +1,7 @@
 export default {
+  importSchedulingHint: '取消勾選後，新帳號仍儲存憑據並應用首次配置，調度保持關閉。停用首次配置後，這兩個選項均不生效。',
+  twoFALoginScheduling: '2FA 登錄自動啟用調度',
+  jsonImportScheduling: 'JSON 導入自動啟用調度',
   apikeyDisposition: {
     timerSource: "OAuth 首次配置自動處置",
     superseded: "帳號已變更或配對關閉未執行，已跳過自動處置",
@@ -126,9 +129,9 @@ export default {
   "concurrencyEvent": "併發 {before} → {after}",
   "modelsEvent": "模型：{models}",
   "groupsEvent": "所選分組：{groups}；實際移出：{removed}",
-  "independentScope": "每個帳號和模型使用最近一小時內最多 200 個業務樣本。只對啓用了模型限制且不在保留名單的被測模型執行處置。",
+  "independentScope": "429 觸發統計與復測只看實際轉發到 Sol、Astra 的請求，每個帳號和模型取最近一小時內最多 200 個業務樣本。復測確認後執行下方勾選的帳號處置動作。啟用模型限制時，按保留模型白名單更新帳號映射。",
   "independentSamples": "最少業務請求樣本（20–200）",
-  "independentHint": "啓用後，業務 429 達到閾值會對原帳號和模型發起複測。兩次完整明確錯答，或同一輪追加測試連續 5 次收到 HTTP 429，均可觸發模型限制。超時、空答、截斷和正文裏的數字 429 都不能計入連續 429。",
+  "independentHint": "啟用後，業務 429 達到閾值會對原帳號和模型發起復測。只有同一輪復測連續 5 次收到上游 HTTP 429，才執行降智後處置。超時、空答、截斷和正文里的數字 429 都不能計入連續 429。",
   "independentEnable": "達到 429 閾值後自動複測",
   "candyRetest": "即時複核糖果題，兩次均明確答錯才處置",
   "probeEvent": "降智 {percent}% ≥ {threshold}% · {samples} 個明確輪次",

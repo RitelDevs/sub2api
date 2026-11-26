@@ -289,7 +289,7 @@ func (h *OpenAIGatewayHandler) alphaSearch(c *gin.Context, bridge *deepSeekTools
 
 		if err == nil {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, requestedModel, false, result), true, nil)
-			if result != nil && (bridge == nil || result.WebSearchCalls > 0 || bridge.request.Operation == "search") {
+			if result != nil && (bridge == nil || result.WebSearchCalls > 0) {
 				if bridge != nil {
 					result.Model = "deepseek-" + bridge.request.Operation
 					requestedModel = result.Model
@@ -394,11 +394,7 @@ func (h *OpenAIGatewayHandler) recordAlphaSearchUsage(
 	quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 
 	h.submitMandatoryUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
-		record := h.gatewayService.RecordUsage
-		if preserveCallerMultiplier && result.Model == "deepseek-search" && result.WebSearchCalls == 0 {
-			record = h.gatewayService.RecordConfirmedEmptySearch
-		}
-		if err := record(ctx, &service.OpenAIRecordUsageInput{
+		if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
 			Result:                        result,
 			PreserveCallerGroupMultiplier: preserveCallerMultiplier,
 			APIKey:                        apiKey,

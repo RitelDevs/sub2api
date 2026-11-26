@@ -590,19 +590,11 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 		metadata = openai.CodexGPT62AstraMetadata
 	}
 	if len(metadata) > 0 {
-		// Take presentation fields only; the local catalog owns capabilities,
-		// service tiers, context limits and prompt defaults.
-		var display struct {
-			Name        string `json:"display_name"`
-			Description string `json:"description"`
-			Priority    int    `json:"priority"`
-		}
-		if err := json.Unmarshal(metadata, &display); err != nil {
+		if err := json.Unmarshal(metadata, &descriptor); err != nil {
 			panic(err)
 		}
-		descriptor.DisplayName = display.Name
-		descriptor.Description = display.Description
-		descriptor.Priority = display.Priority
+		descriptor.Slug = modelID
+		descriptor.officialMetadata = metadata
 	}
 	return descriptor
 }
@@ -1858,7 +1850,8 @@ func (s *OpenAIGatewayService) fetchNativeCodexModelsManifestWithPolicy(ctx cont
 	headers := make(http.Header)
 	if useAPIKeyUpstream {
 		headers.Set("Authorization", "Bearer "+authToken)
-		credAccount.ApplyHeaderOverrides(headers)
+		// 清单按请求头分桶缓存并跨用户共享：不携带用户身份。
+		credAccount.ApplyHeaderOverridesWithContext(withoutHeaderOverrideRequestScope(ctx), headers)
 	} else {
 		authHeaders, authErr := s.buildOpenAIAuthenticationHeaders(ctx, credAccount, authToken)
 		if authErr != nil {

@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/clienterror"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -19,7 +18,7 @@ import (
 func GatewayErrorPrivacy() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		original := c.Writer
-		w := &gatewayPrivacyWriter{ResponseWriter: original, context: c}
+		w := &gatewayPrivacyWriter{ResponseWriter: original}
 		c.Writer = w
 		defer func() {
 			// Outer panic recovery can write after this middleware unwinds.
@@ -35,7 +34,6 @@ func GatewayErrorPrivacy() gin.HandlerFunc {
 
 type gatewayPrivacyWriter struct {
 	gin.ResponseWriter
-	context      *gin.Context
 	mu           sync.Mutex
 	pending      []byte
 	sseScanned   int
@@ -231,17 +229,7 @@ func sanitizeGatewaySSEFrame(frame []byte) []byte {
 var _ gin.ResponseWriter = (*gatewayPrivacyWriter)(nil)
 
 func (w *gatewayPrivacyWriter) prepareHeaders() {
-	// Expose only an opt-in, key-owned billing pointer. Ordinary correlation
-	// headers remain private, and an upstream cannot supply this authority.
 	w.Header().Del("X-Sub2API-Billing-ID")
-	if w.context != nil && w.context.GetHeader("X-Sub2API-Billing-Receipt") == "1" {
-		if key, ok := GetAPIKeyFromContext(w.context); ok && key.ID > 0 {
-			if id, _ := w.context.Request.Context().Value(ctxkey.ClientRequestID).(string); id != "" {
-				w.Header().Set("X-Sub2API-Billing-ID", id)
-			}
-		}
-	}
-
 	removeGatewayRequestIDHeaders(w.Header())
 	if w.Status() >= http.StatusBadRequest || strings.Contains(strings.ToLower(w.Header().Get("Content-Type")), "text/event-stream") {
 		w.Header().Del("Content-Length")

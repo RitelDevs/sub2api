@@ -51,6 +51,17 @@
             <div v-if="!nativeDefaultsEnabled" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"><label v-for="field in initialFields" :key="field.key"><span class="field-label">{{ t('autoConfig.' + field.key) }}</span><input v-model.number="draft[field.key]" :data-testid="field.key" type="number" :min="field.min" max="10000" step="1" required class="input w-full" /></label><label><span class="field-label">{{ t('autoConfig.cost_multiplier') }}</span><input v-model.number="draft.cost_multiplier" data-testid="cost_multiplier" type="number" min="0" max="1000000" step="0.001" required class="input w-full" /></label></div>
             <p v-if="!nativeDefaultsEnabled" class="text-xs leading-5 text-gray-500">{{ t('autoConfig.loadHint') }}</p>
             <OpenAIAccountDefaultsCard v-if="draft.platform === 'openai'" v-model="draft.openai_account_defaults" />
+            <div class="space-y-2">
+              <div class="flex flex-wrap items-center gap-2">
+                <label class="flex items-center gap-2 text-sm"><input v-model="jsonImportScheduling" data-testid="json-import-scheduling" type="checkbox" />{{ t('autoConfig.jsonImportScheduling') }}</label>
+                <NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.oauthImportScheduling" :user-id="auth.user?.id" />
+              </div>
+              <div v-if="draft.platform === 'openai'" class="flex flex-wrap items-center gap-2">
+                <label class="flex items-center gap-2 text-sm"><input v-model="twoFALoginScheduling" data-testid="two-fa-login-scheduling" type="checkbox" />{{ t('autoConfig.twoFALoginScheduling') }}</label>
+                <NewFeatureBadge :notice-id="NEW_FEATURE_NOTICES.oauthImportScheduling" :user-id="auth.user?.id" />
+              </div>
+              <p class="text-xs leading-5 text-gray-500">{{ t('autoConfig.importSchedulingHint') }}</p>
+            </div>
             <fieldset v-if="draft.platform === 'openai'" class="space-y-2">
               <div class="flex flex-wrap items-center gap-2">
                 <label class="flex items-center gap-2 text-sm"><input v-model="draft.openai_totp_rotate_on_429" data-testid="totp-rotate-on-429" type="checkbox" />{{ t('autoConfig.totp429.label') }}</label>
@@ -198,6 +209,17 @@ const platforms = [{ value: 'openai', label: 'OpenAI' }, { value: 'anthropic', l
 const initialFields = [{ key: 'priority', min: 0 }, { key: 'load_factor', min: 1 }, { key: 'concurrency', min: 1 }] as const
 const upgradeFields = [{ key: 'successes_per_step', max: 100000 }, { key: 'upgrade_step', max: 1000 }, { key: 'max_concurrency', max: 10000 }, { key: 'cooldown_seconds', max: 86400 }] as const
 const nativeDefaultsEnabled = computed(() => draft.value?.platform === 'openai' && draft.value?.openai_account_defaults?.enabled === true)
+function schedulingForPlatform(field: 'json_import_auto_schedule' | 'two_fa_login_auto_schedule') {
+ return computed({
+  get: () => draft.value?.[field]?.[draft.value.platform] ?? true,
+  set(enabled: boolean) {
+   const config = draft.value
+   if (config) config[field] = { ...config[field], [config.platform]: enabled }
+  }
+ })
+}
+const jsonImportScheduling = schedulingForPlatform('json_import_auto_schedule')
+const twoFALoginScheduling = schedulingForPlatform('two_fa_login_auto_schedule')
 const initialGroups = computed(() => groups.value.filter(g => g.platform === draft.value?.platform))
 const openAIWSModeOptions = computed(() => [
  { value: OPENAI_WS_MODE_OFF, label: t('admin.accounts.openai.wsModeOff') },

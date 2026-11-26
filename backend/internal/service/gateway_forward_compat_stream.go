@@ -30,11 +30,12 @@ var anthropicCompatDisconnectDrainInterval = 180 * time.Second
 // 继续读取上游以合并最终 usage。逐行读间隔受 gateway.stream_data_interval_timeout
 // 限制；该配置未启用时，客户端断开后以 anthropicCompatDisconnectDrainInterval 限制。
 type anthropicCompatStream struct {
-	pump        *anthropicNativeLinePump
-	body        io.Closer
-	maxLineSize int
-	logPrefix   string
-	requestID   string
+	pump         *anthropicNativeLinePump
+	body         io.Closer
+	maxLineSize  int
+	maxFrameSize int
+	logPrefix    string
+	requestID    string
 	// clientGone 是请求 ctx 的 Done，客户端断开后为 nil。
 	clientGone <-chan struct{}
 
@@ -78,18 +79,26 @@ func newAnthropicCompatStream(cfg *config.Config, c *gin.Context, resp *http.Res
 	if cfg != nil && cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = cfg.Gateway.MaxLineSize
 	}
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+	scanner.Buffer(make([]byte, 0, min(64*1024, maxLineSize)), maxLineSize)
 	stream := &anthropicCompatStream{
-		pump:        newAnthropicNativeLinePump(scanner, anthropicNativeStreamInterval(cfg)),
-		body:        resp.Body,
-		maxLineSize: maxLineSize,
-		logPrefix:   logPrefix,
-		requestID:   requestID,
+		pump:         newAnthropicNativeLinePump(scanner, anthropicNativeStreamInterval(cfg)),
+		body:         resp.Body,
+		maxLineSize:  maxLineSize,
+		maxFrameSize: int(SSEFrameLimit(maxLineSize)),
+		logPrefix:    logPrefix,
+		requestID:    requestID,
 	}
 	if c.Request != nil {
 		stream.clientGone = c.Request.Context().Done()
 	}
 	return stream
+}
+
+func (st *anthropicCompatStream) frameLimit() int {
+	if st.maxFrameSize > 0 {
+		return st.maxFrameSize
+	}
+	return st.maxLineSize
 }
 
 func (st *anthropicCompatStream) stop() {
@@ -296,10 +305,14 @@ func (st *anthropicCompatStream) failure() *anthropicCompatStreamFailure {
 			message: fmt.Sprintf("upstream stream idle for %s", st.pump.interval),
 		}
 	case errors.Is(st.readErr, bufio.ErrTooLong), errors.Is(st.readErr, errAnthropicSSEFrameTooLarge):
+		message := fmt.Sprintf("upstream SSE line exceeded %d bytes", st.maxLineSize)
+		if errors.Is(st.readErr, errAnthropicSSEFrameTooLarge) {
+			message = fmt.Sprintf("upstream SSE frame exceeded %d bytes", st.frameLimit())
+		}
 		return &anthropicCompatStreamFailure{
 			err:     fmt.Errorf("stream usage incomplete: %w", st.readErr),
 			errType: "response_too_large",
-			message: fmt.Sprintf("upstream SSE frame exceeded %d bytes", st.maxLineSize),
+			message: message,
 		}
 	case st.readErr != nil && !errors.Is(st.readErr, io.EOF):
 		return &anthropicCompatStreamFailure{

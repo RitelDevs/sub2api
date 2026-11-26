@@ -398,6 +398,10 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 		result.ClientDisconnect = true
 		return result, err
 	}
+	if err := finalizeBufferedChatDelivery(c); err != nil {
+		result.ClientDisconnect = !errors.Is(err, apicompat.ErrGeminiResponseConversion)
+		return result, err
+	}
 	return result, nil
 }
 

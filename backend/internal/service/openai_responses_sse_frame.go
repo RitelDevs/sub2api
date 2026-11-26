@@ -1,46 +1,23 @@
 package service
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 
 	"github.com/tidwall/gjson"
 )
 
-// A CR ends a line immediately. Its optional LF may arrive on a later read.
-func newOpenAIResponsesLineSplit() bufio.SplitFunc {
-	var skipLF bool
-	var scanned int
-	return func(data []byte, atEOF bool) (int, []byte, error) {
-		if skipLF && len(data) > 0 {
-			skipLF = false
-			if data[0] == '\n' {
-				return 1, nil, nil
-			}
-		}
-		if i := bytes.IndexAny(data[scanned:], "\r\n"); i >= 0 {
-			i += scanned
-			scanned = 0
-			skipLF = data[i] == '\r'
-			return i + 1, data[:i], nil
-		}
-		scanned = len(data)
-		if atEOF && len(data) > 0 {
-			scanned = 0
-			return len(data), data, nil
-		}
-		return 0, nil, nil
-	}
-}
-
-// The physical-line configuration belongs to the scanner. Bound the separate
-// allocation needed to observe a logical event, including its slice entries.
-func openAIResponsesFrameLimit(maxLineSize int) int64 {
+// SSEFrameLimit bounds the separate allocation for one logical upstream event.
+// The scanner enforces the configured physical-line limit independently.
+func SSEFrameLimit(maxLineSize int) int64 {
 	if maxLineSize <= 0 {
 		maxLineSize = defaultMaxLineSize
+	}
+	if maxLineSize > math.MaxInt-openAIFirstOutputStageMaxBytes {
+		return math.MaxInt
 	}
 	return int64(maxLineSize) + openAIFirstOutputStageMaxBytes
 }
@@ -96,7 +73,7 @@ func (r *openAIResponsesFrameReader) push(line string, emit func(*openAIResponse
 	}
 	limit := r.limit
 	if limit <= 0 {
-		limit = openAIResponsesFrameLimit(0)
+		limit = SSEFrameLimit(0)
 	}
 	if r.size+int64(len(line))+1+int64(len(r.lines)+len(r.data)+2)*16 > limit {
 		return errors.New("Responses SSE event exceeds assembly limit")

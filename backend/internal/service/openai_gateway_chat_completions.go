@@ -129,11 +129,27 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	result, err := s.forwardAsChatCompletions(meterCtx, c, account, body, promptCacheKey, defaultMappedModel, false)
 	if result != nil && c != nil {
 		result.AuthConnectionID = c.GetString("openai_auth_connection_id")
+		if err == nil && !result.Stream {
+			if err = finalizeBufferedChatDelivery(c); err != nil {
+				result.streamReadIncomplete = true
+				result.ClientDisconnect = !errors.Is(err, apicompat.ErrGeminiResponseConversion)
+			}
+		}
 	}
 	errorScope.finish(result)
 	finalErr := regionalMeterFinishForward(meterCtx, result, err, finish)
 	s.attributeRegionalConnectionResult(meterCtx, c, account, result)
 	return result, finalErr
+}
+
+func finalizeBufferedChatDelivery(c *gin.Context) error {
+	if writer, ok := c.Writer.(interface{ FinalizeGatewayBuffered() error }); ok {
+		if err := writer.FinalizeGatewayBuffered(); err != nil {
+			MarkResponseCommitted(c)
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *OpenAIGatewayService) forwardAsChatCompletions(
@@ -163,6 +179,14 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "code": "basispoints_requires_responses", "message": "This group requires Basispoints for this model; use /v1/responses"}})
 		return nil, denyOpenAITurn("basispoints_required_use_responses")
 	}
+	// Alias normalization must follow the payload shape: Responses-shaped
+	// Chat requests may bypass the typed converter and go straight upstream.
+	isResponsesShape := !gjson.GetBytes(body, "messages").Exists() && gjson.GetBytes(body, "input").Exists()
+	effortPath := "reasoning_effort"
+	if isResponsesShape {
+		effortPath = "reasoning.effort"
+	}
+	body = normalizeQwenRequestEffort(account, body, defaultMappedModel, effortPath)
 	proxyCtx, releaseProxy, proxyErr := s.beginOpenAIRequestProxy(ctx, c, account)
 	if proxyErr != nil {
 		return nil, proxyErr
@@ -213,7 +237,6 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// Cursor compatibility: some clients send a Responses-shaped body to the
 	// /v1/chat/completions URL. Detect it before protocol routing so adaptive
 	// accounts never forward the body unchanged to a Chat Completions endpoint.
-	isResponsesShape := !gjson.GetBytes(body, "messages").Exists() && gjson.GetBytes(body, "input").Exists()
 	inbound := APIProtocolChatCompletions
 	if isResponsesShape {
 		inbound = APIProtocolResponses

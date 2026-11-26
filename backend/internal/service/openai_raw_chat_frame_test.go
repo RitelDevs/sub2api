@@ -62,6 +62,8 @@ func TestRawChatFrameUsageAndDelivery(t *testing.T) {
 		{name: "conversion-error", source: text + usage + done, sinkErr: fmt.Errorf("bad output: %w", apicompat.ErrGeminiResponseConversion), failed: true, measured: true, input: 4, output: 3},
 		{name: "short-write", source: text + usage + done, short: true, disconnected: true, measured: true, input: 4, output: 3},
 		{name: "semantic-error-with-trailing-meter", source: text + errorEvent + usage + done, failed: true, measured: true, input: 4, output: 3},
+		{name: "non-error-under-error-event", source: text + "event: error\ndata: {\"other\":1}\n\n" + usage + done, measured: true, input: 4, output: 3},
+		{name: "unterminated-error-at-EOF", source: text + strings.TrimSuffix(errorEvent, "\n"), failed: true},
 		{name: "malformed-meter-at-reset", source: text + strings.TrimSuffix(usage, "\n"), readErr: io.ErrUnexpectedEOF, failed: true},
 		{name: "malformed-counter", source: text + errorEvent + `data: {"choices":[],"usage":{"prompt_tokens":-3,"completion_tokens":4}}` + "\n\n" + done, failed: true},
 		{name: "explicit-zero", source: text + errorEvent + `data: {"choices":[],"usage":{"prompt_tokens":0,"completion_tokens":0}}` + "\n\n" + done, failed: true, measured: true},
@@ -94,6 +96,57 @@ func TestRawChatFrameUsageAndDelivery(t *testing.T) {
 			if tc.name == "semantic-error-with-trailing-meter" {
 				require.Equal(t, text+errorEvent, rec.Body.String())
 			}
+			if tc.name == "non-error-under-error-event" {
+				require.Equal(t, text+usage+done, rec.Body.String())
+			}
+			if tc.name == "unterminated-error-at-EOF" {
+				require.Equal(t, text, rec.Body.String())
+				require.ErrorIs(t, err, ErrOpenAIUpstreamStreamTruncated)
+			}
+		})
+	}
+}
+
+func TestRawChatMultilineFrameLimits(t *testing.T) {
+	const lineLimit = 1024 * 1024
+	const text = `data: {"choices":[{"index":0,"delta":{"content":"ready"}}]}` + "\n\n"
+	const usage = `data: {"choices":[],"usage":{"prompt_tokens":4,"completion_tokens":3}}` + "\n\n"
+	// Put usage on the last physical line so a partial frame cannot count it.
+	pad := strings.Repeat("x", lineLimit/2)
+	multiline := `data: {"choices":[{"index":0,"delta":{"reasoning_content":"` + pad + `",` + "\n" +
+		`data: "content":"` + pad + `"},"finish_reason":"stop"}],` + "\n" +
+		`data: "usage":{"prompt_tokens":4,"completion_tokens":3}}`
+	for _, tc := range []struct {
+		name, tail string
+		fail       bool
+	}{
+		{"clean-EOF", multiline, false},
+		{"delimited", multiline + "\n\ndata: [DONE]\n\n", false},
+		{"oversize-line-after-usage", usage + "data: " + strings.Repeat("x", lineLimit) + "\n\n", true},
+		{"oversize-event-after-usage", usage + strings.Repeat(":"+pad+"\n", 19) + "\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig()}
+			svc.cfg.Gateway.MaxLineSize = lineLimit
+			resp := &http.Response{Header: http.Header{}, Body: io.NopCloser(strings.NewReader(text + tc.tail))}
+			result, err := svc.streamRawChatCompletions(c, resp, rawChatCompletionsTestAccount(), "model", "model", "model", nil, nil, time.Now(), 0)
+			if tc.fail {
+				require.Error(t, err)
+				var retry *UpstreamFailoverError
+				require.NotErrorAs(t, err, &retry)
+				require.Equal(t, text+usage, rec.Body.String())
+			} else {
+				require.NoError(t, err)
+				require.True(t, strings.HasPrefix(rec.Body.String(), text+multiline+"\n\n"))
+			}
+			require.NotNil(t, result)
+			require.Equal(t, 4, result.Usage.InputTokens)
+			require.Equal(t, 3, result.Usage.OutputTokens)
+			require.False(t, result.UsageUnavailable)
+			require.Equal(t, tc.fail, result.ObservedUsageOnError)
 		})
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/sse"
 	"github.com/gin-gonic/gin"
 )
 
@@ -69,7 +70,7 @@ func openAIFirstOutputEventQueueSize(guardFirstOutput bool) int {
 }
 
 func openAIFirstOutputDynamicScanLines(guardActive *atomic.Bool) bufio.SplitFunc {
-	split := newOpenAIResponsesLineSplit()
+	split := sse.SplitLines()
 	return func(data []byte, atEOF bool) (advance int, token []byte, err error) {
 		advance, token, err = split(data, atEOF)
 		if err != nil || guardActive == nil || !guardActive.Load() {

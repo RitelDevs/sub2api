@@ -16,7 +16,7 @@ describe('admin usage page locations', () => {
     expect(next).toMatchObject({ ...query, view: 'analysis', tab: 'analysis' })
     expect(parseAdminUsageLocation(next as typeof query, defaults).filters).toEqual(parsed.filters)
   })
-  it.each(['errors', 'connections', 'traffic', 'ranking', 'latency'])('accepts the legacy %s view and preserves unowned deep-link parameters', tab => {
+  it.each(['errors', 'connections', 'ranking', 'latency'])('accepts the legacy %s view and preserves unowned deep-link parameters', tab => {
     const state = parseAdminUsageLocation({ view: tab }, defaults)
     expect(state.tab).toBe(tab)
     expect(state.page).toBe(tab === 'ranking' ? 'analysis' : 'records')
@@ -28,7 +28,12 @@ describe('admin usage page locations', () => {
     expect(parseAdminUsageLocation(query as any, defaults)).toMatchObject({ tab: 'latency', filters: { account_id: 14, model: 'gpt-6-astra', timezone: 'Europe/Stockholm', start_date: defaults.start, end_date: defaults.end } })
     expect(parseAdminUsageLocation(query as any, defaults, true).tab).toBe('usage')
   })
-  it.each(['errors', 'connections', 'traffic', 'ranking', 'latency'])('drops platform outside usage/analysis on %s', tab => {
+  it('retains the upstream platform filter when returning to the error tab', () => {
+    const state = parseAdminUsageLocation({ view: 'errors', platform: 'openai' }, defaults)
+    expect(state.filters.platform).toBe('openai')
+    expect(adminUsageLocationQuery({ ...state, granularity: 'hour' }).platform).toBe('openai')
+  })
+  it.each(['connections', 'ranking', 'latency'])('drops platform outside usage, analysis and errors on %s', tab => {
     const state = parseAdminUsageLocation({ view: tab, platform: 'openai' }, defaults)
     expect(state.filters.platform).toBeUndefined()
     expect(adminUsageLocationQuery({ ...state, filters: { ...state.filters, platform: 'openai' }, granularity: 'hour' }, { platform: 'openai' }).platform).toBeUndefined()

@@ -1,5 +1,5 @@
 <template>
-  <div class="open-filter-toolbar usage-filters" :class="[flat ? 'py-4' : 'open-section', { 'usage-filters-identity-only': identityOnly }]">
+  <div class="open-filter-toolbar usage-filters" :class="flat ? 'py-4' : 'open-section'">
     <div class="usage-filter-layout">
       <div class="usage-filter-controls">
         <slot name="before-filters" />
@@ -72,30 +72,28 @@
               class="w-full px-4 py-2 text-left hover:bg-gray-100 dark:hover:bg-dark-700"
             >
               <span class="truncate">{{ k.name || `#${k.id}` }}</span>
-              <span v-if="k.deleted" class="ml-1 text-xs text-gray-400">({{ t('traffic.deletedKey') }})</span>
+              <span v-if="k.deleted" class="ml-1 text-xs text-gray-400">({{ t('admin.usage.userDeletedBadge') }})</span>
               <span class="ml-2 text-xs text-gray-400">#{{ k.id }}</span>
             </button>
           </div>
-          <p v-if="apiKeySearchError" role="alert" class="mt-1 text-xs text-red-600 dark:text-red-400">{{ t('traffic.keysFailed') }}</p>
         </div>
 
-        <template v-if="!identityOnly">
-          <div v-if="showPlatformFilter" data-testid="usage-platform-filter" class="w-full sm:w-52">
-            <label for="usage-platform" class="input-label flex items-center gap-1.5">
-              {{ t('admin.usage.platform') }}
-              <NewFeatureBadge v-if="noticeUserId != null" :notice-id="mode === 'errors' ? NEW_FEATURE_NOTICES.adminErrorPlatform : NEW_FEATURE_NOTICES.adminUsagePlatform" :user-id="noticeUserId" />
-            </label>
-            <Select
-              id="usage-platform"
-              :model-value="filters.platform ?? null"
-              :options="platformOptions"
-              :aria-label="t('admin.usage.platform')"
-              aria-describedby="usage-platform-hint"
-              searchable
-              @update:model-value="filters.platform = $event || undefined"
-              @change="emitChange"
-            />
-          </div>
+        <div v-if="showPlatformFilter" data-testid="usage-platform-filter" class="w-full sm:w-52">
+          <label for="usage-platform" class="input-label flex items-center gap-1.5">
+            {{ t('admin.usage.platform') }}
+            <NewFeatureBadge v-if="noticeUserId != null" :notice-id="mode === 'errors' ? NEW_FEATURE_NOTICES.adminErrorPlatform : NEW_FEATURE_NOTICES.adminUsagePlatform" :user-id="noticeUserId" />
+          </label>
+          <Select
+            id="usage-platform"
+            :model-value="filters.platform ?? null"
+            :options="platformOptions"
+            :aria-label="t('admin.usage.platform')"
+            aria-describedby="usage-platform-hint"
+            searchable
+            @update:model-value="filters.platform = $event || undefined"
+            @change="emitChange"
+          />
+        </div>
 
         <!-- Model Filter -->
         <div class="usage-filter-field">
@@ -192,8 +190,6 @@
           <label :id="'field-' + fieldLabelScope + '-13'" class="input-label">{{ t('admin.usage.group') }}</label>
           <Select :aria-labelledby="'field-' + fieldLabelScope + '-13'" :aria-label="t('admin.usage.group')" v-model="filters.group_id" :options="groupOptions" searchable @change="emitChange" />
         </div>
-        </template>
-
       </div>
 
       <!-- Right: actions -->
@@ -215,7 +211,7 @@
         </template>
       </div>
     </div>
-    <p v-if="!identityOnly && showPlatformFilter" id="usage-platform-hint" class="mt-3 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.usage.platformHistoryHint') }}</p>
+    <p v-if="showPlatformFilter" id="usage-platform-hint" class="mt-3 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.usage.platformHistoryHint') }}</p>
   </div>
 </template>
 
@@ -256,17 +252,13 @@ interface Props {
   mode?: 'usage' | 'errors' | 'ranking' | 'connections' | 'latency'
   /** Match the parent page spacing when embedded. */
   flat?: boolean
-  /** Reuse user/key search without token, account, model or group filters. */
-  identityOnly?: boolean
-  apiKeySearch?: (userId: number | undefined, query: string) => Promise<UsageFilterOption[]>
 }
 
 const props = withDefaults(defineProps<Props>(), {
   showActions: true,
   showRecordActions: true,
   mode: 'usage',
-  flat: false,
-  identityOnly: false
+  flat: false
 })
 const emit = defineEmits([
   'update:modelValue',
@@ -294,7 +286,6 @@ let userSearchSequence = 0
 const apiKeyKeyword = ref('')
 const apiKeyResults = ref<UsageFilterOption[]>([])
 const showApiKeyDropdown = ref(false)
-const apiKeySearchError = ref(false)
 let apiKeySearchTimeout: ReturnType<typeof setTimeout> | null = null
 let apiKeySearchSequence = 0
 
@@ -422,14 +413,16 @@ const clearPendingApiKeySearch = () => {
 
 const searchApiKeys = async (userId: number | undefined, query: string, sequence: number) => {
   try {
-    const results = props.apiKeySearch && !observerMode
-      ? await props.apiKeySearch(userId, query)
-      : observerMode
+    const results = observerMode
       ? await observerUsageAPI.filterOptions('api_key', query)
       : await adminAPI.usage.searchApiKeys(userId, query)
-    if (sequence === apiKeySearchSequence && userId === filters.value.user_id) { apiKeyResults.value = results; apiKeySearchError.value = false }
+    if (sequence === apiKeySearchSequence && userId === filters.value.user_id) {
+      apiKeyResults.value = results
+    }
   } catch {
-    if (sequence === apiKeySearchSequence && userId === filters.value.user_id) { apiKeyResults.value = []; apiKeySearchError.value = Boolean(props.apiKeySearch) }
+    if (sequence === apiKeySearchSequence && userId === filters.value.user_id) {
+      apiKeyResults.value = []
+    }
   }
 }
 
@@ -470,7 +463,7 @@ const clearUser = () => {
 
 const selectApiKey = (k: UsageFilterOption) => {
   clearPendingApiKeySearch()
-  apiKeyKeyword.value = `${k.name || String(k.id)}${k.deleted ? ` (${t('traffic.deletedKey')})` : ''}`
+  apiKeyKeyword.value = `${k.name || String(k.id)}${k.deleted ? ` (${t('admin.usage.userDeletedBadge')})` : ''}`
   showApiKeyDropdown.value = false
   filters.value.api_key_id = k.id
   emitChange()
@@ -479,7 +472,6 @@ const selectApiKey = (k: UsageFilterOption) => {
 const clearApiKey = () => {
   clearPendingApiKeySearch()
   apiKeyKeyword.value = ''
-  apiKeySearchError.value = false
   apiKeyResults.value = []
   showApiKeyDropdown.value = false
   filters.value.api_key_id = undefined
@@ -547,7 +539,7 @@ const onDocumentClick = (e: MouseEvent) => {
 watch(
   () => props.startDate,
   (value) => {
-    if (!props.identityOnly) filters.value.start_date = value
+    filters.value.start_date = value
   },
   { immediate: true }
 )
@@ -555,7 +547,7 @@ watch(
 watch(
   () => props.endDate,
   (value) => {
-    if (!props.identityOnly) filters.value.end_date = value
+    filters.value.end_date = value
   },
   { immediate: true }
 )
@@ -595,7 +587,6 @@ watch(
 
 onMounted(async () => {
   document.addEventListener('click', onDocumentClick)
-  if (props.identityOnly) return
   try {
     const gs = observerMode
       ? { items: await observerUsageAPI.filterOptions('group') }

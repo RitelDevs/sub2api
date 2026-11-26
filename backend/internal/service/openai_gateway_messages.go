@@ -86,6 +86,7 @@ func (s *OpenAIGatewayService) forwardAsAnthropic(
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"type": "invalid_request_error", "code": "basispoints_requires_responses", "message": "This group requires Basispoints for this model; use /v1/responses"}})
 		return nil, denyOpenAITurn("basispoints_required_use_responses")
 	}
+	body = normalizeQwenRequestEffort(account, body, defaultMappedModel, "output_config.effort")
 	proxyCtx, releaseProxy, proxyErr := s.beginOpenAIRequestProxy(ctx, c, account)
 	if proxyErr != nil {
 		return nil, proxyErr

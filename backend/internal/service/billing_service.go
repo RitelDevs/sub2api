@@ -661,35 +661,19 @@ func (s *BillingService) initFallbackPricing() {
 		LongContextInputMultiplier:         2,
 		LongContextOutputMultiplier:        1.5,
 	}
-	pro := gpt62DefaultPricing("gpt-6.2-astra-pro")
-	s.fallbackPrices["gpt-6.2-astra-pro"] = &ModelPricing{
-		InputPricePerToken:            pro.InputCostPerToken,
-		OutputPricePerToken:           pro.OutputCostPerToken,
-		CacheCreationPricePerToken:    pro.CacheCreationInputTokenCost,
-		CacheCreation12hPricePerToken: pro.CacheCreationInputTokenCost12h,
-		CacheCreationPriceExplicit:    true,
-		CacheReadPricePerToken:        pro.CacheReadInputTokenCost,
-	}
-
-	// GPT-6.2 standard cards. The request pricing time selects the Ultrafast
-	// promotional multiplier in applyModelSpecificPricingPolicyEx.
-	s.fallbackPrices["gpt-6.2-astra"] = &ModelPricing{
-		InputPricePerToken: 8e-6, InputPricePerTokenPriority: 16e-6,
-		OutputPricePerToken: 40e-6, OutputPricePerTokenPriority: 80e-6,
-		CacheCreationPricePerToken: 10e-6, CacheCreationPricePerTokenPriority: 20e-6,
-		CacheReadPricePerToken: 0.4e-6, CacheReadPricePerTokenPriority: 0.8e-6,
-		CacheCreationPriceExplicit: true,
-		CacheCreation5mPrice:       10e-6, CacheCreation1hPrice: 20e-6, SupportsCacheBreakdown: true,
-		LongContextInputThreshold: 272_000, LongContextInputMultiplier: 2, LongContextOutputMultiplier: 1.5,
-	}
-	s.fallbackPrices["gpt-6.2-sol"] = &ModelPricing{
-		InputPricePerToken: 2e-6, InputPricePerTokenPriority: 4e-6,
-		OutputPricePerToken: 10e-6, OutputPricePerTokenPriority: 20e-6,
-		CacheCreationPricePerToken: 2.5e-6, CacheCreationPricePerTokenPriority: 5e-6,
-		CacheReadPricePerToken: 0.1e-6, CacheReadPricePerTokenPriority: 0.2e-6,
-		CacheCreationPriceExplicit: true,
-		CacheCreation5mPrice:       2.5e-6, CacheCreation1hPrice: 5e-6, SupportsCacheBreakdown: true,
-		LongContextInputThreshold: 272_000, LongContextInputMultiplier: 2, LongContextOutputMultiplier: 1.5,
+	for _, model := range []string{"gpt-6.2-astra", "gpt-6.2-astra-pro", "gpt-6.2-sol"} {
+		price := gpt62DefaultPricing(model)
+		s.fallbackPrices[model] = &ModelPricing{
+			InputPricePerToken:            price.InputCostPerToken,
+			OutputPricePerToken:           price.OutputCostPerToken,
+			CacheCreationPricePerToken:    price.CacheCreationInputTokenCost,
+			CacheCreation12hPricePerToken: price.CacheCreationInputTokenCost12h,
+			CacheCreationPriceExplicit:    true,
+			CacheReadPricePerToken:        price.CacheReadInputTokenCost,
+			LongContextInputThreshold:     price.LongContextInputTokenThreshold,
+			LongContextInputMultiplier:    price.LongContextInputCostMultiplier,
+			LongContextOutputMultiplier:   price.LongContextOutputCostMultiplier,
+		}
 	}
 
 	// GPT-6.1 Terra rates: Standard, Fast 2x, and >272k whole-request pricing.
@@ -2195,17 +2179,17 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 		return &cloned
 	}
 	normalized := normalizeKnownOpenAICodexModel(model)
-	usesCacheWritePremium := isOpenAIGPT56Model(normalized) || isOpenAIGPT6AstraModel(normalized) || (openai.IsGPT6SolOrLunaModelSpelling(normalized) || openai.IsGPT61SolModelSpelling(normalized) || openai.IsGPT61TerraModelSpelling(normalized) || openai.IsGPT62ModelSpelling(normalized))
+	usesCacheWritePremium := isOpenAIGPT56Model(normalized) || isOpenAIGPT6AstraModel(normalized) || (openai.IsGPT6SolOrLunaModelSpelling(normalized) || openai.IsGPT61SolModelSpelling(normalized) || openai.IsGPT61TerraModelSpelling(normalized))
 	needsCacheCreationPolicy := usesCacheWritePremium && !pricing.CacheCreationPriceExplicit && (pricing.CacheCreationPricePerToken <= 0 ||
 		(pricing.InputPricePerTokenPriority > 0 && pricing.CacheCreationPricePerTokenPriority <= 0))
 	fastRatio := openAIModelFastPricingRatio(normalized)
 	needsOpus55FastMultiplier := claude.IsOpus55(model) && pricing.FastMultiplier == nil
-	needsUltrafastPolicy := openAIModelSupportsUltrafast(normalized)
+	needsUltrafastPolicy := openAIModelSupportsUltrafast(normalized) || normalizeOpenAIGPT62Model(normalized) == "gpt-6.2-astra-pro"
 	if !needsCacheCreationPolicy && fastRatio <= 0 && !needsOpus55FastMultiplier && !needsUltrafastPolicy {
 		return pricing
 	}
 	cloned := *pricing
-	if (openai.IsGPT61TerraModelSpelling(normalized) || openai.IsGPT62ModelSpelling(normalized)) && cloned.SupportsCacheBreakdown && cloned.FastMultiplier == nil {
+	if openai.IsGPT61TerraModelSpelling(normalized) && cloned.SupportsCacheBreakdown && cloned.FastMultiplier == nil {
 		// Scale both 30m and 12h cache-write buckets together for Fast.
 		multiplier := 2.0
 		cloned.FastMultiplier = &multiplier
@@ -2231,7 +2215,7 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 	}
 	if fastRatio > 0 {
 		enforceOpenAIFastPricingRatio(&cloned, fastRatio)
-		if (openai.IsGPT6SolOrLunaModelSpelling(normalized) || openai.IsGPT61SolModelSpelling(normalized) || openai.IsGPT61TerraModelSpelling(normalized) || openai.IsGPT62ModelSpelling(normalized)) && cloned.CacheCreationPriceExplicit {
+		if (openai.IsGPT6SolOrLunaModelSpelling(normalized) || openai.IsGPT61SolModelSpelling(normalized) || openai.IsGPT61TerraModelSpelling(normalized)) && cloned.CacheCreationPriceExplicit {
 			cloned.CacheCreationPricePerTokenPriority = cloned.CacheCreationPricePerToken * fastRatio
 		}
 	}
@@ -2243,7 +2227,7 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 // 档的模型（如 gpt-5.5-pro、gpt-5.4-mini/nano）返回 0。
 func openAIModelFastPricingRatio(normalized string) float64 {
 	switch normalized {
-	case "gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna":
+	case "gpt-5.4", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna":
 		return 2.0
 	case "gpt-5.5":
 		return 2.5
@@ -2737,7 +2721,7 @@ func getDefaultGrokImagineVideoPrice(model string, resolution string) (float64, 
 // settlement. March 1, 2027 00:00 Pacific is 08:00 UTC (before DST).
 func openAIUltrafastMultiplier(model string, at time.Time) float64 {
 	model = normalizeKnownOpenAICodexModel(model)
-	if isOpenAIGPT6AstraModel(model) || openai.IsGPT61SolModelSpelling(model) {
+	if isOpenAIGPT6AstraModel(model) || openai.IsGPT61SolModelSpelling(model) || normalizeOpenAIGPT62Model(model) == "gpt-6.2-astra-pro" {
 		return 6
 	}
 	if !openai.IsGPT62ModelSpelling(model) {

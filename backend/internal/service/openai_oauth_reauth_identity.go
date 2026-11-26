@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
 // Only the trusted OAuth response is a source of candidate identity. Stored
@@ -70,8 +72,17 @@ func resolveReauthIdentity(info *OpenAITokenInfo) string {
 	if !ok {
 		return "id_token_invalid"
 	}
+	reason := resolveReauthAccessIdentity(info, id)
+	if reason == "" && info.ChatGPTAccountID == "" {
+		info.ChatGPTAccountID = id.sid // legacy worker callback contract
+	}
+	return reason
+}
+
+func resolveReauthAccessIdentity(info *OpenAITokenInfo, id reauthTokenIdentity) string {
 	var access reauthTokenIdentity
 	if strings.Contains(info.AccessToken, ".") {
+		var ok bool
 		access, ok = reauthIdentityClaims(info.AccessToken)
 		if !ok {
 			return "access_token_invalid"
@@ -86,10 +97,63 @@ func resolveReauthIdentity(info *OpenAITokenInfo) string {
 			return pair.reason
 		}
 	}
-	info.ChatGPTAccountID = firstNonEmptyReauth(id.account, access.account, id.sid)
+	info.ChatGPTAccountID = firstNonEmptyReauth(id.account, access.account)
 	info.ChatGPTUserID = firstNonEmptyReauth(id.user, access.user, id.sub)
+	if info.IDToken == "" && info.ChatGPTUserID == "" {
+		info.ChatGPTUserID = access.sub
+	}
 	info.Email = firstNonEmptyReauth(id.email, access.email)
 	return ""
+}
+
+// CheckBoundOpenAIReauthorization compares a fresh admin OAuth result with the
+// existing workspace before any stored fields are merged into the result.
+func CheckBoundOpenAIReauthorization(account *Account, credentials, extra map[string]any) error {
+	if account.Platform != PlatformOpenAI || strings.TrimSpace(account.GetCredential("chatgpt_account_id")) == "" {
+		return nil
+	}
+	access, _ := credentials["access_token"].(string)
+	id, _ := credentials["id_token"].(string)
+	info := &OpenAITokenInfo{AccessToken: strings.TrimSpace(access), IDToken: strings.TrimSpace(id)}
+	invalid := func() error {
+		return infraerrors.Conflict("OPENAI_REAUTH_IDENTITY_MISMATCH", "cannot confirm the original workspace from the new OAuth tokens")
+	}
+	if info.AccessToken == "" {
+		return invalid()
+	}
+	// Some exchanges return only an access token. Never borrow the old ID token
+	// or treat a login session ID as proof of a bound workspace.
+	var idClaims reauthTokenIdentity
+	if _, hasID := credentials["id_token"]; hasID {
+		var ok bool
+		idClaims, ok = reauthIdentityClaims(info.IDToken)
+		if !ok {
+			return invalid()
+		}
+	}
+	if resolveReauthAccessIdentity(info, idClaims) != "" {
+		return invalid()
+	}
+	if err := validateReauthToken(account, info); err != nil {
+		return err
+	}
+	// Check the values the caller intends to persist, too. A valid token does
+	// not make contradictory form fields safe to store alongside it.
+	for _, field := range []struct {
+		values     map[string]any
+		key, claim string
+	}{
+		{credentials, "chatgpt_account_id", info.ChatGPTAccountID}, {credentials, "chatgpt_user_id", info.ChatGPTUserID},
+		{credentials, "email", info.Email}, {extra, "email", info.Email},
+	} {
+		if raw, set := field.values[field.key]; set {
+			value, ok := raw.(string)
+			if !ok || !(value == field.claim || (field.key == "email" && strings.EqualFold(value, field.claim))) {
+				return invalid()
+			}
+		}
+	}
+	return nil
 }
 
 type ReauthIdentityFieldCheck struct {

@@ -3,7 +3,7 @@
     <div class="open-page" :class="{ 'usage-records': usageView === 'records' }">
       <AppHeading variant="page" as="h1">{{ consoleCopy[usageView] }}</AppHeading>
       <div v-if="usageView === 'analysis' && analyticsErrors.size" role="alert" class="flex items-center justify-between gap-4 border border-red-500 p-4"><span>{{ t('usage.failedToLoad') }}</span><button type="button" class="btn btn-secondary" @click="refreshData">{{ t('common.refresh') }}</button></div>
-      <div v-if="activeTab !== 'traffic'" class="usage-filters">
+      <div v-if="showUsageControls" class="usage-filters">
         <div class="filter-controls usage-filter-controls">
           <div class="usage-date-filter">
             <span class="input-label">{{ t('admin.dashboard.timeRange') }}</span>
@@ -101,9 +101,9 @@
         </div>
       </div>
 
-      <UsageStatsCards v-if="usageView === 'analysis' && activeTab !== 'traffic'" :stats="usageStats" :show-account-cost="false" :strike-standard-cost="true" />
+      <UsageStatsCards v-if="usageView === 'analysis'" :stats="usageStats" :show-account-cost="false" :strike-standard-cost="true" />
 
-      <div v-if="usageView === 'analysis' && activeTab !== 'traffic'" class="space-y-4">
+      <div v-if="usageView === 'analysis'" class="space-y-4">
         <section v-if="usageView === 'analysis'" class="usage-trend">
           <TokenUsageTrend :trend-data="trendData" :loading="chartsLoading" />
         </section>
@@ -135,14 +135,17 @@
 
       </div>
 
-      <div v-if="usageView === 'records'" class="flex gap-2 border-b border-gray-200 dark:border-dark-700">
+      <div v-if="usageView === 'records'" ref="tabBar" class="flex scroll-mt-20 flex-wrap gap-2 border-b border-gray-200 dark:border-dark-700">
         <button class="tab" :class="{ 'tab-active': activeTab === 'usage' }" @click="switchToUsage">
           {{ t('usage.tabs.usage') }}
         </button>
         <button v-if="errorViewEnabled" class="tab" :class="{ 'tab-active': activeTab === 'errors' }" @click="switchToErrors">
           {{ t('usage.tabs.errors') }}
         </button>
-        <button class="tab" :class="{ 'tab-active': activeTab === 'traffic' }" @click="switchToTraffic">{{ t('traffic.title') }}</button>
+        <div class="flex items-center gap-1">
+          <button type="button" class="tab" :class="{ 'tab-active': activeTab === 'api' }" @click="switchToApi">{{ t('usageApi.title') }}</button>
+          <NewFeatureBadge v-if="authStore.isAdmin" :notice-id="NEW_FEATURE_NOTICES.usageRecordsApi" :user-id="authStore.user?.id" />
+        </div>
       </div>
 
       <template v-if="usageView === 'records' && activeTab === 'usage'">
@@ -193,7 +196,7 @@
         @retry="retryErrors"
         @ipGeoBatchFailed="handleIpGeoBatchFailed"
       />
-      <TrafficPanel v-if="activeTab === 'traffic'" :api-key-options="apiKeyOptions" class="card" />
+      <UsageApiGuide v-if="activeTab === 'api'" />
     </div>
     <ExportProgressDialog
       :show="exportProgress.show"
@@ -231,7 +234,9 @@ import Select, { type SelectOption } from '@/components/common/Select.vue'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import UsageStatsCards from '@/components/admin/usage/UsageStatsCards.vue'
 import UsageTable from '@/components/admin/usage/UsageTable.vue'
-import TrafficPanel from '@/components/usage/TrafficPanel.vue'
+import UsageApiGuide from '@/components/usage/UsageApiGuide.vue'
+import NewFeatureBadge from '@/components/common/NewFeatureBadge.vue'
+import { NEW_FEATURE_NOTICES } from '@/constants/newFeatureNotices'
 import ModelDistributionChart from '@/components/charts/ModelDistributionChart.vue'
 import GroupDistributionChart from '@/components/charts/GroupDistributionChart.vue'
 import TokenUsageTrend from '@/components/charts/TokenUsageTrend.vue'
@@ -344,7 +349,9 @@ const granularity = ref<'day' | 'hour'>(getGranularityForRange(startDate.value, 
 
 const modelDistributionMetric = ref<DistributionMetric>('tokens')
 const groupDistributionMetric = ref<DistributionMetric>('tokens')
-const activeTab = ref<'usage' | 'errors' | 'traffic'>('usage')
+const tabBar = ref<HTMLElement | null>(null)
+const activeTab = ref<'usage' | 'errors' | 'api'>('usage')
+const showUsageControls = computed(() => activeTab.value === 'usage' || activeTab.value === 'errors')
 const errorViewEnabled = computed(() => appStore.cachedPublicSettings?.allow_user_view_error_requests ?? false)
 const includeCacheRate = computed(() => showUsageCacheRate(appStore.cachedPublicSettings, 'user'))
 const includeUpstreamResponseModel = computed(() => showUpstreamResponseModelToUsers(appStore.cachedPublicSettings))
@@ -431,7 +438,7 @@ const buildUsageListParams = (page: number, pageSize: number): UsageQueryParams 
 
 const {
   items: usageLogs, loading, loadingMore: logsLoadingMore, refreshing: logsRefreshing,
-  total: logsTotal, error: logsError, hasMore: logsHasMore,
+  total: logsTotal, error: logsError, hasMore: logsHasMore, clear: clearLogs,
   reset: loadLogs, loadMore: loadMoreLogs, retry: retryLogs, refresh: refreshLogs,
 } = useInfiniteList<UsageLog>({
   pageSize: 50,
@@ -697,6 +704,7 @@ const exportToCSV = async () => {
     window.URL.revokeObjectURL(url)
     appStore.showSuccess(t('usage.exportSuccess'))
   } catch (error) {
+    if (exportAbortController !== controller) return
     if (isExportAbortError(error)) {
       appStore.showInfo(t('usage.exportCancelled'))
     } else {
@@ -778,11 +786,13 @@ const setCurrentColumnOrder = (keys: string[]) =>
 const resetCurrentColumns = () =>
   activeTab.value === 'errors' ? resetErrColumns() : resetColumns()
 
-const loadApiKeys = async () => {
-  const firstPage = await keysAPI.list(1, 100)
+let filterController: AbortController | undefined
+
+const loadApiKeys = async (signal: AbortSignal) => {
+  const firstPage = await keysAPI.list(1, 100, undefined, { signal })
   const keys = [...firstPage.items]
-  for (let page = 2; page <= firstPage.pages && keys.length > 0; page++) {
-    const response = await keysAPI.list(page, 100)
+  for (let page = 2; !signal.aborted && page <= firstPage.pages && keys.length > 0; page++) {
+    const response = await keysAPI.list(page, 100, undefined, { signal })
     if (response.items.length === 0) break
     keys.push(...response.items)
   }
@@ -790,15 +800,19 @@ const loadApiKeys = async () => {
 }
 
 const loadFilterOptions = async () => {
+  filterController?.abort()
+  const controller = new AbortController()
+  filterController = controller
   try {
     const [keys, availableGroups] = await Promise.all([
-      loadApiKeys(),
+      loadApiKeys(controller.signal),
       userGroupsAPI.getAvailable(),
     ])
+    if (controller.signal.aborted) return
     apiKeys.value = keys
     groups.value = availableGroups
   } catch (error) {
-    console.error('Failed to load usage filter options:', error)
+    if (!controller.signal.aborted) console.error('Failed to load usage filter options:', error)
   }
 }
 
@@ -809,7 +823,7 @@ const {
 } = useInfiniteList<UserErrorRequest>({
   pageSize: 50,
   keyOf: row => row.id,
-  fetchPage: page => usageAPI.listMyErrorRequests({
+  fetchPage: (page, signal) => usageAPI.listMyErrorRequests({
     page, page_size: 50,
     start_date: startDate.value,
     end_date: endDate.value,
@@ -819,7 +833,7 @@ const {
     status_code: errorFilter.value.status_code ?? undefined,
     sort_by: errorSortBy.value,
     sort_order: errorSortOrder.value,
-  }),
+  }, { signal }),
 })
 watch(errorsError, error => { if (error) appStore.showError(t('usage.errors.failedToLoad')) })
 const resetErrorRows = () => {
@@ -834,11 +848,22 @@ const onErrorSort = (sortBy: string, sortOrder: 'asc' | 'desc') => {
   void loadErrors()
 }
 
-const switchToTraffic = () => {
-  activeTab.value = 'traffic'
+const switchToApi = () => {
+  activeTab.value = 'api'
   selectedRequest.value = null
   syncLocation()
 }
+watch(activeTab, (tab, previous) => {
+  if (tab === 'api') {
+    filterController?.abort()
+    clearLogs()
+    clearErrors()
+    tabBar.value?.scrollIntoView?.({ block: 'nearest' })
+  } else {
+    if (previous === 'api') void loadFilterOptions()
+    if (previous === 'errors') clearErrors()
+  }
+}, { flush: 'post' })
 
 const switchToErrors = () => {
   errorFilter.value.api_key_id = filters.value.api_key_id ?? null
@@ -879,7 +904,7 @@ const restoreLocation = () => {
   const state = parseUsageLocation(route?.query ?? {}, {start: defaultRange.start, end: defaultRange.end, pageSize: 50})
   void restoreRequestDetail(state.usageId)
   usageView.value = state.view as 'analysis' | 'records'
-  activeTab.value = state.view === 'analysis' ? 'usage' : state.tab === 'traffic' ? 'traffic' : state.tab === 'errors' && errorViewEnabled.value ? 'errors' : 'usage'
+  activeTab.value = state.view === 'analysis' ? 'usage' : state.tab === 'api' ? 'api' : state.tab === 'errors' && errorViewEnabled.value ? 'errors' : 'usage'
   startDate.value = state.start
   endDate.value = state.end
   selectedPreset.value = state.customRange ? null : 'last24Hours'
@@ -893,6 +918,7 @@ const restoreLocation = () => {
   errorSortOrder.value = state.sortOrder
 }
 const reloadCurrentData = () => {
+  if (activeTab.value === 'api') return
   void loadLogs()
   void loadStats()
   void loadModelStats()
@@ -927,11 +953,12 @@ watch(errorViewEnabled, (enabled) => {
 })
 onMounted(() => {
   restoreLocation()
-  void loadFilterOptions()
+  if (activeTab.value !== 'api') void loadFilterOptions()
   reloadCurrentData()
 })
 
 onUnmounted(() => {
+  filterController?.abort()
   exportAbortController?.abort()
   ++detailReqSeq
   ++chartReqSeq

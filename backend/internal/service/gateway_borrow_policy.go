@@ -115,10 +115,15 @@ func (s *RateLimitService) UpdateGatewayBorrowPolicyFromProbe(ctx context.Contex
 	}
 	for model, r := range o.ModelResults {
 		_, off := r.CheckedAt.Zone()
-		if accountMode && (model != "gpt-6-astra" || r.ReasoningEffort != "medium") {
+		solLow := accountMode && model == gatewayBorrowSolLowModel
+		if !solLow && accountMode && (model != "gpt-6-astra" || r.ReasoningEffort != "medium") {
 			return result, invalidGatewayBorrowPolicy()
 		}
-		if !gatewayBorrowCanonicalModel(model) || r.Model != model || r.Algorithm != GatewayBorrowCandyAlgorithm || r.PromptSHA256 != GatewayBorrowCandyPromptSHA256 || r.ExpectedAnswer != "21" || !slices.Contains([]string{"low", "medium", "high", "xhigh"}, r.ReasoningEffort) || !gatewayBorrowRunPattern.MatchString(r.RunID) || r.CheckedAt.IsZero() || off != 0 || r.CheckedAt.After(now.Add(30*time.Second)) || r.Total < 1 || r.Total > 4 || r.Correct < 0 || r.Correct > r.Total {
+		validProbe := gatewayBorrowCanonicalModel(model) && r.Algorithm == GatewayBorrowCandyAlgorithm && r.PromptSHA256 == GatewayBorrowCandyPromptSHA256 && r.ExpectedAnswer == "21" && slices.Contains([]string{"low", "medium", "high", "xhigh"}, r.ReasoningEffort)
+		if solLow {
+			validProbe = validGatewayBorrowSolLowResult(r)
+		}
+		if !validProbe || r.Model != model || !gatewayBorrowRunPattern.MatchString(r.RunID) || r.CheckedAt.IsZero() || off != 0 || r.CheckedAt.After(now.Add(30*time.Second)) || r.Total < 1 || r.Total > 4 || r.Correct < 0 || r.Correct > r.Total {
 			return result, invalidGatewayBorrowPolicy()
 		}
 		if r.State == "inconclusive" {

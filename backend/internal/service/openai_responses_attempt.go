@@ -3,7 +3,6 @@ package service
 import (
 	"bytes"
 	"errors"
-	"math"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/tidwall/gjson"
@@ -25,9 +24,8 @@ func (e *openAIResponsesAttemptEvidence) observe(payload []byte, eventType strin
 				continue
 			}
 			e.noReplay = true
-			for _, key := range []string{"input_tokens", "output_tokens", "prompt_tokens", "completion_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"} {
-				v := meter.Get(key)
-				if v.Type == gjson.Number && v.Num >= 0 && math.Trunc(v.Num) == v.Num {
+			for _, key := range openAIUsageCounterPaths {
+				if _, valid := boundedJSONNonNegativeInt(meter.Get(key)); valid {
 					e.usageReported = true
 					return
 				}
@@ -85,6 +83,9 @@ func (s *OpenAIGatewayService) bufferedResponsesFailure(body string) *openaiNonS
 	images := newOpenAIImageOutputCounter()
 	searches := make(map[string]struct{})
 	forEachOpenAISSEFrame(body, func(eventType string, data []byte) {
+		if !gjson.ValidBytes(data) {
+			return
+		}
 		r.evidence.observe(data, eventType)
 		s.parseSSEUsageBytesWithType(data, eventType, usage)
 		if r.responseID == "" {

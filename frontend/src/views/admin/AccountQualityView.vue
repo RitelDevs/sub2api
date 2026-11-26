@@ -65,7 +65,7 @@
             <DataTable :columns="operationColumns" :data="filteredOperations" row-key="id" :row-attrs="operationRowAttrs" column-order-key="admin-account-quality-operations" :loading="!store.operationsLoaded && store.operationsLoading">
               <template #cell-time="{ row: operation }"><div class="time-cell"><strong>{{ clock(operation.started_at) }}</strong><span>{{ day(operation.started_at) }}</span></div></template>
               <template #cell-account="{ row: operation }"><div class="account-cell"><button :title="operation.account_name" @click="store.selectedPlanId = operation.plan_id"><strong>{{ operation.account_name || `#${operation.account_id}` }}</strong></button><span>{{ t('qualityOps.rule') }} {{ operation.plan_id }}<span class="mx-1">·</span>#{{ operation.account_id }}</span></div></template>
-              <template #cell-result="{ row: operation }"><span class="test-count" :class="allPassed(operation) ? 'test-passed' : 'test-other'"><Icon :name="allPassed(operation) ? 'checkCircle' : 'exclamationCircle'" size="xs" />{{ operation.passed_count }} / {{ operation.total_count }}</span><span class="cell-secondary">{{ t(operation.status === 'skipped' ? 'qualityOps.skipped' : allPassed(operation) ? 'qualityOps.roundPassed' : 'qualityOps.roundNotPassed') }}<template v-if="operation.skipped_count"> · {{ t('qualityOps.skippedCount', { n: operation.skipped_count }) }}</template></span></template>
+              <template #cell-result="{ row: operation }"><span class="test-count" :class="allPassed(operation) ? 'test-passed' : 'test-other'"><Icon :name="allPassed(operation) ? 'checkCircle' : 'exclamationCircle'" size="xs" />{{ operation.passed_count }} / {{ operation.total_count }}</span><span class="cell-secondary">{{ t(operation.status === 'skipped' ? 'qualityOps.skipped' : allPassed(operation) ? 'qualityOps.roundPassed' : 'qualityOps.roundNotPassed') }}<template v-if="operation.skipped_count"> · {{ t('qualityOps.skippedCount', { n: operation.skipped_count }) }}</template></span><span v-if="operation.quality_429_streak" class="block text-xs text-amber-700 dark:text-amber-300">{{ rateLimitLabel(operation.quality_429_streak) }}</span></template>
               <template #cell-outcome="{ row: operation }"><div class="action-cell"><button class="outcome-badge" :class="tone(operation.quality_action)" @click="operationDetails(operation)"><span />{{ operationLabel(operation) }}</button><span class="cell-secondary" :title="operationGroups(operation)">{{ operationGroups(operation) }}</span></div></template>
               <template #cell-actions="{ row: operation }"><div class="detail-cell"><button class="detail-button" :aria-label="t('qualityOps.openRound', { account: operation.account_name, time: date(operation.started_at) })" @click="operationDetails(operation)"><span>{{ t('qualityOps.details') }}</span><Icon name="arrowRight" size="sm" /></button></div></template>
               <template #empty><div v-if="store.operationsLoaded && !filteredOperations.length" class="panel-empty"><Icon name="document" size="lg" /><AppHeading variant="empty" as="h4">{{ t('qualityOps.noResults') }}</AppHeading><p>{{ t('qualityOps.filteredEmptyHint') }}</p></div></template>
@@ -675,6 +675,7 @@ const probeLabels: Record<StateProbeVerdict, string> = { healthy: 'qualityOps.pr
 function isProbePlan(plan: ScheduledTestPlan) { return plan.pelican_config?.question_kind === STATE_PROBE_QUESTION }
 function isProbeResult(result: ScheduledTestResult) { return result.pelican_config?.question_kind === STATE_PROBE_QUESTION }
 function resultLabel(result: ScheduledTestResult) {
+  if (result.pelican_config?.quality_429_streak) return rateLimitLabel(result.pelican_config.quality_429_streak)
   if (result.status === 'skipped') return t(result.error_message === 'model_catalog_unavailable' ? 'qualityOps.catalogUnavailable' : result.error_message === 'model_unavailable' ? 'qualityOps.modelUnavailableSkipped' : 'qualityOps.modelUnsupportedSkipped')
   if (!result.status) return t('qualityOps.notLoaded')
   if (result.pelican_config?.question_kind === 'ciallo') {
@@ -684,6 +685,9 @@ function resultLabel(result: ScheduledTestResult) {
   const verdict = stateProbeVerdict(result)
   if (verdict) return t(probeLabels[verdict])
   return t(result.status === 'success' ? 'qualityOps.passed' : result.error_message === 'answer_mismatch' ? 'qualityOps.wrongAnswer' : result.quality_judgment?.verdict === 'unknown' || result.error_message?.startsWith('judge_') ? 'qualityOps.judgeUnknown' : 'qualityOps.requestError')
+}
+function rateLimitLabel(n: number) {
+  return n >= 3 ? t('qualityOps.rateLimitDegraded') : t('qualityOps.rateLimitPending', { n })
 }
 // 探针「无法判断」不是账号问题，用中性色，避免和降智混在一起。
 function resultTextClass(result: ScheduledTestResult) {

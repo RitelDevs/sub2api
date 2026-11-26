@@ -1426,6 +1426,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		bridgeReplayInputExists := false
 		var bridgeAccountFailoverInput []json.RawMessage
 		bridgeAccountFailoverInputExists := false
+		preserveOAuthOutput := account.IsOpenAIOAuth() && openAIWSPlaintextBridgeAccount(account) && !smartStateful
+		bridgeResponseID := ""
+		bridgeIdentity := openAIWSBridgeFrameIdentity(c, firstPayload.clientPayloadRaw)
 		for turn := 1; ; turn++ {
 			if turn > 1 && hooks != nil {
 				if err := hooks.beforeRequest(turn, currentBridgePayload.payloadRaw, currentBridgePayload.clientPayloadRaw, currentBridgePayload.originalModel); err != nil {
@@ -1476,6 +1479,26 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			if smartStrict && currentBridgePayload.previousResponseID != "" && currentBridgePayload.previousResponseID != smartSession.LastResponse {
 				return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "continuation does not belong to this HTTP session", nil)
+			}
+			if preserveOAuthOutput {
+				identity := openAIWSBridgeFrameIdentity(c, currentBridgePayload.clientPayloadRaw)
+				conflict := bridgeIdentity.conflicts(identity)
+				if currentBridgePayload.previousResponseID != "" && (currentBridgePayload.previousResponseID != bridgeResponseID || conflict) {
+					return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "continuation does not belong to this HTTP session", nil)
+				}
+				if conflict {
+					bridgeReplayInput, bridgeAccountFailoverInput = nil, nil
+					bridgeReplayInputExists, bridgeAccountFailoverInputExists = false, false
+					bridgeResponseID, turnState = "", ""
+					bridgeIdentity = identity
+				} else {
+					if identity.thread != "" {
+						bridgeIdentity.thread = identity.thread
+					}
+					if identity.session != "" {
+						bridgeIdentity.session = identity.session
+					}
+				}
 			}
 			bridgePayloadRaw := currentBridgePayload.payloadRaw
 			bridgePayloadBytes := currentBridgePayload.payloadBytes
@@ -1655,6 +1678,15 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					result.wsAccountFailoverReplayInput,
 				)
 				bridgeAccountFailoverInputExists = true
+			}
+			if preserveOAuthOutput {
+				bridgeResponseID = ""
+				if result.wsReplayInputExists {
+					bridgeResponseID = strings.TrimSpace(result.RequestID)
+				} else {
+					bridgeReplayInput, bridgeAccountFailoverInput = nil, nil
+					bridgeReplayInputExists, bridgeAccountFailoverInputExists = false, false
+				}
 			}
 			if bridgeTurnState := strings.TrimSpace(result.ResponseHeaders.Get(openAIWSTurnStateHeader)); bridgeTurnState != "" {
 				// Follow-up turns on this bridge retain their own upstream state;
@@ -2012,6 +2044,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				return nil, openAIWSUnsentAgentTurn(err, clientPayload, originalModel, turn)
 			}
 			return nil, openAIWSAgentRecoveryClose(err)
+		}
+		// Lease acquisition and admission can outlast an actual same-account
+		// retry's window. Ordinary accepted ingress must still drain on disconnect;
+		// admitted generations and later client turns keep their admission.
+		if latencyGenerationStartedTurn == 0 && openAISameAccountRetryFromContext(ctx).accountID > 0 {
+			if !OpenAISameAccountRetryAdmissible(ctx, latest.ID) || !OpenAIWSIngressCanFailover(priorityLatencyCtx, c) {
+				return nil, denyOpenAITurn("same_account_retry_unavailable")
+			}
 		}
 		latencyGenerationStartedTurn = turn
 		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {

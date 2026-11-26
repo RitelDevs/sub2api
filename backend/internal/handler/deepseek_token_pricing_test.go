@@ -17,7 +17,7 @@ func TestDeepSeekNativeMissingPricingRejectsBeforeUpstream(t *testing.T) {
 	for _, protocol := range []string{"chat", "messages", "responses"} {
 		for _, model := range []string{"deepseek-unpriced-regression-model", "native-unpriced-regression"} {
 			t.Run(protocol+"/"+model, func(t *testing.T) {
-				upstream := &deepSeekRecoveryTestUpstream{response: func(_ int, _ *http.Request) (int, string) { return 200, deepSeekSuccess() }}
+				upstream := &deepSeekTestUpstream{response: func(_ int, _ *http.Request) (int, string) { return 200, deepSeekSuccess() }}
 				h, c, response, usage := deepSeekHandlerFixture(t, protocol, upstream)
 				// Make the intentionally unpriced model routable, so this tests
 				// pricing admission rather than the scheduler's model allowlist. An empty
@@ -43,7 +43,7 @@ func TestDeepSeekNativeMissingPricingRejectsBeforeUpstream(t *testing.T) {
 				}
 				require.Equal(t, http.StatusServiceUnavailable, response.Code, response.Body.String())
 				require.Contains(t, response.Body.String(), "model_pricing_unavailable")
-				require.Empty(t, upstream.ids, "both recovery and ordinary native requests must reject before upstream I/O")
+				require.Empty(t, upstream.ids, "native requests must reject before upstream I/O")
 				require.Empty(t, usage.created)
 			})
 		}

@@ -1896,22 +1896,8 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	// 分组利润控制：Messages 文本入口同样请求级装门并固定 pricingAt。
 	msgPricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
 	c.Request = c.Request.WithContext(msgPricingCtx)
-	if deepSeekRecoveryEnabled(requestPlatform, reqModel, body) {
-		forwardModel := routingModel
-		if effectiveMappedModel != "" {
-			forwardModel = effectiveMappedModel
-		}
-		forwardBody := mappedBodyForMessages(channelMappingMsg.Mapped, channelMappingMsg.MappedModel)
-		h.runDeepSeekRecovery(c, deepSeekRecoveryRequest{
-			apiKey: apiKey, subscription: subscription, model: reqModel, forwardModel: forwardModel,
-			protocol: "messages", stream: reqStream, body: body, mapping: channelMappingMsg,
-			sessionHash: sessionHash, pricingAt: pricingAt,
-			forward: func(ctx context.Context, attempt *gin.Context, account *service.Account) (*service.OpenAIForwardResult, error) {
-				return h.gatewayService.ForwardAsAnthropic(ctx, attempt, account, forwardBody, promptCacheKey, strings.TrimSpace(effectiveMappedModel))
-			},
-		}, reqLog)
-		return
-	}
+	receipt := newDeepSeekBillingReceipt(requestPlatform, reqModel, body)
+	defer receipt.finish(h, c, apiKey, reqModel, body, reqLog)
 
 	for {
 		if failoverClientGone(c) {
@@ -2034,6 +2020,12 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			h.anthropicStreamingAwareError(c, http.StatusServiceUnavailable, "model_pricing_unavailable", "Model pricing is unavailable", streamStarted)
 			return
 		}
+		if err := receipt.beforeForward(c, account, reqStream, &streamStarted); err != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			return
+		}
 		writerSizeBeforeForward := c.Writer.Size()
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {
@@ -2055,11 +2047,12 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		if h.handleOpenAIRPMForwardError(c, err, streamStarted, true) {
 			return
 		}
+		receipt.observeFailure(account, result, err)
 		var cyberBlockBodyMsg []byte
 		if service.GetOpsCyberPolicy(c) != nil {
 			cyberBlockBodyMsg = body
 		}
-		h.recordCyberPolicyIfMarked(c, apiKey, account, subscription, reqModel, err != nil, cyberBlockBodyMsg, clientRequestedUsageFields(c, channelMappingMsg, reqModel, ""), service.HashUsageRequestPayload(body))
+		h.recordCyberPolicyIfMarked(c, apiKey, account, subscription, reqModel, err != nil && receipt == nil, cyberBlockBodyMsg, clientRequestedUsageFields(c, channelMappingMsg, reqModel, ""), service.HashUsageRequestPayload(body))
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
 		upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)
 		responseLatencyMs := forwardDurationMs

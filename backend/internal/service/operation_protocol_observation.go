@@ -12,14 +12,15 @@ import (
 // ObserveOperationProtocol consumes already parsed protocol payloads for diagnostics.
 // It never changes forwarding, retry eligibility or billing. No response text is retained.
 func ObserveOperationProtocol(ctx context.Context, protocol string, payload []byte, eventType string) {
-	if _, staged := ctx.Value(deepSeekRecoveryAttemptKey{}).(*DeepSeekRecoveryAttempt); staged {
-		return
-	}
 	if requesttiming.From(ctx) == nil || !gjson.ValidBytes(payload) {
 		return
 	}
 	e := operationProtocolEvidence(protocol, gjson.ParseBytes(payload), eventType)
 	requesttiming.ObserveOperationSource(ctx, e)
+}
+
+func nonempty(v gjson.Result) bool {
+	return strings.TrimSpace(v.String()) != "" && v.Type != gjson.Null
 }
 
 func OperationProtocolContentKind(protocol string, payload []byte, eventType string) string {
@@ -199,16 +200,9 @@ func operationProtocolEvidence(protocol string, r gjson.Result, eventType string
 	return e
 }
 
-// Recovery writers stage terminal frames; their real downstream sink owns delivery.
 func operationProtocolOutputFlushed(ctx context.Context) {
-	if _, staged := ctx.Value(deepSeekRecoveryAttemptKey{}).(*DeepSeekRecoveryAttempt); staged {
-		return
-	}
 	requesttiming.OperationOutputFlushed(ctx)
 }
 func operationProtocolDelivered(ctx context.Context, err error) {
-	if _, staged := ctx.Value(deepSeekRecoveryAttemptKey{}).(*DeepSeekRecoveryAttempt); staged {
-		return
-	}
 	requesttiming.OperationDelivery(ctx, "", true, err)
 }

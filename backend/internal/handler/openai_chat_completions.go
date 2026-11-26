@@ -204,18 +204,8 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	// 分组利润控制：chat completions 文本入口请求级装门并固定 pricingAt。
 	ccPricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
 	c.Request = c.Request.WithContext(ccPricingCtx)
-	if deepSeekRecoveryEnabled(requestPlatform, reqModel, body) {
-		forwardBody := openAIModelMappedBody(body, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
-		h.runDeepSeekRecovery(c, deepSeekRecoveryRequest{
-			apiKey: apiKey, subscription: subscription, model: reqModel, forwardModel: forwardModel,
-			protocol: "chat", stream: reqStream, body: body, mapping: channelMapping,
-			sessionHash: sessionHash, pricingAt: pricingAt,
-			forward: func(ctx context.Context, attempt *gin.Context, account *service.Account) (*service.OpenAIForwardResult, error) {
-				return h.gatewayService.ForwardAsChatCompletions(ctx, attempt, account, forwardBody, promptCacheKey, "")
-			},
-		}, reqLog)
-		return
-	}
+	receipt := newDeepSeekBillingReceipt(requestPlatform, reqModel, body)
+	defer receipt.finish(h, c, apiKey, reqModel, body, reqLog)
 
 	for {
 		if failoverClientGone(c) {
@@ -324,6 +314,12 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "model_pricing_unavailable", "Model pricing is unavailable", streamStarted)
 			return
 		}
+		if err := receipt.beforeForward(c, account, reqStream, &streamStarted); err != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			return
+		}
 		writerSizeBeforeForward := c.Writer.Size()
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {
@@ -339,6 +335,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		if service.IsUpstreamModerationDenied(err) {
 			return
 		}
+		receipt.observeFailure(account, result, err)
 		if retryOpenAIInitialAdmission(c, err, result, body, account.ID, failedAccountIDs, &switchCount, maxAccountSwitches) {
 			lastAdmissionErr = err
 			reqLog.Info("openai_chat_completions.admission_reselecting", zap.Int64("account_id", account.ID), zap.Int("switch_count", switchCount))
@@ -351,7 +348,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		if service.GetOpsCyberPolicy(c) != nil {
 			cyberBlockBodyChat = body
 		}
-		h.recordCyberPolicyIfMarked(c, apiKey, account, subscription, reqModel, err != nil, cyberBlockBodyChat, clientRequestedUsageFields(c, channelMapping, reqModel, ""), service.HashUsageRequestPayload(body))
+		h.recordCyberPolicyIfMarked(c, apiKey, account, subscription, reqModel, err != nil && receipt == nil, cyberBlockBodyChat, clientRequestedUsageFields(c, channelMapping, reqModel, ""), service.HashUsageRequestPayload(body))
 
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
 		upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)

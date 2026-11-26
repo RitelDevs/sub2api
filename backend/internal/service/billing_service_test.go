@@ -1696,7 +1696,7 @@ func TestCalculateCost_LargeTokenCount(t *testing.T) {
 func TestServiceTierCostMultiplier(t *testing.T) {
 	require.InDelta(t, 2.0, serviceTierCostMultiplier("priority"), 1e-12)
 	require.InDelta(t, 2.0, serviceTierCostMultiplier(" Priority "), 1e-12)
-	require.InDelta(t, 2.0, serviceTierCostMultiplier("ultrafast"), 1e-12)
+	require.InDelta(t, 6.0, serviceTierCostMultiplier("ultrafast"), 1e-12)
 	require.InDelta(t, 0.5, serviceTierCostMultiplier("flex"), 1e-12)
 	require.InDelta(t, 1.0, serviceTierCostMultiplier(""), 1e-12)
 	require.InDelta(t, 1.0, serviceTierCostMultiplier("default"), 1e-12)
@@ -2365,27 +2365,26 @@ func TestAstraUltrafastPricingUsesSixTimesStandard(t *testing.T) {
 	}
 	p, err := svc.GetModelPricing("gpt-6-sol")
 	require.NoError(t, err)
-	require.Equal(t, 2.0, configuredServiceTierMultiplier("ultrafast", p))
+	require.Equal(t, 6.0, configuredServiceTierMultiplier("ultrafast", p))
 }
 
-// 门控与计费共用同一判定：凡是分组会强制写入 ultrafast 的模型，都必须按 6x 计费。
-func TestOpenAIUltrafastGateMatchesBilling(t *testing.T) {
+func TestOpenAIUltrafastBillingAndForceEligibility(t *testing.T) {
 	svc := newTestBillingService()
 	for _, tt := range []struct {
-		model string
-		want  float64
+		model    string
+		canForce bool
 	}{
-		{model: "gpt-6-astra", want: 6},
-		{model: "gpt-6.1-sol", want: 6},
-		{model: "gpt-6.1-sol-high", want: 6},
-		{model: "gpt-6.1-terra", want: 2},
-		{model: "gpt-6-sol", want: 2},
-		{model: "gpt-5.6-sol", want: 2},
+		{model: "gpt-6-astra", canForce: true},
+		{model: "gpt-6.1-sol", canForce: true},
+		{model: "gpt-6.1-sol-high", canForce: true},
+		{model: "gpt-6.1-terra", canForce: false},
+		{model: "gpt-6-sol", canForce: false},
+		{model: "gpt-5.6-sol", canForce: false},
 	} {
 		pricing, err := svc.GetModelPricing(tt.model)
 		require.NoError(t, err, tt.model)
-		require.Equal(t, tt.want, configuredServiceTierMultiplier(OpenAIFastTierUltrafast, pricing), tt.model)
-		require.Equal(t, tt.want == 6, openAIModelSupportsUltrafast(tt.model), tt.model)
+		require.Equal(t, 6.0, configuredServiceTierMultiplier(OpenAIFastTierUltrafast, pricing), tt.model)
+		require.Equal(t, tt.canForce, openAIModelSupportsUltrafast(tt.model), tt.model)
 
 		// 渠道自定义价格与显式 Fast 倍率都不改变 Ultrafast 倍率。
 		custom, fast := 1e-6, 3.0
@@ -2393,7 +2392,7 @@ func TestOpenAIUltrafastGateMatchesBilling(t *testing.T) {
 			InputPrice: &custom, OutputPrice: &custom, FastMultiplier: &fast,
 		})
 		require.NoError(t, err, tt.model)
-		require.Equal(t, tt.want, configuredServiceTierMultiplier(OpenAIFastTierUltrafast, channelPricing), tt.model)
+		require.Equal(t, 6.0, configuredServiceTierMultiplier(OpenAIFastTierUltrafast, channelPricing), tt.model)
 	}
 }
 

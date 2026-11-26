@@ -142,7 +142,7 @@ func TestOpenAICacheWriteTTLPrices(t *testing.T) {
 	for _, tier := range []struct {
 		name string
 		rate float64
-	}{{"default", 1}, {"fast", 2}, {"flex", 0.5}, {"ultrafast", 2}} {
+	}{{"default", 1}, {"fast", 2}, {"flex", 0.5}, {"ultrafast", 6}} {
 		t.Run(tier.name+"/long context and group rate", func(t *testing.T) {
 			p := *base
 			applyChannelTokenPriceOverrides(&p, &ChannelModelPricing{
@@ -165,11 +165,11 @@ func TestOpenAICacheWriteTTLPrices(t *testing.T) {
 		cost := service.computeTokenBreakdown(p, UsageTokens{CacheCreationTokens: 1_000_000, CacheCreation12hTokens: 1_000_000}, 1, "ultrafast", false)
 		require.InDelta(t, 150, cost.CacheCreationCost, 1e-12)
 	})
-	t.Run("Terra catalog ultrafast retains local rate with TTL writes", func(t *testing.T) {
+	t.Run("Terra fallback ultrafast with TTL writes", func(t *testing.T) {
 		p, err := service.GetModelPricing("gpt-6.1-terra")
 		require.NoError(t, err)
 		cost := service.computeTokenBreakdown(p, UsageTokens{CacheCreationTokens: 1_000_000, CacheCreation30mTokens: 500_000, CacheCreation12hTokens: 500_000}, 1, "ultrafast", false)
-		require.InDelta(t, 3.75, cost.CacheCreationCost, 1e-12)
+		require.InDelta(t, 11.25, cost.CacheCreationCost, 1e-12)
 	})
 	t.Run("explicit free 12h", func(t *testing.T) {
 		p := *base

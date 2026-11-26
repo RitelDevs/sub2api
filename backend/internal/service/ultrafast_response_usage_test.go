@@ -171,7 +171,7 @@ func ultrafastUsageEvent(t *testing.T, repo *ultrafastUsageRepo) UsageBillingEve
 
 func TestUltrafastUsageRecordUsageCachedTokenMatrix(t *testing.T) {
 	// Full model rates live in TestUltrafastResponseToCost. Here cover
-	// the distinct Astra multiplier, Sol/Terra rates and the long-context boundary
+	// Astra, Sol and Terra rates and the long-context boundary
 	// through RecordUsage without multiplying the complete pricing table again.
 	for _, model := range []struct {
 		name                       string
@@ -180,7 +180,7 @@ func TestUltrafastUsageRecordUsageCachedTokenMatrix(t *testing.T) {
 	}{
 		{"gpt-6-astra", 10e-6, 50e-6, 1e-6, 12.5e-6, 6},
 		{"gpt-6.1-sol", 2e-6, 10e-6, .1e-6, 2.5e-6, 6},
-		{"gpt-6.1-terra", 1e-6, 5e-6, .05e-6, 1.25e-6, 2},
+		{"gpt-6.1-terra", 1e-6, 5e-6, .05e-6, 1.25e-6, 6},
 	} {
 		for _, total := range []int{272000, 272001} {
 			for _, tier := range []struct {
@@ -286,7 +286,7 @@ func TestUltrafastUsageAccountGroupMultiplierAndZeroRate(t *testing.T) {
 			}
 			e := ultrafastUsageEvent(t, repo)
 			standard := 1000*2e-6 + 500*10e-6 + 8000*.2e-6 + 1000*2.5e-6
-			ultrafastUsageNear(t, "charge with independent account group multiplier", QuantizeUsageBillingAmount(standard*2*.25*multiplier), e.Command.BalanceCost)
+			ultrafastUsageNear(t, "charge with independent account group multiplier", QuantizeUsageBillingAmount(standard*6*.25*multiplier), e.Command.BalanceCost)
 		})
 	}
 }
@@ -300,7 +300,7 @@ func TestUltrafastUsageCacheTTLAndNoPricingCacheContamination(t *testing.T) {
 	for _, tier := range []struct {
 		name   string
 		factor float64
-	}{{"default", 1}, {"ultrafast", 2}, {"default", 1}, {"ultrafast", 2}} {
+	}{{"default", 1}, {"ultrafast", 6}, {"default", 1}, {"ultrafast", 6}} {
 		cost := svc.computeTokenBreakdown(pricing, tokens, .25, tier.name, true)
 		ultrafastUsageNear(t, "mixed TTL", (400*2.5e-6+600*4e-6)*2*tier.factor, cost.CacheCreationCost)
 		ultrafastUsageNear(t, "read", 270001*.2e-6*2*tier.factor, cost.CacheReadCost)
@@ -323,7 +323,7 @@ func TestUltrafastUsageExplicitZeroCacheWrite(t *testing.T) {
 }
 
 // The account switch controls response-based settlement. A client explicitly
-// requesting UltraFast still pays the model-owned rate when that switch is off or absent.
+// requesting UltraFast still pays the UltraFast rate when that switch is off or absent.
 func TestUltrafastUsageExplicitRequestWithoutResponseBilling(t *testing.T) {
 	for _, flag := range []any{nil, false, true} {
 		for _, observed := range []string{"", "ultrafast"} {
@@ -339,7 +339,7 @@ func TestUltrafastUsageExplicitRequestWithoutResponseBilling(t *testing.T) {
 					t.Fatal(err)
 				}
 				e := ultrafastUsageEvent(t, repo)
-				ultrafastUsageNear(t, "explicit Sol UltraFast preserves 2x", .00555, e.Command.BalanceCost)
+				ultrafastUsageNear(t, "explicit Sol UltraFast charges 6x", .01665, e.Command.BalanceCost)
 			})
 		}
 	}

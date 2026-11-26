@@ -10,10 +10,52 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGeminiRawBufferedDeliveryBeforeSettlement(t *testing.T) {
+	for _, tc := range []struct {
+		name, finish, config string
+		status               int
+	}{
+		{"complete", "stop", "", http.StatusOK},
+		{"unknown finish", "unknown_vendor_reason", "", http.StatusBadGateway},
+		{"missing candidate", "stop", `,"generationConfig":{"candidateCount":2}`, http.StatusBadGateway},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest("POST", "/v1beta/models/fixture:generateContent", strings.NewReader(`{"contents":[{"parts":[{"text":"hi"}]}]`+tc.config+`}`))
+			c.Params = gin.Params{{Key: "modelAction", Value: "/fixture:generateContent"}}
+			handler.ServeGeminiViaChatCompletions(c, func(c *gin.Context) {
+				body := `{"choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"` + tc.finish + `"}],"usage":{"prompt_tokens":3,"completion_tokens":4}}`
+				resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
+				result, err := service.ForwardGeminiRawFixture(c, resp)
+				require.NotNil(t, result)
+				require.Equal(t, tc.status, rec.Code)
+				require.False(t, result.ClientDisconnect)
+				require.Equal(t, 3, result.Usage.InputTokens)
+				require.Equal(t, 4, result.Usage.OutputTokens)
+				require.Equal(t, tc.status == 200, result.SucceededForScheduling())
+				if tc.status == 200 {
+					require.NoError(t, err)
+					require.Contains(t, rec.Body.String(), `"finishReason":"STOP"`)
+				} else {
+					require.ErrorIs(t, err, apicompat.ErrGeminiResponseConversion)
+					require.True(t, result.ObservedUsageOnError)
+					require.True(t, service.IsResponseCommitted(c))
+				}
+			})
+			if tc.status != 200 {
+				require.Len(t, c.Errors, 1)
+				require.Equal(t, 1, strings.Count(rec.Body.String(), `"error"`))
+			}
+		})
+	}
+}
 
 func TestGeminiRawChatResponseLifecycle(t *testing.T) {
 	const text = `data: {"choices":[{"index":0,"delta":{"content":"first"}}]}` + "\n\n"

@@ -1,19 +1,15 @@
 package service
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"io"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/sse"
 )
 
 var errAnthropicSSEFrameTooLarge = errors.New("upstream SSE frame exceeds size limit")
-
-func anthropicSSELineSplit() bufio.SplitFunc { return sse.SplitLines() }
 
 // anthropicSSEFrameAssembler bounds the entire frame, including ignored fields.
 // Scanner/line-pump boundaries are transport details, never event boundaries.
@@ -22,23 +18,20 @@ func anthropicSSELineSplit() bufio.SplitFunc { return sse.SplitLines() }
 type anthropicSSEFrameAssembler struct {
 	name    string
 	data    strings.Builder
-	bytes   int
+	bytes   int64
 	hasData bool
 }
 
-func (a *anthropicSSEFrameAssembler) line(line string, limit int) (name, payload string, ready bool, err error) {
+func (a *anthropicSSEFrameAssembler) line(line string, limit int64) (name, payload string, ready bool, err error) {
 	if line == "" {
 		name, payload, ready = a.name, a.data.String(), a.hasData
 		*a = anthropicSSEFrameAssembler{}
 		return
 	}
-	if limit <= 0 {
-		limit = defaultMaxLineSize
-	}
-	if len(line)+1 > limit-a.bytes {
+	if int64(len(line))+1 > limit-a.bytes {
 		return "", "", false, errAnthropicSSEFrameTooLarge
 	}
-	a.bytes += len(line) + 1
+	a.bytes += int64(len(line)) + 1
 	field, value, _ := strings.Cut(line, ":")
 	value = strings.TrimPrefix(value, " ")
 	switch field {
@@ -71,7 +64,7 @@ func (st *anthropicCompatStream) nextEvent() (apicompat.AnthropicStreamEvent, st
 		if !ok && !errors.Is(st.readErr, io.EOF) {
 			break
 		}
-		name, payload, ready, err := st.frame.line(line, st.maxLineSize)
+		name, payload, ready, err := st.frame.line(line, st.maxFrameSize)
 		if err != nil {
 			st.readErr = err
 			_ = st.body.Close()

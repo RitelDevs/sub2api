@@ -176,20 +176,23 @@ type geminiStreamChoice struct {
 }
 
 type GeminiSSETranslator struct {
-	model                      string
-	decoder                    *sse.Decoder
-	choices                    map[int]*geminiChoiceState
-	expected, limit, toolBytes int
-	done, closed               bool
-	err                        error
+	model                          string
+	decoder                        *sse.Decoder
+	choices                        map[int]*geminiChoiceState
+	expected, toolLimit, toolBytes int
+	done, closed                   bool
+	err                            error
 }
 
 func NewGeminiSSETranslator(model string, maxFrameBytes ...int) *GeminiSSETranslator {
-	limit := 500 << 20
+	const defaultLimit = 500 << 20
+	limit := defaultLimit
 	if len(maxFrameBytes) > 0 && maxFrameBytes[0] > 0 {
 		limit = maxFrameBytes[0]
 	}
-	return &GeminiSSETranslator{model: model, decoder: sse.NewDecoder(limit), limit: limit, choices: map[int]*geminiChoiceState{}}
+	// Tool arguments can span many events. Keep their existing default allowance
+	// when the caller configures a smaller per-event limit.
+	return &GeminiSSETranslator{model: model, decoder: sse.NewDecoder(limit), toolLimit: max(defaultLimit, limit), choices: map[int]*geminiChoiceState{}}
 }
 
 // ExpectCandidates sets the Chat request's n. Standalone decoders without
@@ -335,7 +338,7 @@ func (t *GeminiSSETranslator) readChoice(c geminiStreamChoice, out *bytes.Buffer
 			}
 			acc.name = name
 		}
-		if len(call.Function.Arguments) > t.limit-t.toolBytes {
+		if len(call.Function.Arguments) > t.toolLimit-t.toolBytes {
 			return sse.ErrFrameTooLarge
 		}
 		t.toolBytes += len(call.Function.Arguments)

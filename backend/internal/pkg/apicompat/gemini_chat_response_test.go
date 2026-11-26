@@ -10,6 +10,25 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+func TestGeminiToolArgumentsMaySpanSeveralFullEvents(t *testing.T) {
+	const frameLimit = 256
+	translator := NewGeminiSSETranslator("m", frameLimit)
+	value := strings.Repeat("x", 80)
+	for _, fragment := range []string{`{"text":"`, value, value, value, value, `"}`} {
+		arg, err := json.Marshal(fragment)
+		require.NoError(t, err)
+		chunk := `{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"call-a","function":{"name":"lookup","arguments":` + string(arg) + `}}]}}]}`
+		require.Less(t, len(chunk)+len("data: \n"), frameLimit)
+		_, err = translator.Convert([]byte("data: "+chunk+"\n\n"), false)
+		require.NoError(t, err)
+	}
+	out, err := translator.Convert([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"), true)
+	require.NoError(t, err)
+	require.Contains(t, string(out), strings.Repeat(value, 4))
+	_, err = NewGeminiSSETranslator("m", frameLimit).Convert([]byte("data: "+strings.Repeat("x", frameLimit)+"\n\n"), true)
+	require.Error(t, err)
+}
+
 func TestGeminiResponsePreservesThoughtRefusalAndToolIdentity(t *testing.T) {
 	const args = `{"n":9007199254740993,"raw":"original"}`
 	call := ChatToolCall{ID: "call-A", Function: ChatFunctionCall{Name: "lookup", Arguments: args}}

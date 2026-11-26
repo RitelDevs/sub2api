@@ -86,11 +86,27 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	result, err := s.forwardAsChatCompletions(meterCtx, c, account, body, promptCacheKey, defaultMappedModel, false)
 	if result != nil && c != nil {
 		result.AuthConnectionID = c.GetString("openai_auth_connection_id")
+		if err == nil && !result.Stream {
+			if err = finalizeBufferedChatDelivery(c); err != nil {
+				result.streamReadIncomplete = true
+				result.ClientDisconnect = !errors.Is(err, apicompat.ErrGeminiResponseConversion)
+			}
+		}
 	}
 	errorScope.finish(result)
 	finalErr := regionalMeterFinishForward(meterCtx, result, err, finish)
 	s.attributeRegionalConnectionResult(meterCtx, c, account, result)
 	return result, finalErr
+}
+
+func finalizeBufferedChatDelivery(c *gin.Context) error {
+	if writer, ok := c.Writer.(interface{ FinalizeGatewayBuffered() error }); ok {
+		if err := writer.FinalizeGatewayBuffered(); err != nil {
+			MarkResponseCommitted(c)
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *OpenAIGatewayService) forwardAsChatCompletions(

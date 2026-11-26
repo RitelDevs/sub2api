@@ -97,3 +97,47 @@ func TestRawChatFrameUsageAndDelivery(t *testing.T) {
 		})
 	}
 }
+
+func TestRawChatMultilineFrameLimits(t *testing.T) {
+	const lineLimit = 1024 * 1024
+	const text = `data: {"choices":[{"index":0,"delta":{"content":"ready"}}]}` + "\n\n"
+	const usage = `data: {"choices":[],"usage":{"prompt_tokens":4,"completion_tokens":3}}` + "\n\n"
+	// Put usage on the last physical line so a partial frame cannot count it.
+	pad := strings.Repeat("x", lineLimit/2)
+	multiline := `data: {"choices":[{"index":0,"delta":{"reasoning_content":"` + pad + `",` + "\n" +
+		`data: "content":"` + pad + `"},"finish_reason":"stop"}],` + "\n" +
+		`data: "usage":{"prompt_tokens":4,"completion_tokens":3}}`
+	for _, tc := range []struct {
+		name, tail string
+		fail       bool
+	}{
+		{"clean-EOF", multiline, false},
+		{"delimited", multiline + "\n\ndata: [DONE]\n\n", false},
+		{"oversize-line-after-usage", usage + "data: " + strings.Repeat("x", lineLimit) + "\n\n", true},
+		{"oversize-event-after-usage", usage + strings.Repeat(":"+pad+"\n", 19) + "\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig()}
+			svc.cfg.Gateway.MaxLineSize = lineLimit
+			resp := &http.Response{Header: http.Header{}, Body: io.NopCloser(strings.NewReader(text + tc.tail))}
+			result, err := svc.streamRawChatCompletions(c, resp, rawChatCompletionsTestAccount(), "model", "model", "model", nil, nil, time.Now(), 0)
+			if tc.fail {
+				require.Error(t, err)
+				var retry *UpstreamFailoverError
+				require.NotErrorAs(t, err, &retry)
+				require.Equal(t, text+usage, rec.Body.String())
+			} else {
+				require.NoError(t, err)
+				require.True(t, strings.HasPrefix(rec.Body.String(), text+multiline+"\n\n"))
+			}
+			require.NotNil(t, result)
+			require.Equal(t, 4, result.Usage.InputTokens)
+			require.Equal(t, 3, result.Usage.OutputTokens)
+			require.False(t, result.UsageUnavailable)
+			require.Equal(t, tc.fail, result.ObservedUsageOnError)
+		})
+	}
+}

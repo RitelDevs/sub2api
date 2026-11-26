@@ -89,3 +89,44 @@ func TestAnthropicRetryAfterGeneration(t *testing.T) {
 		}
 	}
 }
+
+func TestAnthropicMultilineFrameLimits(t *testing.T) {
+	const lineLimit = 1024 * 1024
+	pad := strings.Repeat("x", lineLimit/2)
+	tool := `data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool_1","name":"join","input":{"left":"` + pad + `",` + "\n" +
+		`data: "right":"` + pad + `"}}}` + "\n\n" + `data: {"type":"content_block_stop","index":1}` + "\n\n"
+	const start = compatMessageStartEvent + compatTextBlockEvents + `data: {"type":"content_block_stop","index":0}` + "\n\n"
+	const delta = `data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":3}}` + "\n\n"
+	const stop = "event: message_stop\ndata: {\ndata: \"type\":\"message_stop\"}"
+	for _, route := range []string{"chat_completions", "responses"} {
+		for _, stream := range []bool{false, true} {
+			for _, tc := range []struct {
+				name, tail string
+				fail       bool
+			}{
+				{"clean-EOF", tool + delta + stop, false},
+				{"oversize-line-after-usage", delta + "data: " + strings.Repeat("x", lineLimit) + "\n\n" + stop, true},
+				{"oversize-event-after-usage", delta + strings.Repeat(":"+pad+"\n", 19) + "\n" + stop, true},
+			} {
+				t.Run(fmt.Sprintf("%s/stream_%t/%s", route, stream, tc.name), func(t *testing.T) {
+					svc, c, rec, body, account := newCompatFailoverTestRequest(t, route, stream, start+tc.tail)
+					svc.cfg.Gateway.MaxLineSize = lineLimit
+					result, err := forwardCompatForTest(svc, c, route, body, account)
+					if tc.fail {
+						require.Error(t, err)
+						var retry *UpstreamFailoverError
+						require.NotErrorAs(t, err, &retry)
+						require.Contains(t, rec.Body.String(), "response_too_large")
+					} else {
+						require.NoError(t, err)
+						require.Contains(t, rec.Body.String(), "hello")
+						require.Contains(t, rec.Body.String(), "tool_1")
+					}
+					require.NotNil(t, result)
+					require.Equal(t, 12, result.Usage.InputTokens)
+					require.Equal(t, 3, result.Usage.OutputTokens)
+				})
+			}
+		}
+	}
+}

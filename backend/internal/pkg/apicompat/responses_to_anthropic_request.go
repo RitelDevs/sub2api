@@ -35,6 +35,27 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, erro
 	if len(system) > 0 {
 		out.System = system
 	}
+	var format json.RawMessage
+	if req.Text != nil && len(req.Text.Format) > 0 {
+		obj, ok := rawJSONObject(req.Text.Format)
+		if !ok {
+			return nil, fmt.Errorf("%w: invalid Responses text.format", ErrAnthropicOutputFormat)
+		}
+		switch rawString(obj["type"]) {
+		case "text":
+		case "json_schema":
+			if schema, ok := rawJSONObject(obj["schema"]); !ok || schema == nil {
+				return nil, fmt.Errorf("%w: text.format.schema must be an object", ErrAnthropicOutputFormat)
+			}
+			format, err = json.Marshal(map[string]json.RawMessage{"type": obj["type"], "schema": obj["schema"]})
+			if err != nil {
+				return nil, err
+			}
+			out.OutputConfig = &AnthropicOutputConfig{Format: format}
+		default:
+			return nil, fmt.Errorf("%w: Responses text.format %q", ErrAnthropicOutputFormat, rawString(obj["type"]))
+		}
+	}
 
 	// max_output_tokens → max_tokens
 	if req.MaxOutputTokens != nil && *req.MaxOutputTokens > 0 {
@@ -131,14 +152,14 @@ func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, erro
 			return nil, fmt.Errorf("%s does not support reasoning effort %q; use low, medium, high, xhigh or max", req.Model, effort)
 		}
 		out.Thinking = &AnthropicThinking{Type: "adaptive"}
-		out.OutputConfig = &AnthropicOutputConfig{Effort: effort}
+		out.OutputConfig = &AnthropicOutputConfig{Effort: effort, Format: format}
 		return out, nil
 	}
 
 	// reasoning.effort → output_config.effort + thinking
 	if req.Reasoning != nil && req.Reasoning.Effort != "" {
 		effort := mapResponsesEffortToAnthropic(req.Reasoning.Effort)
-		out.OutputConfig = &AnthropicOutputConfig{Effort: effort}
+		out.OutputConfig = &AnthropicOutputConfig{Effort: effort, Format: format}
 		// Enable thinking for non-low efforts
 		if effort != "low" {
 			out.Thinking = &AnthropicThinking{
@@ -629,6 +650,8 @@ func convertResponsesAssistantToAnthropicContent(raw json.RawMessage) (json.RawM
 					Text: p.Text,
 				})
 			}
+		case "refusal":
+			blocks = append(blocks, AnthropicContentBlock{Type: "text", Text: p.Refusal})
 		}
 	}
 

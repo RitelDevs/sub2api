@@ -23,13 +23,15 @@ import "encoding/json"
 // events.
 func (e ResponsesStreamEvent) MarshalJSON() ([]byte, error) {
 	switch e.Type {
-	case "response.output_text.delta", "response.output_text.done":
+	case "response.output_text.delta", "response.output_text.done", "response.refusal.delta", "response.refusal.done":
 		m := e.wireBase()
 		e.putItemID(m)
 		m["output_index"] = e.OutputIndex
 		m["content_index"] = e.ContentIndex
 		if e.Type == "response.output_text.done" {
 			m["text"] = e.Text
+		} else if e.Type == "response.refusal.done" {
+			m["refusal"] = e.Refusal
 		} else {
 			m["delta"] = e.Delta
 		}
@@ -40,7 +42,11 @@ func (e ResponsesStreamEvent) MarshalJSON() ([]byte, error) {
 		e.putItemID(m)
 		m["output_index"] = e.OutputIndex
 		m["content_index"] = e.ContentIndex
-		m["part"] = outputTextPartWire(e.Part)
+		if e.Part != nil && e.Part.Type == "refusal" {
+			m["part"] = map[string]any{"type": "refusal", "refusal": e.Part.Refusal}
+		} else {
+			m["part"] = outputTextPartWire(e.Part)
+		}
 		return json.Marshal(m)
 
 	case "response.reasoning_summary_text.delta", "response.reasoning_summary_text.done":

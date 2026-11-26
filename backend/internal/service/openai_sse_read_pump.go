@@ -58,6 +58,7 @@ func newOpenAISSEReadPump(body io.ReadCloser, maxLineSize int) *openAISSEReadPum
 		buf := getSSEScannerBuf64K()
 		defer putSSEScannerBuf64K(buf)
 		scanner := bufio.NewScanner(openAISSEActivityReader{pump: p})
+		scanner.Split(newOpenAIResponsesLineSplit())
 		scanner.Buffer(buf[:0], maxLineSize)
 		documents := newOpenAISSEJSONDocumentScanner(scanner)
 		send := func(e openAISSEReadEvent) bool {

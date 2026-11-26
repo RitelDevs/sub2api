@@ -105,10 +105,8 @@ func TestHandleCCStreamingFromAnthropic_PingFlushesImmediately(t *testing.T) {
 	send("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}`)
 	require.Contains(t, body, `"content":" world"`)
 	send("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}`)
-	send("message_stop", `{"type":"message_stop"}`)
-	ping()
-	require.NotContains(t, body, "[DONE]")
-	require.NoError(t, upstream.Close())
+	_, stopErr := io.WriteString(upstream, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	require.NoError(t, stopErr)
 
 	select {
 	case got := <-finished:
@@ -117,12 +115,12 @@ func TestHandleCCStreamingFromAnthropic_PingFlushesImmediately(t *testing.T) {
 		require.Equal(t, 7, got.result.Usage.OutputTokens)
 		require.NotNil(t, got.result.FirstTokenMs)
 	case <-time.After(5 * time.Second):
-		t.Fatal("stream did not finish after EOF")
+		t.Fatal("stream did not finish at message_stop")
 	}
 	body = writer.Body.String()
 	require.NotContains(t, body, "event:")
 	require.NotContains(t, body, `"type":"ping"`)
-	require.Equal(t, 4, strings.Count(body, ": ping\n\n"))
+	require.Equal(t, 3, strings.Count(body, ": ping\n\n"))
 	require.Equal(t, 1, strings.Count(body, "data: [DONE]\n\n"))
 	require.True(t, strings.HasSuffix(body, "data: [DONE]\n\n"))
 	var content strings.Builder
@@ -165,8 +163,8 @@ func TestHandleCCStreamingFromAnthropic_PingDoesNotSetFirstToken(t *testing.T) {
 		&http.Response{Body: io.NopCloser(strings.NewReader("event: ping\ndata: {\"type\":\"ping\"}\n\n"))},
 		context, "gpt-5", "claude-sonnet-4.5", nil, time.Now(),
 	)
-	require.NoError(t, err)
-	require.Nil(t, result.FirstTokenMs)
+	require.Error(t, err)
+	require.Nil(t, result)
 	require.True(t, strings.HasPrefix(writer.Body.String(), ": ping\n\n"))
 }
 
@@ -191,7 +189,7 @@ func TestHandleCCStreamingFromAnthropic_PingWriteFailureStopsDownstream(t *testi
 				&http.Response{Body: io.NopCloser(strings.NewReader(stream))},
 				context, "gpt-5", "claude-sonnet-4.5", nil, time.Now(),
 			)
-			require.NoError(t, err)
+			require.Error(t, err)
 			require.True(t, writer.failed)
 			require.True(t, result.ClientDisconnect)
 			require.Zero(t, writer.writesAfterError)

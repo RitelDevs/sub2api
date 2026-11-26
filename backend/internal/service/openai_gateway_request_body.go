@@ -1422,7 +1422,7 @@ func normalizeGPT6ResponsesSampling(body []byte, model string) ([]byte, bool, er
 	isTerra := openai.IsGPT61TerraModelSpelling(model)
 	if openai.IsGPT62ModelSpelling(model) {
 		for _, path := range []string{"reasoning.effort", "reasoning_effort"} {
-			effort := openai.NormalizeReasoningEffortForModel(model, gjson.GetBytes(body, path).String())
+			effort := gjson.GetBytes(body, path).String()
 			if err := openai.ValidateReasoningEffortForModel(model, effort); err != nil {
 				return body, false, err
 			}
@@ -1456,7 +1456,7 @@ func normalizeGPT6ResponsesSampling(body []byte, model string) ([]byte, bool, er
 			changed = true
 		}
 	}
-	if requiresReasoning {
+	if openai.IsGPT61SolModelSpelling(model) {
 		for _, path := range []string{"reasoning.effort", "reasoning_effort"} {
 			effort := strings.ToLower(strings.TrimSpace(gjson.GetBytes(out, path).String()))
 			if effort != "none" && effort != "minimal" {
@@ -2749,7 +2749,7 @@ func normalizeOpenAIReasoningEffortForModel(raw, model string) string {
 	if openai.IsGPT61SolModelSpelling(model) || openai.IsGPT62ModelSpelling(model) {
 		switch strings.ToLower(strings.TrimSpace(raw)) {
 		case "none", "minimal":
-			return "low"
+			return openai.NormalizeGPT61SolReasoningEffort(model, strings.ToLower(strings.TrimSpace(raw)))
 		case "ultra":
 			return "ultra"
 		}
@@ -2798,7 +2798,7 @@ func validateGPT61RawEffort(body []byte, model string) error {
 		return nil
 	}
 	for _, path := range []string{"reasoning.effort", "reasoning_effort", "output_config.effort"} {
-		effort := openai.NormalizeReasoningEffortForModel(model, gjson.GetBytes(body, path).String())
+		effort := openai.NormalizeGPT61SolReasoningEffort(model, gjson.GetBytes(body, path).String())
 		if err := openai.ValidateReasoningEffortForModel(model, effort); err != nil {
 			return err
 		}
@@ -2806,7 +2806,7 @@ func validateGPT61RawEffort(body []byte, model string) error {
 	requestedModel := openai.CanonicalizeOpenAIModelAliasSpelling(gjson.GetBytes(body, "model").String())
 	for _, effort := range []string{"none", "minimal"} {
 		if strings.HasSuffix(strings.ToLower(requestedModel), "-"+effort) {
-			return openai.ValidateReasoningEffortForModel(model, openai.NormalizeReasoningEffortForModel(model, effort))
+			return openai.ValidateReasoningEffortForModel(model, openai.NormalizeGPT61SolReasoningEffort(model, effort))
 		}
 	}
 	return nil

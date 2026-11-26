@@ -387,18 +387,6 @@ func CanonicalGPT62Model(model string) string {
 	return ""
 }
 
-// NormalizeReasoningEffortForModel upgrades legacy disabled reasoning only
-// for models whose public API requires reasoning to remain enabled.
-func NormalizeReasoningEffortForModel(model, effort string) string {
-	if IsGPT62ModelSpelling(model) {
-		switch strings.ToLower(strings.TrimSpace(effort)) {
-		case "none", "minimal":
-			return "low"
-		}
-	}
-	return NormalizeGPT61SolReasoningEffort(model, effort)
-}
-
 func ValidateReasoningEffortForModel(model, effort string) error {
 	if IsGPT62ModelSpelling(model) {
 		switch strings.ToLower(strings.TrimSpace(effort)) {

@@ -37,7 +37,7 @@ func AnthropicToResponsesWithOptions(req *AnthropicRequest, opts AnthropicToResp
 	requestedEffort := anthropicReasoningEffort(req)
 	effort := requestedEffort
 	if !opts.DeferReasoningEffortValidation {
-		effort = openai.NormalizeReasoningEffortForModel(req.Model, effort)
+		effort = openai.NormalizeGPT61SolReasoningEffort(req.Model, effort)
 		if err := openai.ValidateReasoningEffortForModel(req.Model, effort); err != nil {
 			return nil, err
 		}

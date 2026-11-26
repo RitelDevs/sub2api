@@ -23,15 +23,12 @@ func TestGPT62ModelSpellingKeepsVersionIdentity(t *testing.T) {
 
 func TestGPT62PublishedReasoningScale(t *testing.T) {
 	for _, model := range []string{"gpt-6.2-sol", "gpt-6.2-astra"} {
-		for _, effort := range []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"} {
-			normalized := NormalizeReasoningEffortForModel(model, effort)
-			require.NoError(t, ValidateReasoningEffortForModel(model, normalized))
-			if effort == "none" || effort == "minimal" {
-				require.Equal(t, "low", normalized)
-				require.Error(t, ValidateReasoningEffortForModel(model, effort))
-			}
+		for _, effort := range []string{"low", "medium", "high", "xhigh", "max"} {
+			require.NoError(t, ValidateReasoningEffortForModel(model, effort))
 		}
-		require.Error(t, ValidateReasoningEffortForModel(model, "ultra"))
+		for _, effort := range []string{"none", "minimal", "ultra"} {
+			require.Error(t, ValidateReasoningEffortForModel(model, effort))
+		}
 	}
-	require.Equal(t, "none", NormalizeReasoningEffortForModel("gpt-6.1-terra", "none"))
+	require.NoError(t, ValidateReasoningEffortForModel("gpt-6.1-terra", "none"))
 }

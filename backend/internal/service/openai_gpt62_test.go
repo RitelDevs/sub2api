@@ -45,7 +45,7 @@ func TestGPT62ModelIdentityAndDescriptor(t *testing.T) {
 
 func TestGPT62MappedResponsesRemovesUnsupportedParameters(t *testing.T) {
 	for _, model := range []string{"gpt-6.2-sol", "gpt-6.2-astra"} {
-		body := []byte(`{"model":"public-alias","reasoning":{"effort":"none"},"temperature":0.8,"top_p":0.9,"top_logprobs":2,"logprobs":true,"include":["reasoning.encrypted_content","message.output_text.logprobs"],"prompt_cache_retention":"24h"}`)
+		body := []byte(`{"model":"public-alias","reasoning":{"effort":"low"},"temperature":0.8,"top_p":0.9,"top_logprobs":2,"logprobs":true,"include":["reasoning.encrypted_content","message.output_text.logprobs"],"prompt_cache_retention":"24h"}`)
 		account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{"model_mapping": map[string]any{"public-alias": model}}}
 		normalized, changed, err := normalizeOpenAIResponsesCompatibilityBodyWithOptions(body, account, openAIResponsesCompatibilityOptions{})
 		require.NoError(t, err)

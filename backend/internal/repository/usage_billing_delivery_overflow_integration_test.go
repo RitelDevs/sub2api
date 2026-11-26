@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -133,4 +134,81 @@ func TestUsageBillingDeliveryOverflowAtomicRecoveryAndConcurrentDedup(t *testing
 			assertState("99.99992187", "0.00007813", "complete", 1)
 		})
 	}
+}
+
+func TestStagedBillingBatchOverflowNoticeIsAtomicAndDeduplicated(t *testing.T) {
+	ctx := context.Background()
+	repo, cmd, usage, client := durableBillingFixture(t)
+	source := mustCreateGroup(t, client, &service.Group{Name: "overflow-source-" + uuid.NewString(), Platform: service.PlatformOpenAI, SubscriptionType: service.SubscriptionTypeSubscription})
+	target := mustCreateGroup(t, client, &service.Group{Name: "overflow-target-" + uuid.NewString(), Platform: service.PlatformOpenAI, SubscriptionType: service.SubscriptionTypeStandard})
+	sub := mustCreateSubscription(t, client, &service.UserSubscription{UserID: cmd.UserID, GroupID: source.ID})
+	start := time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC)
+	quote := 0.9
+	cmd.BalanceCost, cmd.APIKeyQuotaCost, cmd.QuotedActualCost = quote, quote, &quote
+	usage.GroupID, usage.ActualCost, usage.TotalCost = &target.ID, quote, quote
+	owner := strconv.FormatInt(cmd.UserID, 10)
+	var keys []service.UsageBillingEventKey
+	for _, day := range []int{0, 0, 1} {
+		cmd.RequestID, cmd.RequestFingerprint = uuid.NewString(), ""
+		cmd.SubscriptionOverflow = &service.SubscriptionOverflowBillingEvidence{
+			SubscriptionID: sub.ID, SourceGroupID: source.ID, TargetGroupID: target.ID,
+			Dimension: "daily", WindowStart: start.AddDate(0, 0, day),
+			DailyUsageUSD: 10, DailyLimitUSD: 10, RateMultiplier: 1,
+		}
+		usage.RequestID = cmd.RequestID
+		require.NoError(t, repo.StageUsageBilling(ctx, &cmd, &usage))
+		keys = append(keys, service.UsageBillingEventKey{RequestID: cmd.RequestID, APIKeyID: cmd.APIKeyID})
+	}
+
+	assertState := func(wantBalance string, wantPending, wantDebits, wantNotices int) {
+		t.Helper()
+		var balance string
+		var pending, debits, notices int
+		require.NoError(t, repo.db.QueryRowContext(ctx, `SELECT balance::text,
+			(SELECT count(*) FROM usage_billing_events WHERE api_key_id=$2 AND state='pending'),
+			(SELECT count(*) FROM usage_billing_quotes WHERE api_key_id=$2 AND wallet_debit=0.9),
+			(SELECT count(*) FROM subscription_overflow_email_outbox WHERE user_id=$1)
+			FROM users WHERE id=$1`, cmd.UserID, cmd.APIKeyID).Scan(&balance, &pending, &debits, &notices))
+		require.Equal(t, wantBalance, balance)
+		require.Equal(t, wantPending, pending)
+		require.Equal(t, wantDebits, debits)
+		require.Equal(t, wantNotices, notices)
+	}
+
+	name := "overflow_batch_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	_, err := repo.db.ExecContext(ctx, fmt.Sprintf(`CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'injected batched notice failure'; END; $$;
+		CREATE TRIGGER %s BEFORE INSERT ON subscription_overflow_email_outbox FOR EACH ROW EXECUTE FUNCTION %s()`, name, name, name))
+	require.NoError(t, err)
+	_, err = repo.applyStagedUsageBillingBatch(ctx, owner, keys)
+	require.ErrorContains(t, err, "injected batched notice failure")
+	assertState("100.00000000", 3, 0, 0)
+	_, err = repo.db.ExecContext(ctx, fmt.Sprintf("DROP TRIGGER %s ON subscription_overflow_email_outbox; DROP FUNCTION %s()", name, name))
+	require.NoError(t, err)
+
+	settled, err := repo.applyStagedUsageBillingBatch(ctx, owner, keys)
+	require.NoError(t, err)
+	for _, record := range settled {
+		require.True(t, record.Result.Applied)
+		require.True(t, record.Settled)
+	}
+	assertState("97.30000000", 0, 3, 2)
+	var firstPayload []byte
+	require.NoError(t, repo.db.QueryRowContext(ctx, `SELECT payload FROM subscription_overflow_email_outbox
+		WHERE user_id=$1 AND window_start=$2`, cmd.UserID, start).Scan(&firstPayload))
+	var first service.SubscriptionOverflowNotificationPayload
+	require.NoError(t, json.Unmarshal(firstPayload, &first))
+	require.Equal(t, 0.9, first.BalanceCost)
+	require.Equal(t, 99.1, first.BalanceAfter)
+
+	// Restarted recovery acknowledges the original charges without repeating effects.
+	freshProcess := &usageBillingRepository{db: repo.db}
+	for _, key := range keys {
+		result, err := freshProcess.RecoverStagedUsageBilling(ctx, key)
+		require.NoError(t, err)
+		require.True(t, result.Settled)
+		require.False(t, result.Result.Applied)
+		require.NoError(t, freshProcess.AcknowledgeUsageBillingCache(ctx, key))
+	}
+	assertState("97.30000000", 0, 3, 2)
 }

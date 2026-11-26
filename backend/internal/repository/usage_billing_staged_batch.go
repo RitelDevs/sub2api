@@ -109,6 +109,9 @@ func (r *usageBillingRepository) applyStagedUsageBillingBatch(ctx context.Contex
 				continue
 			}
 			cmd := cmds[i]
+			if err := enqueueSubscriptionOverflowNotification(ctx, tx, cmd, outcomes[i].Result); err != nil {
+				return nil, err
+			}
 			if err := insertUsageBillingQuote(ctx, tx, cmd); err != nil {
 				return nil, err
 			}

@@ -211,7 +211,7 @@ func TestGPT62PricingAtRequestTime(t *testing.T) {
 					require.InDelta(t, 272001*unit*2, cost.InputCost, 1e-12)
 					require.InDelta(t, 50*unit*5*1.5, cost.OutputCost, 1e-12)
 					for _, kind := range []string{AccountTypeOAuth, AccountTypeAPIKey} {
-						input.DisableModelLongContextPricing = openAISubscriptionLongContextExempt(&Account{Platform: PlatformOpenAI, Type: kind}, &OpenAIForwardResult{Model: "public", UpstreamModel: model}, input.Tokens)
+						input.DisableModelLongContextPricing = openAISubscriptionLongContextExempt(&Account{Platform: PlatformOpenAI, Type: kind}, &OpenAIForwardResult{Model: "public", UpstreamModel: model})
 						cost, err = svc.CalculateCostUnified(input)
 						require.NoError(t, err)
 						factor := 2.0

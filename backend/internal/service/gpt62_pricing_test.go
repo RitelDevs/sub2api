@@ -97,7 +97,7 @@ func TestGPT62SubscriptionLongContextExemptionByCredential(t *testing.T) {
 	for _, model := range []string{"gpt-6.2-sol", "gpt-6.2-astra"} {
 		for _, typ := range []string{AccountTypeOAuth, AccountTypeSetupToken, AccountTypeAPIKey} {
 			require.Equal(t, typ != AccountTypeAPIKey, openAISubscriptionLongContextExempt(&Account{Platform: PlatformOpenAI, Type: typ},
-				&OpenAIForwardResult{Model: model, UpstreamModel: model}, UsageTokens{InputTokens: 500001}))
+				&OpenAIForwardResult{Model: model, UpstreamModel: model}))
 		}
 	}
 }

@@ -2848,7 +2848,9 @@ func TestOpenAIGatewayService_OAuthLegacy_GroupForceOpenAIUltrafast(t *testing.T
 		upstream := &httpUpstreamRecorder{resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_group_ultrafast_legacy"}},
-			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
+			Body: io.NopCloser(strings.NewReader(
+				`data: {"type":"response.completed","response":{"id":"resp_group_ultrafast_legacy","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}` + "\n\n" +
+					"data: [DONE]\n\n")),
 		}}
 		svc := newOpenAIGatewayServiceWithSettings(t, settings)
 		svc.cfg = &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}}

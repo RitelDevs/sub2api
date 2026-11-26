@@ -41,6 +41,9 @@ func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicRespo
 			}
 		case "message":
 			for _, part := range item.Content {
+				if part.Type == "refusal" && part.Refusal != "" {
+					blocks = append(blocks, AnthropicContentBlock{Type: "text", Text: part.Refusal})
+				}
 				if part.Type == "output_text" && part.Text != "" {
 					blocks = append(blocks, AnthropicContentBlock{
 						Type: "text",
@@ -270,8 +273,14 @@ func ResponsesEventToAnthropicEvents(
 		return resToAnthHandleCreated(evt, state)
 	case "response.output_item.added":
 		return resToAnthHandleOutputItemAdded(evt, state)
-	case "response.output_text.delta":
+	case "response.output_text.delta", "response.refusal.delta":
 		return resToAnthHandleTextDelta(evt, state)
+	case "response.refusal.done":
+		if state.MessageStopSent {
+			return nil
+		}
+		events := resToAnthRecoverRefusal(evt.Refusal, resToAnthTextPartOf(evt), state)
+		return append(events, resToAnthHandleBlockDone(state)...)
 	case "response.output_text.done":
 		return resToAnthHandleTextDone(evt, state)
 	case "response.function_call_arguments.delta",
@@ -539,6 +548,13 @@ func resToAnthHandleTextDone(evt *ResponsesStreamEvent, state *ResponsesEventToA
 	return append(events, resToAnthHandleBlockDone(state)...)
 }
 
+func resToAnthRecoverRefusal(text string, part responsesTextPart, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	if _, known := state.textByPart[part]; known {
+		return resToAnthRecoverText(text, part, state)
+	}
+	return resToAnthEmitText(text, part, state)
+}
+
 func resToAnthHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
 	if evt.Delta == "" {
 		return nil
@@ -746,9 +762,10 @@ func resToAnthHandleWebSearchDone(evt *ResponsesStreamEvent, state *ResponsesEve
 // them part by part risks repeating an answer the client already has, which is
 // worse than leaving a partially streamed response as it is.
 func resToAnthRecoverTerminalText(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
-	if state.textDelivered || evt.Response == nil {
+	if evt.Response == nil {
 		return nil
 	}
+	hadText := state.textDelivered
 
 	var events []AnthropicStreamEvent
 	for outputIndex, item := range evt.Response.Output {
@@ -756,11 +773,15 @@ func resToAnthRecoverTerminalText(evt *ResponsesStreamEvent, state *ResponsesEve
 			continue
 		}
 		for contentIndex, content := range item.Content {
-			if content.Type != "output_text" {
-				continue
-			}
 			part := responsesTextPart{OutputIndex: outputIndex, ContentIndex: contentIndex}
-			events = append(events, resToAnthEmitText(content.Text, part, state)...)
+			switch content.Type {
+			case "refusal":
+				events = append(events, resToAnthRecoverRefusal(content.Refusal, part, state)...)
+			case "output_text":
+				if !hadText {
+					events = append(events, resToAnthEmitText(content.Text, part, state)...)
+				}
+			}
 		}
 	}
 	if len(events) > 0 {

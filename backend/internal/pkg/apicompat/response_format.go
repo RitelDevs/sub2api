@@ -1,6 +1,11 @@
 package apicompat
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"errors"
+)
+
+var ErrAnthropicOutputFormat = errors.New("unsupported Anthropic output format")
 
 func chatResponseFormatToResponsesTextFormat(raw json.RawMessage) json.RawMessage {
 	raw = normalizedRawJSON(raw)

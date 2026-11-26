@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -84,7 +85,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	anthropicReq, err := apicompat.ResponsesToAnthropicRequestWithOptions(responsesReq, apicompat.ResponsesToAnthropicOptions{StrictMedia: true})
 	if err != nil {
 		var mediaErr *apicompat.AnthropicMediaError
-		if errors.As(err, &mediaErr) || isClaude55SignedThinkingModel(mappedModel) {
+		if errors.As(err, &mediaErr) || errors.Is(err, apicompat.ErrAnthropicOutputFormat) || isClaude55SignedThinkingModel(mappedModel) {
 			writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		}
 		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
@@ -230,7 +231,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		switch {
 		case errors.As(handleErr, &sseErr):
 			policyErr := s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, mappedModel, c.Writer.Size() != writerSizeBeforeStream)
-			if result != nil || c.Writer.Size() != writerSizeBeforeStream {
+			if result != nil || IsResponseCommitted(c) || c.Writer.Size() != writerSizeBeforeStream {
 				return result, errors.New("stream usage incomplete: upstream semantic stream failure")
 			}
 			return nil, policyErr
@@ -243,7 +244,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		var sseErr *sseStreamErrorEventError
 		if errors.As(handleErr, &sseErr) {
 			policyErr := s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, mappedModel, c.Writer.Size() != writerSizeBeforeBody)
-			if result != nil || c.Writer.Size() != writerSizeBeforeBody {
+			if result != nil || IsResponseCommitted(c) || c.Writer.Size() != writerSizeBeforeBody {
 				return result, errors.New("stream usage incomplete: upstream semantic stream failure")
 			}
 			return nil, policyErr
@@ -290,6 +291,7 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	requestID := resp.Header.Get("x-request-id")
 
 	var finalResp *apicompat.AnthropicResponse
+	var fragments anthropicBufferedFragments
 	var usage ClaudeUsage
 	streamStatus := newAnthropicCompatStream(s.cfg, c, resp, "anthropic buffered", requestID)
 	defer streamStatus.stop()
@@ -303,20 +305,21 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 
 		observer.ObserveAnthropic([]byte(payload))
 		streamStatus.observe(&event, payload)
-		if event.Type == "error" {
+		if event.Type == "error" || event.Type == "message_stop" {
 			break
 		}
 
 		// message_start carries the initial response structure and cache usage
 		if event.Type == "message_start" && event.Message != nil {
 			finalResp = event.Message
+			fragments = nil
 			mergeAnthropicUsage(&usage, event.Message.Usage)
 		}
 
 		// message_delta carries final usage and stop_reason
 		if event.Type == "message_delta" {
 			if event.Usage != nil {
-				mergeAnthropicUsage(&usage, *event.Usage)
+				streamStatus.mergeDeltaUsage(&usage, *event.Usage)
 			}
 			if event.Delta != nil && event.Delta.StopReason != "" && finalResp != nil {
 				finalResp.StopReason = apicompat.AnthropicStopReasonPtr(event.Delta.StopReason)
@@ -326,26 +329,11 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 			finalResp.Content = append(finalResp.Content, *event.ContentBlock)
 		}
 		if event.Type == "content_block_delta" && event.Delta != nil && finalResp != nil && event.Index != nil {
-			idx := *event.Index
-			if idx >= 0 && idx < len(finalResp.Content) {
-				switch event.Delta.Type {
-				case "text_delta":
-					finalResp.Content[idx].Text += event.Delta.Text
-				case "thinking_delta":
-					finalResp.Content[idx].Thinking += event.Delta.Thinking
-				case "input_json_delta":
-					finalResp.Content[idx].Input = appendRawJSON(finalResp.Content[idx].Input, event.Delta.PartialJSON)
-				}
-			}
+			fragments.apply(finalResp.Content, *event.Index, event.Delta)
 		}
 	}
 
-	if failure := streamStatus.failure(); failure != nil {
-		var sseErr *sseStreamErrorEventError
-		if errors.As(failure.err, &sseErr) && !usage.hasObservedTokens() && !isAnthropicCompatSafetyRejection([]byte(sseErr.RawData)) {
-			return nil, failure.err
-		}
-
+	if failure := streamStatus.deliveryFailure(); failure != nil {
 		result := &ForwardResult{
 			UpstreamResponseServiceTier: observer.ServiceTier(),
 			RequestID:                   requestID,
@@ -359,20 +347,7 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 			Duration:                    time.Since(startTime),
 		}
 		applyObservedGatewayResponseModel(c, result)
-		if !streamStatus.clientDisconnected {
-			if isAnthropicCompatSafetyRejection([]byte(extractCompatFailurePayload(failure.err))) {
-				writeGatewayCCError(c, http.StatusForbidden, "permission_error", failure.message)
-				if !usage.hasObservedTokens() {
-					result = nil
-				}
-				return result, fmt.Errorf("upstream safety rejection: %s", failure.message)
-			}
-			writeGatewayCCError(c, http.StatusBadGateway, failure.errType, failure.message)
-		}
-		if !usage.hasObservedTokens() {
-			result = nil
-		}
-		return result, failure.err
+		return streamStatus.finishBuffered(c, failure, result, writeGatewayCCError)
 	}
 
 	if finalResp == nil {
@@ -510,7 +485,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		// Reverse tool name mapping: fake → real, per-chunk bytes.Replace.
 		// c 可能持有请求侧注入的 ToolNameRewrite；无则仅做静态前缀还原。
 		out := reverseToolNamesIfPresentString(c, sse)
-		if _, err := fmt.Fprint(c.Writer, out); err != nil {
+		if err := compatWrite(c, out); err != nil {
 			return true // client disconnected
 		}
 		return false
@@ -530,16 +505,19 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			if c.Writer.Size() == writerSizeBeforeStream && time.Since(streamStartedAt) < pingHold {
 				return
 			}
-			if _, err := fmt.Fprint(c.Writer, ": ping\n\n"); err != nil {
+			if err := compatWrite(c, ": ping\n\n"); err != nil {
 				stream.markClientDisconnected()
 				return
 			}
-			if err := FlushGatewayResponse(c.Writer); err != nil {
+			if err := compatFlush(c); err != nil {
 				stream.markClientDisconnected()
 			}
 			return
 		}
 		if firstChunk {
+			if c.Request != nil {
+				requesttiming.Mark(c.Request.Context(), "bridge_first_upstream_event")
+			}
 			firstChunk = false
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
@@ -547,7 +525,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 
 		// Extract usage from message_delta
 		if event.Type == "message_delta" && event.Usage != nil {
-			mergeAnthropicUsage(&usage, *event.Usage)
+			stream.mergeDeltaUsage(&usage, *event.Usage)
 		}
 		// Also capture usage from message_start (carries cache fields)
 		if event.Type == "message_start" && event.Message != nil {
@@ -573,7 +551,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 				}
 			}
 		}
-		if err := FlushGatewayResponse(c.Writer); err != nil {
+		if err := compatFlush(c); err != nil {
 			stream.markClientDisconnected()
 		}
 	}
@@ -590,7 +568,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		observer.ObserveAnthropic([]byte(payload))
 		stream.observe(&event, payload)
 		if event.Type == "message_stop" {
-			continue
+			break
 		}
 		if stream.upstreamErrType != "" {
 			break
@@ -598,8 +576,8 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		processAnthropicEvent(&event)
 	}
 
-	if failure := stream.failure(); failure != nil {
-		return finishAnthropicCompatStreamFailure(c, writerSizeBeforeStream, failure, resultWithUsage(), func() {
+	if failure := stream.deliveryFailure(); failure != nil {
+		return stream.finishFailure(c, writerSizeBeforeStream, failure, resultWithUsage(), func() {
 			writeAnthropicCompatCCStreamFailure(c, failure)
 		})
 	}
@@ -627,11 +605,11 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	}
 
 	// Write [DONE] marker
-	if _, err := fmt.Fprint(c.Writer, "data: [DONE]\n\n"); err != nil {
+	if err := compatWrite(c, "data: [DONE]\n\n"); err != nil {
 		stream.markClientDisconnected()
 		return resultWithUsage(), stream.failure().err
 	}
-	if err := FlushGatewayResponse(c.Writer); err != nil {
+	if err := compatFlush(c); err != nil {
 		stream.markClientDisconnected()
 	}
 

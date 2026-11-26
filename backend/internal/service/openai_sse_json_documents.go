@@ -59,11 +59,13 @@ type openAISSEJSONDocumentScanner struct {
 	scanner *bufio.Scanner
 	pending []string
 	current string
+	started bool
 
 	// Diagnostic state only: emitted lines and the repair queue are unchanged.
 	timingEventType string
 	timingData      []byte
 	timingDiscard   bool
+	timingDepth     int
 }
 
 func newOpenAISSEJSONDocumentScanner(scanner *bufio.Scanner) *openAISSEJSONDocumentScanner {
@@ -92,6 +94,10 @@ func (s *openAISSEJSONDocumentScanner) Scan() (ok bool) {
 	}
 
 	line := s.scanner.Text()
+	if !s.started {
+		s.started = true
+		line = strings.TrimPrefix(line, "\xef\xbb\xbf")
+	}
 	data, ok := extractOpenAISSEDataLine(line)
 	if !ok {
 		s.current = line
@@ -127,6 +133,7 @@ func (s *openAISSEJSONDocumentScanner) resetTimingEvent() {
 	s.timingEventType = ""
 	s.timingData = nil
 	s.timingDiscard = false
+	s.timingDepth = 0
 }
 
 func (s *openAISSEJSONDocumentScanner) observeTimingLine(line string) {
@@ -156,8 +163,37 @@ func (s *openAISSEJSONDocumentScanner) observeTimingLine(line string) {
 		s.timingDiscard = true
 		return
 	}
+	if len(s.timingData) == 0 && strings.TrimSpace(data) == "" {
+		return
+	}
 	s.timingData = append(s.timingData, data...)
-	if !json.Valid(s.timingData) {
+	// A physical newline cannot occur inside a JSON string. Track nesting
+	// over complete strings so fragmented objects are validated just once.
+	quoted := false
+	for i := 0; i < len(data); i++ {
+		switch data[i] {
+		case '\\':
+			if quoted {
+				i++
+			}
+		case '"':
+			quoted = !quoted
+		case '{', '[':
+			if !quoted {
+				s.timingDepth++
+			}
+		case '}', ']':
+			if !quoted {
+				s.timingDepth--
+			}
+		}
+	}
+	if !quoted && s.timingDepth > 0 {
+		return
+	}
+	if quoted || !json.Valid(s.timingData) {
+		s.timingDiscard = true
+		s.timingData = nil
 		return
 	}
 	// Observe complete data immediately, as before, rather than waiting for a

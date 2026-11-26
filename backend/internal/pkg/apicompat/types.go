@@ -38,7 +38,8 @@ type AnthropicRequest struct {
 
 // AnthropicOutputConfig controls output generation parameters.
 type AnthropicOutputConfig struct {
-	Effort string `json:"effort,omitempty"` // "low" | "medium" | "high" | "max"
+	Effort string          `json:"effort,omitempty"` // "low" | "medium" | "high" | "max"
+	Format json.RawMessage `json:"format,omitempty"`
 }
 
 // AnthropicThinking configures extended thinking in the Anthropic API.
@@ -423,6 +424,7 @@ type ResponsesContentPart struct {
 	Text                  string          `json:"text,omitempty"`
 	Refusal               string          `json:"refusal,omitempty"`   // type=refusal
 	ImageURL              string          `json:"image_url,omitempty"` // data URI for input_image
+	Detail                string          `json:"detail,omitempty"`
 
 	// input_file fields.
 	Filename string `json:"filename,omitempty"`
@@ -774,6 +776,7 @@ type ResponsesStreamEvent struct {
 	ContentIndex int    `json:"content_index,omitempty"`
 	Delta        string `json:"delta,omitempty"`
 	Text         string `json:"text,omitempty"`
+	Refusal      string `json:"refusal,omitempty"`
 	ItemID       string `json:"item_id,omitempty"`
 
 	// response.function_call_arguments.delta / done

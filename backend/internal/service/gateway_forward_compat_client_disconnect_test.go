@@ -80,7 +80,7 @@ func anthropicStreamWithMidStreamText() string {
 		`event: message_stop`,
 		`data: {"type":"message_stop"}`,
 		``,
-	}, "\n")
+	}, "\n") + "\n"
 }
 
 // stallingAnthropicUpstream 写完 stream 后保持连接不关闭，模拟上游挂住。
@@ -128,7 +128,7 @@ var compatStreamFailureMarkers = map[string]string{
 
 // anthropicStreamWithoutMessageStop 以带 stop_reason 的 message_delta 结束，不含 message_stop。
 func anthropicStreamWithoutMessageStop() string {
-	return strings.TrimSuffix(anthropicStreamWithMidStreamText(), "event: message_stop\ndata: {\"type\":\"message_stop\"}\n")
+	return strings.TrimSuffix(anthropicStreamWithMidStreamText(), "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 }
 
 // anthropicStreamTruncatedBeforeMessageDelta 在 message_delta 之前中断，usage 只有 message_start 的部分。
@@ -196,7 +196,7 @@ func TestAnthropicCompatStreaming_IdleUpstreamEndsWithinInterval(t *testing.T) {
 	}
 }
 
-func TestAnthropicCompatStreaming_IdleAfterTerminalDoesNotOverrideReadFailure(t *testing.T) {
+func TestAnthropicCompatStreaming_IdleRequiresMessageStop(t *testing.T) {
 	for name, handle := range compatStreamHandlers() {
 		for streamName, stream := range map[string]string{
 			"message_stop": anthropicStreamWithMidStreamText(),
@@ -210,6 +210,12 @@ func TestAnthropicCompatStreaming_IdleAfterTerminalDoesNotOverrideReadFailure(t 
 
 				got := runCompatStreamWithDeadline(t, handle, newCompatStreamIdleTestService(1), resp, c)
 
+				if streamName == "message_stop" {
+					require.NoError(t, got.err)
+					require.Equal(t, 42, got.result.Usage.OutputTokens)
+					require.Contains(t, rec.Body.String(), compatStreamTerminalMarkers[name])
+					return
+				}
 				require.Error(t, got.err)
 				require.NotNil(t, got.result)
 				require.Equal(t, 42, got.result.Usage.OutputTokens)
@@ -260,7 +266,11 @@ func TestAnthropicCompatStreaming_ReadErrorBeforeTerminalEventFails(t *testing.T
 
 				result, err := handle(&GatewayService{}, &http.Response{Header: http.Header{}, Body: body}, c)
 
-				if tc.wantErr {
+				if tc.name == "after_message_stop_without_stop_reason" {
+					require.Error(t, err)
+					require.Contains(t, rec.Body.String(), "stream_protocol_error")
+					require.NotContains(t, rec.Body.String(), compatStreamTerminalMarkers[name])
+				} else if tc.wantErr {
 					require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 					require.NotErrorIs(t, err, errAnthropicNativeStreamIdle)
 					require.NotContains(t, rec.Body.String(), compatStreamTerminalMarkers[name])
@@ -731,7 +741,7 @@ func TestForwardAsCompatStreaming_IdleTimeoutTriggersStreamTimeoutHandling(t *te
 		}{
 			{name: "client_online", stream: anthropicStreamTruncatedBeforeMessageDelta(), marker: "\x00never-written", wantErr: true, wantOutput: 1, wantPenalty: 1},
 			{name: "client_disconnected", stream: anthropicStreamTruncatedBeforeMessageDelta(), marker: "second", wantOutput: 1},
-			{name: "after_message_stop", stream: anthropicStreamWithMidStreamText(), marker: "\x00never-written", wantErr: true, wantOutput: 42, wantPenalty: 1},
+			{name: "after_message_stop", stream: anthropicStreamWithMidStreamText(), marker: "\x00never-written", wantOutput: 42},
 			{name: "after_stop_reason", stream: anthropicStreamWithoutMessageStop(), marker: "\x00never-written", wantErr: true, wantOutput: 42, wantPenalty: 1},
 		} {
 			t.Run(endpoint+"/"+tc.name, func(t *testing.T) {
@@ -770,8 +780,10 @@ func TestForwardAsCompatStreaming_IdleTimeoutTriggersStreamTimeoutHandling(t *te
 
 				if tc.wantErr {
 					require.ErrorIs(t, err, errAnthropicNativeStreamIdle)
-				} else {
+				} else if tc.name == "client_disconnected" {
 					require.ErrorIs(t, err, context.Canceled)
+				} else {
+					require.NoError(t, err)
 				}
 				require.NotNil(t, result)
 				require.Equal(t, tc.wantOutput, result.Usage.OutputTokens)

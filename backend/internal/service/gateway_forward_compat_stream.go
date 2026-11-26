@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
@@ -40,15 +41,19 @@ type anthropicCompatStream struct {
 	clientDisconnected bool
 	sawMessageStart    bool
 	// sawTerminal requires message_stop; stop_reason and [DONE] are not sufficient.
-	sawTerminal     bool
-	frame           anthropicSSEFrameAssembler
-	frameCount      int
-	contentBytes    int
-	semanticContent bool
-	inputUsageSeen  bool
-	outputUsageSeen bool
-	usageSeen       bool
-	protocolFailure string
+	sawTerminal       bool
+	frame             anthropicSSEFrameAssembler
+	frameCount        int
+	contentBytes      int
+	semanticContent   bool
+	generated         bool
+	stopReason        string
+	finalOutputSeen   bool
+	finalOutputTokens int
+	inputUsageSeen    bool
+	outputUsageSeen   bool
+	usageSeen         bool
+	protocolFailure   string
 	// upstreamErr* 记录上游流内的 error 事件；收到后调用方结束读取。
 	upstreamErrType    string
 	upstreamErrMessage string
@@ -169,7 +174,7 @@ func (st *anthropicCompatStream) observe(event *apicompat.AnthropicStreamEvent, 
 	if usagePath != "" {
 		u := gjson.Get(payload, usagePath)
 		st.usageSeen = st.usageSeen || anthropicUsageFieldsObserved(u)
-		for _, key := range []string{"input_tokens", "prompt_tokens", "output_tokens"} {
+		for _, key := range []string{"input_tokens", "prompt_tokens", "prompt_cache_miss_tokens", "output_tokens"} {
 			value := u.Get(key)
 			if !value.Exists() || value.Type == gjson.Null {
 				continue
@@ -180,6 +185,10 @@ func (st *anthropicCompatStream) observe(event *apicompat.AnthropicStreamEvent, 
 			}
 			if key == "output_tokens" {
 				st.outputUsageSeen = true
+				if event.Type == "message_delta" {
+					st.finalOutputSeen = true
+					st.finalOutputTokens = int(value.Int())
+				}
 			} else {
 				st.inputUsageSeen = true
 			}
@@ -197,11 +206,16 @@ func (st *anthropicCompatStream) observe(event *apicompat.AnthropicStreamEvent, 
 		n := len(event.Delta.Text) + len(event.Delta.Thinking)
 		st.contentBytes += n
 		st.semanticContent = st.semanticContent || n > 0
+		st.generated = st.generated || event.Delta.Signature != "" || event.Delta.PartialJSON != ""
 	}
 
 	switch event.Type {
 	case "message_start":
-		st.sawMessageStart = true
+		st.sawMessageStart = event.Message != nil
+	case "message_delta":
+		if event.Delta != nil && event.Delta.StopReason != "" {
+			st.stopReason = event.Delta.StopReason
+		}
 	case "message_stop":
 		st.sawTerminal = true
 	case "error":
@@ -239,6 +253,28 @@ func (st *anthropicCompatStream) observeContent(block apicompat.AnthropicContent
 	st.contentBytes += n
 	st.semanticContent = st.semanticContent || n > 0 ||
 		((block.Type == "tool_use" || block.Type == "server_tool_use") && block.ID != "" && block.Name != "")
+	st.generated = st.generated || block.Signature != ""
+}
+
+// The initial output counter is provisional. The Messages protocol completes
+// the turn with a final reason and cumulative delta usage, then message_stop.
+func (st *anthropicCompatStream) deliveryFailure() *anthropicCompatStreamFailure {
+	if st.sawTerminal && st.protocolFailure == "" {
+		switch {
+		case !st.sawMessageStart || st.stopReason == "":
+			st.protocolFailure = "missing Anthropic message start or final stop reason"
+		case !st.finalOutputSeen:
+			st.protocolFailure = "missing final Anthropic output usage"
+		}
+	}
+	return st.failure()
+}
+
+func (st *anthropicCompatStream) mergeDeltaUsage(usage *ClaudeUsage, delta apicompat.AnthropicUsage) {
+	mergeAnthropicUsage(usage, delta)
+	if st.finalOutputSeen {
+		usage.OutputTokens = st.finalOutputTokens
+	}
 }
 
 // failure never treats a terminal or disconnect as proof of success. Known
@@ -279,7 +315,7 @@ func (st *anthropicCompatStream) failure() *anthropicCompatStreamFailure {
 			errType: "stream_incomplete",
 			message: "upstream stream ended without a terminal event",
 		}
-	case !st.sawMessageStart || !st.semanticContent:
+	case !st.sawMessageStart || (!st.semanticContent && st.stopReason != "end_turn"):
 		return &anthropicCompatStreamFailure{err: errors.New("stream usage incomplete: missing semantic content"), errType: "stream_protocol_error", message: "upstream stream ended without semantic content"}
 	case !st.inputUsageSeen || !st.outputUsageSeen:
 		return &anthropicCompatStreamFailure{err: errors.New("stream usage incomplete: missing usage fields"), errType: "usage_incomplete", message: "upstream stream ended without complete usage"}
@@ -290,16 +326,16 @@ func (st *anthropicCompatStream) failure() *anthropicCompatStreamFailure {
 
 // Preserve partial usage on failure. Only the existing pre-output upstream
 // rejection policy may fail over; incomplete/protocol errors never replay.
-func finishAnthropicCompatStreamFailure(c *gin.Context, writerSizeBeforeStream int, failure *anthropicCompatStreamFailure, result *ForwardResult, writeFailure func()) (*ForwardResult, error) {
+func (st *anthropicCompatStream) finishFailure(c *gin.Context, writerSizeBeforeStream int, failure *anthropicCompatStreamFailure, result *ForwardResult, writeFailure func()) (*ForwardResult, error) {
 	var sseErr *sseStreamErrorEventError
 	isSSEError := errors.As(failure.err, &sseErr)
 	clientDisconnected := result.ClientDisconnect
 	wroteFailure := false
-	if !clientDisconnected && (!isSSEError || c.Writer.Size() != writerSizeBeforeStream || result.Usage.hasObservedTokens()) {
+	if !clientDisconnected && (!isSSEError || c.Writer.Size() != writerSizeBeforeStream || st.usageSeen || st.generated || st.semanticContent) {
 		writeFailure()
 		wroteFailure = true
 	}
-	if !result.Usage.hasObservedTokens() {
+	if !st.usageSeen {
 		result = nil
 	}
 	if isAnthropicCompatSafetyRejection([]byte(extractCompatFailurePayload(failure.err))) {
@@ -308,7 +344,56 @@ func finishAnthropicCompatStreamFailure(c *gin.Context, writerSizeBeforeStream i
 		}
 		return result, fmt.Errorf("upstream safety rejection: %s", failure.message)
 	}
+	if clientDisconnected {
+		return result, context.Canceled
+	}
 	return result, failure.err
+}
+
+func (st *anthropicCompatStream) finishBuffered(c *gin.Context, failure *anthropicCompatStreamFailure, result *ForwardResult, render func(*gin.Context, int, string, string)) (*ForwardResult, error) {
+	if !st.usageSeen {
+		result = nil
+	}
+	if st.clientDisconnected {
+		return result, context.Canceled
+	}
+	var rejected *sseStreamErrorEventError
+	if errors.As(failure.err, &rejected) {
+		if isAnthropicCompatSafetyRejection([]byte(rejected.RawData)) {
+			render(c, http.StatusForbidden, "permission_error", failure.message)
+			return result, fmt.Errorf("upstream safety rejection: %s", failure.message)
+		}
+		if !st.usageSeen && !st.generated && !st.semanticContent {
+			return nil, rejected
+		}
+	}
+	render(c, http.StatusBadGateway, failure.errType, failure.message)
+	return result, failure.err
+}
+
+func compatWrite(c *gin.Context, frame string) error {
+	wire := []byte(frame)
+	n, err := c.Writer.Write(wire)
+	if err == nil && n != len(frame) {
+		err = io.ErrShortWrite
+	}
+	if c.Request != nil {
+		ctx := c.Request.Context()
+		if err != nil {
+			requesttiming.Mark(ctx, "downstream_write_failed")
+		} else {
+			requesttiming.DeliveredSSE(ctx, wire)
+		}
+	}
+	return err
+}
+
+func compatFlush(c *gin.Context) error {
+	err := FlushGatewayResponse(c.Writer)
+	if err != nil && c.Request != nil {
+		requesttiming.Mark(c.Request.Context(), "downstream_flush_failed")
+	}
+	return err
 }
 
 // Gin records buffered render/write failures in c.Errors instead of returning
@@ -374,10 +459,10 @@ func writeAnthropicCompatResponsesStreamFailure(c *gin.Context, state *apicompat
 func commitAnthropicCompatStreamFailure(c *gin.Context, failure *anthropicCompatStreamFailure, frame string) {
 	MarkOpsStreamError(c, failure.errType, failure.message, http.StatusBadGateway)
 	MarkResponseCommitted(c)
-	if _, err := io.WriteString(c.Writer, frame); err != nil {
+	if err := compatWrite(c, frame); err != nil {
 		return
 	}
-	c.Writer.Flush()
+	_ = compatFlush(c)
 }
 
 func extractCompatFailurePayload(err error) string {

@@ -79,16 +79,26 @@ func TestAnthropicChatStreamAuthoritativeUsage(t *testing.T) {
 							svc := &GatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
 							account := &Account{ID: 1, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "sk-test"}}
 							result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, nil)
-							if terminal == "eof" || !tc.want {
+							incomplete := terminal == "eof" || !tc.want || tc.name == "zero_start"
+							if incomplete {
 								require.Error(t, err)
 								require.NotContains(t, rec.Body.String(), "[DONE]")
-								return
+								require.Contains(t, rec.Body.String(), `"error":{`)
+								if !tc.want {
+									require.Nil(t, result)
+									return
+								}
+							} else {
+								require.NoError(t, err)
 							}
-							require.NoError(t, err)
+							require.NotNil(t, result)
 							require.Equal(t, tc.billableInput, result.Usage.InputTokens)
 							require.Equal(t, tc.output, result.Usage.OutputTokens)
 							require.Equal(t, tc.cached, result.Usage.CacheReadInputTokens)
 							require.Equal(t, tc.created, result.Usage.CacheCreationInputTokens)
+							if incomplete {
+								return
+							}
 						}
 						count, done := 0, 0
 						var last *apicompat.ChatCompletionsChunk

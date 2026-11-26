@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -40,15 +39,24 @@ func GeminiGenerateContentToChatCompletions(model string, body []byte, stream bo
 		messages = append(messages, map[string]any{"role": "system", "content": system})
 	}
 
-	var pending []geminiPendingCall
+	var pending geminiPendingCalls
+	var contentErr error
 	contents.ForEach(func(_, content gjson.Result) bool {
 		role := strings.ToLower(strings.TrimSpace(content.Get("role").String()))
 		if role == "" {
 			role = "user"
 		}
-		messages = append(messages, geminiContentToChatMessages(role, content.Get("parts"), &pending)...)
+		converted, err := geminiContentToChatMessages(role, content.Get("parts"), &pending)
+		if err != nil {
+			contentErr = err
+			return false
+		}
+		messages = append(messages, converted...)
 		return true
 	})
+	if contentErr != nil {
+		return nil, contentErr
+	}
 	onlySystem := false
 	if len(messages) == 1 {
 		msg, ok := messages[0].(map[string]any)
@@ -95,81 +103,6 @@ func GeminiGenerateContentToChatCompletions(model string, body []byte, stream bo
 	return encoded, nil
 }
 
-// ChatCompletionsJSONToGemini 把 Chat Completions 非流式响应转成 Gemini generateContent 响应。
-func ChatCompletionsJSONToGemini(body []byte, fallbackModel string) ([]byte, error) {
-	var resp ChatCompletionsResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("parse chat completions response: %w", err)
-	}
-	if len(resp.Choices) == 0 {
-		return nil, fmt.Errorf("chat completions response has no choices")
-	}
-	model := strings.TrimSpace(resp.Model)
-	if model == "" {
-		model = strings.TrimSpace(fallbackModel)
-	}
-	payload := map[string]any{
-		"candidates": geminiCandidatesFromChoices(resp.Choices),
-	}
-	if usage := geminiUsageFromChat(resp.Usage); usage != nil {
-		payload["usageMetadata"] = usage
-	}
-	if model != "" {
-		payload["modelVersion"] = model
-	}
-	return json.Marshal(payload)
-}
-
-// GeminiSSETranslator 把 Chat Completions SSE 增量转成 Gemini SSE（data: {...}\n\n）。
-type GeminiSSETranslator struct {
-	model string
-	buf   bytes.Buffer
-	// 工具增量按候选和 tool index 分开。两个候选都会从 index 0 开始，
-	// 混在一张表里会串参数，并且先结束的候选会清掉另一个的状态。
-	tools map[geminiToolKey]*geminiToolAccum
-}
-
-type geminiToolKey struct {
-	choice int
-	tool   int
-}
-
-func NewGeminiSSETranslator(model string) *GeminiSSETranslator {
-	return &GeminiSSETranslator{model: strings.TrimSpace(model), tools: map[geminiToolKey]*geminiToolAccum{}}
-}
-
-// Push 吃进任意切分的上游字节，返回已经可以写给 Gemini 客户端的 SSE。
-func (t *GeminiSSETranslator) Push(p []byte) []byte {
-	if t == nil || len(p) == 0 {
-		return nil
-	}
-	_, _ = t.buf.Write(p)
-	var out bytes.Buffer
-	for {
-		data := t.buf.Bytes()
-		idx := bytes.IndexByte(data, '\n')
-		if idx < 0 {
-			break
-		}
-		line := strings.TrimRight(string(data[:idx]), "\r")
-		t.buf.Next(idx + 1)
-		if converted := t.translateLine(line); len(converted) > 0 {
-			_, _ = out.Write(converted)
-		}
-	}
-	return out.Bytes()
-}
-
-// Flush 处理末尾没有换行的残留行。
-func (t *GeminiSSETranslator) Flush() []byte {
-	if t == nil || t.buf.Len() == 0 {
-		return nil
-	}
-	line := strings.TrimRight(t.buf.String(), "\r\n")
-	t.buf.Reset()
-	return t.translateLine(line)
-}
-
 // EstimateGeminiTotalTokens 按文本长度估算 countTokens。桥接分组没有 Gemini
 // countTokens 上游，避免为此再打一次生成请求。
 func EstimateGeminiTotalTokens(body []byte) (tokens int, characters int) {
@@ -211,35 +144,54 @@ func EstimateGeminiTotalTokens(body []byte) (tokens int, characters int) {
 }
 
 type geminiPendingCall struct {
-	name string
-	id   string
-	used bool
+	name     string
+	sourceID string
 }
 
-type geminiToolAccum struct {
-	name string
-	args string
+type geminiPendingCalls struct {
+	byChatID   map[string]geminiPendingCall
+	bySourceID map[string]string
+	next       int
 }
 
-func geminiContentToChatMessages(role string, parts gjson.Result, pending *[]geminiPendingCall) []any {
+func geminiContentToChatMessages(role string, parts gjson.Result, pending *geminiPendingCalls) ([]any, error) {
 	var textParts []string
-	var media []map[string]any
+	var mixedParts []map[string]any
 	var toolCalls []any
 	var toolMessages []any
+	var partErr error
 	parts.ForEach(func(_, part gjson.Result) bool {
 		if part.Get("thought").Bool() {
 			return true
 		}
 		if text := part.Get("text").String(); text != "" {
-			textParts = append(textParts, text)
+			if mixedParts == nil {
+				textParts = append(textParts, text)
+			} else {
+				mixedParts = append(mixedParts, map[string]any{"type": "text", "text": text})
+			}
 		}
-		if mediaPart, ok := geminiInlineDataToChatPart(part); ok {
-			media = append(media, mediaPart)
+		mediaPart, err := geminiInlineDataToChatPart(part)
+		if err != nil {
+			partErr = err
+			return false
+		}
+		if mediaPart != nil {
+			if mixedParts == nil {
+				for _, text := range textParts {
+					mixedParts = append(mixedParts, map[string]any{"type": "text", "text": text})
+				}
+				textParts = nil
+			}
+			mixedParts = append(mixedParts, mediaPart)
 		}
 		if call := geminiObject(part, "functionCall", "function_call"); call.Exists() {
 			name := strings.TrimSpace(call.Get("name").String())
-			id := fmt.Sprintf("call_%s_%d", sanitizeToolID(name), len(*pending))
-			*pending = append(*pending, geminiPendingCall{name: name, id: id})
+			id, err := pending.add(name, call.Get("id"))
+			if err != nil {
+				partErr = err
+				return false
+			}
 			args := "{}"
 			if raw := strings.TrimSpace(call.Get("args").Raw); raw != "" && raw != "null" {
 				args = raw
@@ -254,8 +206,20 @@ func geminiContentToChatMessages(role string, parts gjson.Result, pending *[]gem
 			})
 		}
 		if resp := geminiObject(part, "functionResponse", "function_response"); resp.Exists() {
+			if len(textParts) > 0 || len(mixedParts) > 0 {
+				partErr = fmt.Errorf("Chat requires all tool responses before user content; cannot preserve Gemini part order")
+				return false
+			}
+			if resp.Get("parts.#").Int() > 0 {
+				partErr = fmt.Errorf("multimodal functionResponse.parts cannot be represented in a Chat tool message")
+				return false
+			}
 			name := strings.TrimSpace(resp.Get("name").String())
-			id := takeGeminiCallID(pending, name)
+			id, err := pending.take(name, resp.Get("id"))
+			if err != nil {
+				partErr = err
+				return false
+			}
 			content := geminiFunctionResponseContent(resp.Get("response"))
 			toolMessages = append(toolMessages, map[string]any{
 				"role":         "tool",
@@ -265,6 +229,9 @@ func geminiContentToChatMessages(role string, parts gjson.Result, pending *[]gem
 		}
 		return true
 	})
+	if partErr != nil {
+		return nil, partErr
+	}
 
 	var out []any
 	chatRole := "user"
@@ -272,35 +239,28 @@ func geminiContentToChatMessages(role string, parts gjson.Result, pending *[]gem
 		chatRole = "assistant"
 	}
 	if chatRole == "assistant" || len(toolMessages) == 0 {
-		if msg := geminiTextMessage(chatRole, textParts, media, toolCalls); msg != nil {
+		if msg := geminiTextMessage(chatRole, textParts, mixedParts, toolCalls); msg != nil {
 			out = append(out, msg)
 		}
 		out = append(out, toolMessages...)
-		return out
+		return out, nil
 	}
 	// 用户回合里的 functionResponse 在 Chat Completions 里必须是独立的 tool 消息。
 	out = append(out, toolMessages...)
-	if msg := geminiTextMessage("user", textParts, media, nil); msg != nil {
+	if msg := geminiTextMessage("user", textParts, mixedParts, nil); msg != nil {
 		out = append(out, msg)
 	}
-	return out
+	return out, nil
 }
 
-func geminiTextMessage(role string, textParts []string, media []map[string]any, toolCalls []any) map[string]any {
-	if len(textParts) == 0 && len(media) == 0 && len(toolCalls) == 0 {
+func geminiTextMessage(role string, textParts []string, mixedParts []map[string]any, toolCalls []any) map[string]any {
+	if len(textParts) == 0 && len(mixedParts) == 0 && len(toolCalls) == 0 {
 		return nil
 	}
 	msg := map[string]any{"role": role}
 	switch {
-	case len(media) > 0:
-		parts := make([]any, 0, len(textParts)+len(media))
-		if text := strings.Join(textParts, "\n"); text != "" {
-			parts = append(parts, map[string]any{"type": "text", "text": text})
-		}
-		for _, part := range media {
-			parts = append(parts, part)
-		}
-		msg["content"] = parts
+	case len(mixedParts) > 0:
+		msg["content"] = mixedParts
 	case len(textParts) > 0:
 		msg["content"] = strings.Join(textParts, "\n")
 	}
@@ -310,12 +270,12 @@ func geminiTextMessage(role string, textParts []string, media []map[string]any, 
 	return msg
 }
 
-func geminiInlineDataToChatPart(part gjson.Result) (map[string]any, bool) {
+func geminiInlineDataToChatPart(part gjson.Result) (map[string]any, error) {
 	inline := geminiObject(part, "inlineData", "inline_data")
 	if !inline.Exists() {
 		file := geminiObject(part, "fileData", "file_data")
 		if !file.Exists() {
-			return nil, false
+			return nil, nil
 		}
 		uri := strings.TrimSpace(file.Get("fileUri").String())
 		if uri == "" {
@@ -326,12 +286,12 @@ func geminiInlineDataToChatPart(part gjson.Result) (map[string]any, bool) {
 			mime = strings.TrimSpace(file.Get("mime_type").String())
 		}
 		if uri == "" {
-			return nil, false
+			return nil, fmt.Errorf("fileData.fileUri is required")
 		}
 		if strings.HasPrefix(mime, "image/") || mime == "" {
-			return map[string]any{"type": "image_url", "image_url": map[string]any{"url": uri}}, true
+			return map[string]any{"type": "image_url", "image_url": map[string]any{"url": uri}}, nil
 		}
-		return map[string]any{"type": "text", "text": uri}, true
+		return nil, fmt.Errorf("remote fileData of type %q cannot be represented as a Chat attachment", mime)
 	}
 	mime := strings.TrimSpace(inline.Get("mimeType").String())
 	if mime == "" {
@@ -339,15 +299,20 @@ func geminiInlineDataToChatPart(part gjson.Result) (map[string]any, bool) {
 	}
 	data := strings.TrimSpace(inline.Get("data").String())
 	if data == "" {
-		return nil, false
+		return nil, fmt.Errorf("inlineData.data is required")
 	}
-	if mime == "" {
-		mime = "application/octet-stream"
+	uri := "data:" + mime + ";base64," + data
+	if mime == "application/pdf" {
+		filename := geminiObject(inline, "displayName", "display_name").String()
+		if filename == "" {
+			filename = "document.pdf"
+		}
+		return map[string]any{"type": "file", "file": map[string]any{"filename": filename, "file_data": uri}}, nil
 	}
-	return map[string]any{
-		"type":      "image_url",
-		"image_url": map[string]any{"url": "data:" + mime + ";base64," + data},
-	}, true
+	if !strings.HasPrefix(mime, "image/") {
+		return nil, fmt.Errorf("inlineData MIME type %q is unsupported on the Chat bridge", mime)
+	}
+	return map[string]any{"type": "image_url", "image_url": map[string]any{"url": uri}}, nil
 }
 
 func geminiToolsToChatTools(body []byte) ([]any, error) {
@@ -373,13 +338,13 @@ func geminiToolsToChatTools(body []byte) ([]any, error) {
 			if desc := decl.Get("description").String(); desc != "" {
 				fn["description"] = desc
 			}
-			if params := decl.Get("parameters"); params.Exists() && params.Raw != "" && params.Raw != "null" {
-				converted, err := geminiSchemaToJSONSchema(params.Raw)
-				if err != nil {
-					convErr = fmt.Errorf("tool %s parameters: %w", name, err)
-					return false
-				}
-				fn["parameters"] = json.RawMessage(converted)
+			params, err := geminiChatSchema(decl.Get("parameters"), geminiObject(decl, "parametersJsonSchema", "parameters_json_schema"))
+			if err != nil {
+				convErr = fmt.Errorf("tool %s parameters: %w", name, err)
+				return false
+			}
+			if params != nil {
+				fn["parameters"] = params
 			}
 			tools = append(tools, map[string]any{"type": "function", "function": fn})
 			return true
@@ -506,28 +471,45 @@ func applyGeminiGenerationConfig(body []byte, out map[string]any) error {
 	if mime == "" {
 		mime = strings.TrimSpace(cfg.Get("response_mime_type").String())
 	}
-	schema := cfg.Get("responseSchema")
-	if !schema.Exists() {
-		schema = cfg.Get("response_schema")
-	}
-	if strings.EqualFold(mime, "application/json") && schema.Exists() && schema.Raw != "" && schema.Raw != "null" {
-		converted, err := geminiSchemaToJSONSchema(schema.Raw)
-		if err != nil {
-			return fmt.Errorf("responseSchema: %w", err)
+	rawSchema := geminiObject(cfg, "responseJsonSchema", "response_json_schema")
+	if !strings.EqualFold(mime, "application/json") {
+		if rawSchema.Type != gjson.Null {
+			return fmt.Errorf("responseJsonSchema requires responseMimeType application/json")
 		}
+		return nil
+	}
+	schema, err := geminiChatSchema(geminiObject(cfg, "responseSchema", "response_schema"), rawSchema)
+	if err != nil {
+		return fmt.Errorf("responseSchema: %w", err)
+	}
+	if schema != nil {
 		out["response_format"] = map[string]any{
 			"type": "json_schema",
 			"json_schema": map[string]any{
 				"name":   "response",
-				"schema": json.RawMessage(converted),
+				"schema": schema,
 			},
 		}
 		return nil
 	}
-	if strings.EqualFold(mime, "application/json") {
-		out["response_format"] = map[string]any{"type": "json_object"}
-	}
+	out["response_format"] = map[string]any{"type": "json_object"}
 	return nil
+}
+
+func geminiChatSchema(typed, raw gjson.Result) (json.RawMessage, error) {
+	if raw.Type != gjson.Null {
+		if typed.Type != gjson.Null {
+			return nil, fmt.Errorf("Gemini Schema and JSON Schema are mutually exclusive")
+		}
+		if !raw.IsObject() {
+			return nil, fmt.Errorf("JSON Schema must be an object for Chat Completions")
+		}
+		return json.RawMessage(raw.Raw), nil
+	}
+	if typed.Type == gjson.Null {
+		return nil, nil
+	}
+	return geminiSchemaToJSONSchema(typed.Raw)
 }
 
 // geminiSchemaToJSONSchema 把 Gemini Schema 的 OBJECT/STRING 等类型递归转成 JSON Schema。
@@ -751,40 +733,6 @@ func convertGeminiSchemaOrBool(key string, value any) (any, error) {
 	return converted, nil
 }
 
-func geminiCandidatesFromChoices(choices []ChatChoice) []any {
-	out := make([]any, 0, len(choices))
-	for _, choice := range choices {
-		parts := make([]any, 0, 2)
-		if text := chatMessageText(choice.Message); text != "" {
-			parts = append(parts, map[string]any{"text": text})
-		}
-		for _, call := range choice.Message.ToolCalls {
-			name := strings.TrimSpace(call.Function.Name)
-			args := map[string]any{}
-			if raw := strings.TrimSpace(call.Function.Arguments); raw != "" {
-				if err := json.Unmarshal([]byte(raw), &args); err != nil {
-					args = map[string]any{"raw": raw}
-				}
-			}
-			parts = append(parts, map[string]any{
-				"functionCall": map[string]any{"name": name, "args": args},
-			})
-		}
-		if len(parts) == 0 {
-			parts = append(parts, map[string]any{"text": ""})
-		}
-		out = append(out, map[string]any{
-			"index": choice.Index,
-			"content": map[string]any{
-				"role":  "model",
-				"parts": parts,
-			},
-			"finishReason": chatFinishReasonToGemini(choice.FinishReason),
-		})
-	}
-	return out
-}
-
 func chatMessageText(message ChatMessage) string {
 	if len(message.Content) == 0 || string(message.Content) == "null" {
 		return ""
@@ -810,146 +758,6 @@ func chatMessageText(message ChatMessage) string {
 	return ""
 }
 
-func chatFinishReasonToGemini(reason string) string {
-	switch strings.ToLower(strings.TrimSpace(reason)) {
-	case "length":
-		return "MAX_TOKENS"
-	case "content_filter":
-		return "SAFETY"
-	default:
-		return "STOP"
-	}
-}
-
-func geminiUsageFromChat(usage *ChatUsage) map[string]any {
-	if usage == nil {
-		return nil
-	}
-	return map[string]any{
-		"promptTokenCount":     usage.PromptTokens,
-		"candidatesTokenCount": usage.CompletionTokens,
-		"totalTokenCount":      usage.TotalTokens,
-	}
-}
-
-func (t *GeminiSSETranslator) translateLine(line string) []byte {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" || strings.HasPrefix(trimmed, "event:") {
-		return nil
-	}
-	// 上游转发链用 `:` 注释做 SSE keepalive。丢掉后，长时间无内容时下游连接失去保活。
-	if strings.HasPrefix(trimmed, ":") {
-		out := make([]byte, 0, len(trimmed)+2)
-		out = append(out, trimmed...)
-		out = append(out, '\n', '\n')
-		return out
-	}
-	line = trimmed
-	rest, ok := strings.CutPrefix(line, "data:")
-	if !ok {
-		return nil
-	}
-	payload := strings.TrimSpace(rest)
-	if payload == "" || payload == "[DONE]" {
-		return nil
-	}
-	if gjson.Get(payload, "error").Exists() && !gjson.Get(payload, "choices").Exists() {
-		message := gjson.Get(payload, "error.message").String()
-		if message == "" {
-			message = "Upstream request failed"
-		}
-		return geminiSSEData(map[string]any{
-			"error": map[string]any{"code": 502, "message": message, "status": "INTERNAL"},
-		})
-	}
-	var chunk ChatCompletionsChunk
-	if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-		return nil
-	}
-	if chunk.Model != "" {
-		t.model = chunk.Model
-	}
-	var events []any
-	for _, choice := range chunk.Choices {
-		if text := choice.Delta.Content; text != nil && *text != "" {
-			events = append(events, map[string]any{
-				"candidates": []any{geminiStreamCandidate(choice.Index, []any{map[string]any{"text": *text}}, "")},
-			})
-		}
-		for _, call := range choice.Delta.ToolCalls {
-			idx := 0
-			if call.Index != nil {
-				idx = *call.Index
-			}
-			key := geminiToolKey{choice: choice.Index, tool: idx}
-			acc := t.tools[key]
-			if acc == nil {
-				acc = &geminiToolAccum{}
-				t.tools[key] = acc
-			}
-			if name := strings.TrimSpace(call.Function.Name); name != "" {
-				acc.name = name
-			}
-			acc.args += call.Function.Arguments
-		}
-		if choice.FinishReason != nil && *choice.FinishReason != "" {
-			indexes := make([]int, 0)
-			for key := range t.tools {
-				if key.choice == choice.Index {
-					indexes = append(indexes, key.tool)
-				}
-			}
-			sort.Ints(indexes)
-			parts := make([]any, 0, len(indexes))
-			for _, idx := range indexes {
-				key := geminiToolKey{choice: choice.Index, tool: idx}
-				acc := t.tools[key]
-				delete(t.tools, key)
-				if acc == nil || acc.name == "" {
-					continue
-				}
-				args := map[string]any{}
-				if raw := strings.TrimSpace(acc.args); raw != "" {
-					if err := json.Unmarshal([]byte(raw), &args); err != nil {
-						args = map[string]any{"raw": raw}
-					}
-				}
-				parts = append(parts, map[string]any{"functionCall": map[string]any{"name": acc.name, "args": args}})
-			}
-			if len(parts) == 0 {
-				parts = append(parts, map[string]any{"text": ""})
-			}
-			candidate := geminiStreamCandidate(choice.Index, parts, chatFinishReasonToGemini(*choice.FinishReason))
-			event := map[string]any{"candidates": []any{candidate}}
-			if usage := geminiUsageFromChat(chunk.Usage); usage != nil {
-				event["usageMetadata"] = usage
-				if t.model != "" {
-					event["modelVersion"] = t.model
-				}
-			}
-			events = append(events, event)
-			continue
-		}
-	}
-	if len(chunk.Choices) == 0 {
-		if usage := geminiUsageFromChat(chunk.Usage); usage != nil {
-			event := map[string]any{"usageMetadata": usage}
-			if t.model != "" {
-				event["modelVersion"] = t.model
-			}
-			events = append(events, event)
-		}
-	}
-	if len(events) == 0 {
-		return nil
-	}
-	var out bytes.Buffer
-	for _, event := range events {
-		_, _ = out.Write(geminiSSEData(event))
-	}
-	return out.Bytes()
-}
-
 func geminiStreamCandidate(index int, parts []any, finish string) map[string]any {
 	candidate := map[string]any{
 		"index": index,
@@ -962,18 +770,6 @@ func geminiStreamCandidate(index int, parts []any, finish string) map[string]any
 		candidate["finishReason"] = finish
 	}
 	return candidate
-}
-
-func geminiSSEData(payload any) []byte {
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return nil
-	}
-	buf := make([]byte, 0, len(encoded)+8)
-	buf = append(buf, "data: "...)
-	buf = append(buf, encoded...)
-	buf = append(buf, '\n', '\n')
-	return buf
 }
 
 func geminiInstructionText(body []byte, keys ...string) string {
@@ -1026,25 +822,82 @@ func geminiFunctionResponseContent(response gjson.Result) string {
 	if response.Type == gjson.String {
 		return response.String()
 	}
-	if content := response.Get("content"); content.Type == gjson.String {
-		return content.String()
-	}
-	if output := response.Get("output"); output.Type == gjson.String {
-		return output.String()
+	// Unwrap common text-only envelopes. Preserve structured tool results intact.
+	if response.IsObject() {
+		var count int
+		var text gjson.Result
+		response.ForEach(func(key, value gjson.Result) bool {
+			count++
+			if key.String() == "content" || key.String() == "output" {
+				text = value
+			}
+			return count == 1
+		})
+		if count == 1 && text.Type == gjson.String {
+			return text.String()
+		}
 	}
 	return response.Raw
 }
 
-func takeGeminiCallID(pending *[]geminiPendingCall, name string) string {
-	if pending != nil {
-		for i := range *pending {
-			if !(*pending)[i].used && (*pending)[i].name == name {
-				(*pending)[i].used = true
-				return (*pending)[i].id
+func (p *geminiPendingCalls) add(name string, id gjson.Result) (string, error) {
+	if id.Type != gjson.Null && id.Type != gjson.String {
+		return "", fmt.Errorf("functionCall.id must be a string")
+	}
+	if name == "" {
+		return "", fmt.Errorf("functionCall.name is required")
+	}
+	if p.byChatID == nil {
+		p.byChatID = make(map[string]geminiPendingCall)
+		p.bySourceID = make(map[string]string)
+	}
+	sourceID := id.String()
+	if _, exists := p.bySourceID[sourceID]; exists {
+		return "", fmt.Errorf("duplicate pending functionCall.id")
+	}
+	chatID := sourceID
+	// An explicit ID can have the same spelling as a generated legacy ID.
+	// Keep the source lookup independent of the IDs used on the Chat wire.
+	for chatID == "" || p.byChatID[chatID].name != "" {
+		chatID = fmt.Sprintf("call_%s_%d", sanitizeToolID(name), p.next)
+		p.next++
+	}
+	p.byChatID[chatID] = geminiPendingCall{name: name, sourceID: sourceID}
+	if sourceID != "" {
+		p.bySourceID[sourceID] = chatID
+	}
+	return chatID, nil
+}
+
+func (p *geminiPendingCalls) take(name string, id gjson.Result) (string, error) {
+	if id.Type != gjson.Null && id.Type != gjson.String {
+		return "", fmt.Errorf("functionResponse.id must be a string")
+	}
+	var chatID string
+	if sourceID := id.String(); sourceID != "" {
+		chatID = p.bySourceID[sourceID]
+		if chatID == "" {
+			return "", fmt.Errorf("functionResponse.id has no matching pending call")
+		}
+		if name != "" && p.byChatID[chatID].name != name {
+			return "", fmt.Errorf("functionResponse.name differs from its functionCall.name")
+		}
+	} else {
+		for key, pending := range p.byChatID {
+			if pending.name == name {
+				if chatID != "" {
+					return "", fmt.Errorf("functionResponse.id is required for ambiguous parallel calls")
+				}
+				chatID = key
 			}
 		}
+		if chatID == "" {
+			return "", fmt.Errorf("functionResponse has no matching pending call")
+		}
 	}
-	return "call_" + sanitizeToolID(name) + "_resp"
+	delete(p.bySourceID, p.byChatID[chatID].sourceID)
+	delete(p.byChatID, chatID)
+	return chatID, nil
 }
 
 func sanitizeToolID(name string) string {

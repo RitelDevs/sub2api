@@ -483,11 +483,14 @@ func chatMessageToAnthropicBlocks(message ChatMessage) []AnthropicContentBlock {
 	text := chatMessageContentText(message.Content)
 	// DeepSeek reasoning-only fallback: when there is no text and no tool calls,
 	// surface the reasoning content as visible text so the turn isn't empty.
-	if text == "" && strings.TrimSpace(reasoning) != "" && len(message.ToolCalls) == 0 {
+	if text == "" && message.Refusal == "" && strings.TrimSpace(reasoning) != "" && len(message.ToolCalls) == 0 {
 		text = reasoning
 	}
-	if text != "" || len(message.ToolCalls) == 0 {
+	if text != "" || (message.Refusal == "" && len(message.ToolCalls) == 0) {
 		blocks = append(blocks, AnthropicContentBlock{Type: "text", Text: text})
+	}
+	if message.Refusal != "" {
+		blocks = append(blocks, AnthropicContentBlock{Type: "text", Text: message.Refusal})
 	}
 
 	for _, toolCall := range message.ToolCalls {
@@ -661,12 +664,15 @@ func ChatCompletionsChunkToAnthropicEvents(
 		}
 
 		// Text content → text block (closes any open thinking block first).
-		if choice.Delta.Content != nil && *choice.Delta.Content != "" {
+		for _, text := range [2]*string{choice.Delta.Content, choice.Delta.Refusal} {
+			if text == nil || *text == "" {
+				continue
+			}
 			events = append(events, closeCCAnthropicBlockIfOpen(state, "thinking")...)
 			events = append(events, ensureCCAnthropicTextBlock(state)...)
 			events = append(events, ccAnthropicDelta(state, &AnthropicDelta{
 				Type: "text_delta",
-				Text: *choice.Delta.Content,
+				Text: *text,
 			})...)
 		}
 

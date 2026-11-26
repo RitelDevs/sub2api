@@ -171,6 +171,7 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 	defer streamStatus.stop()
 
 	var finalResp *apicompat.AnthropicResponse
+	var fragments anthropicBufferedFragments
 	var usage ClaudeUsage
 	resultWithUsage := func() *OpenAIForwardResult {
 		result := &OpenAIForwardResult{RequestID: requestID, UpstreamHeaders: resp.Header,
@@ -204,6 +205,7 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 
 		if event.Type == "message_start" && event.Message != nil {
 			finalResp = event.Message
+			fragments = nil
 			mergeAnthropicUsage(&usage, event.Message.Usage)
 		}
 		if event.Type == "message_delta" {
@@ -218,19 +220,7 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 			finalResp.Content = append(finalResp.Content, *event.ContentBlock)
 		}
 		if event.Type == "content_block_delta" && event.Delta != nil && finalResp != nil && event.Index != nil {
-			idx := *event.Index
-			if idx >= 0 && idx < len(finalResp.Content) {
-				switch event.Delta.Type {
-				case "text_delta":
-					finalResp.Content[idx].Text += event.Delta.Text
-				case "thinking_delta":
-					finalResp.Content[idx].Thinking += event.Delta.Thinking
-				case "signature_delta":
-					finalResp.Content[idx].Signature += event.Delta.Signature
-				case "input_json_delta":
-					finalResp.Content[idx].Input = appendRawJSON(finalResp.Content[idx].Input, event.Delta.PartialJSON)
-				}
-			}
+			fragments.apply(finalResp.Content, *event.Index, event.Delta)
 		}
 	}
 

@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -87,7 +88,7 @@ func (s *GatewayService) ForwardAsResponses(
 	anthropicReq, err := apicompat.ResponsesToAnthropicRequestWithOptions(&responsesReq, apicompat.ResponsesToAnthropicOptions{StrictMedia: true})
 	if err != nil {
 		var mediaErr *apicompat.AnthropicMediaError
-		if errors.As(err, &mediaErr) || isClaude55SignedThinkingModel(mappedModel) {
+		if errors.As(err, &mediaErr) || errors.Is(err, apicompat.ErrAnthropicOutputFormat) || isClaude55SignedThinkingModel(mappedModel) {
 			writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		}
 		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
@@ -229,7 +230,7 @@ func (s *GatewayService) ForwardAsResponses(
 		switch {
 		case errors.As(handleErr, &sseErr):
 			policyErr := s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, mappedModel, c.Writer.Size() != writerSizeBeforeStream)
-			if result != nil || c.Writer.Size() != writerSizeBeforeStream {
+			if result != nil || IsResponseCommitted(c) || c.Writer.Size() != writerSizeBeforeStream {
 				return result, errors.New("stream usage incomplete: upstream semantic stream failure")
 			}
 			return nil, policyErr
@@ -242,7 +243,7 @@ func (s *GatewayService) ForwardAsResponses(
 		var sseErr *sseStreamErrorEventError
 		if errors.As(handleErr, &sseErr) {
 			policyErr := s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, mappedModel, c.Writer.Size() != writerSizeBeforeBody)
-			if result != nil || c.Writer.Size() != writerSizeBeforeBody {
+			if result != nil || IsResponseCommitted(c) || c.Writer.Size() != writerSizeBeforeBody {
 				return result, errors.New("stream usage incomplete: upstream semantic stream failure")
 			}
 			return nil, policyErr
@@ -466,6 +467,7 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	requestID := resp.Header.Get("x-request-id")
 
 	var finalResp *apicompat.AnthropicResponse
+	var fragments anthropicBufferedFragments
 	var usage ClaudeUsage
 	streamStatus := newAnthropicCompatStream(s.cfg, c, resp, "anthropic buffered", requestID)
 	defer streamStatus.stop()
@@ -480,19 +482,20 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 		observer.ObserveAnthropic([]byte(payload))
 		streamStatus.observe(&event, payload)
 		// Stop queued success events after a terminal safety rejection.
-		if event.Type == "error" {
+		if event.Type == "error" || event.Type == "message_stop" {
 			break
 		}
 
 		if event.Type == "message_start" && event.Message != nil {
 			finalResp = event.Message
+			fragments = nil
 			mergeAnthropicUsage(&usage, event.Message.Usage)
 		}
 
 		// message_delta carries final usage and stop_reason
 		if event.Type == "message_delta" {
 			if event.Usage != nil {
-				mergeAnthropicUsage(&usage, *event.Usage)
+				streamStatus.mergeDeltaUsage(&usage, *event.Usage)
 			}
 			if event.Delta != nil && event.Delta.StopReason != "" && finalResp != nil {
 				finalResp.StopReason = apicompat.AnthropicStopReasonPtr(event.Delta.StopReason)
@@ -504,28 +507,11 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 			finalResp.Content = append(finalResp.Content, *event.ContentBlock)
 		}
 		if event.Type == "content_block_delta" && event.Delta != nil && finalResp != nil && event.Index != nil {
-			idx := *event.Index
-			if idx >= 0 && idx < len(finalResp.Content) {
-				switch event.Delta.Type {
-				case "text_delta":
-					finalResp.Content[idx].Text += event.Delta.Text
-				case "thinking_delta":
-					finalResp.Content[idx].Thinking += event.Delta.Thinking
-				case "signature_delta":
-					finalResp.Content[idx].Signature += event.Delta.Signature
-				case "input_json_delta":
-					finalResp.Content[idx].Input = appendRawJSON(finalResp.Content[idx].Input, event.Delta.PartialJSON)
-				}
-			}
+			fragments.apply(finalResp.Content, *event.Index, event.Delta)
 		}
 	}
 
-	if failure := streamStatus.failure(); failure != nil {
-		var sseErr *sseStreamErrorEventError
-		if errors.As(failure.err, &sseErr) && !usage.hasObservedTokens() && !isAnthropicCompatSafetyRejection([]byte(sseErr.RawData)) {
-			return nil, failure.err
-		}
-
+	if failure := streamStatus.deliveryFailure(); failure != nil {
 		result := &ForwardResult{
 			UpstreamResponseServiceTier: observer.ServiceTier(),
 			RequestID:                   requestID,
@@ -539,20 +525,7 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 			Duration:                    time.Since(startTime),
 		}
 		applyObservedGatewayResponseModel(c, result)
-		if !streamStatus.clientDisconnected {
-			if isAnthropicCompatSafetyRejection([]byte(extractCompatFailurePayload(failure.err))) {
-				writeResponsesError(c, http.StatusForbidden, "permission_error", failure.message)
-				if !usage.hasObservedTokens() {
-					result = nil
-				}
-				return result, fmt.Errorf("upstream safety rejection: %s", failure.message)
-			}
-			writeResponsesError(c, http.StatusBadGateway, failure.errType, failure.message)
-		}
-		if !usage.hasObservedTokens() {
-			result = nil
-		}
-		return result, failure.err
+		return streamStatus.finishBuffered(c, failure, result, writeResponsesError)
 	}
 
 	if finalResp == nil {
@@ -667,6 +640,9 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	// processEvent handles a single parsed Anthropic SSE event.
 	processEvent := func(event *apicompat.AnthropicStreamEvent) {
 		if firstChunk {
+			if c.Request != nil {
+				requesttiming.Mark(c.Request.Context(), "bridge_first_upstream_event")
+			}
 			firstChunk = false
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
@@ -674,7 +650,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 
 		// Extract usage from message_delta
 		if event.Type == "message_delta" && event.Usage != nil {
-			mergeAnthropicUsage(&usage, *event.Usage)
+			stream.mergeDeltaUsage(&usage, *event.Usage)
 		}
 		// Also capture usage from message_start
 		if event.Type == "message_start" && event.Message != nil {
@@ -712,22 +688,22 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 			}
 			for _, restored := range payloads {
 				eventType := gjson.GetBytes(restored, "type").String()
-				if _, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", eventType, restored); err != nil {
+				if err := compatWrite(c, fmt.Sprintf("event: %s\ndata: %s\n\n", eventType, restored)); err != nil {
 					stream.markClientDisconnected()
 					return
 				}
 			}
 		}
 		if len(events) > 0 {
-			if err := FlushGatewayResponse(c.Writer); err != nil {
+			if err := compatFlush(c); err != nil {
 				stream.markClientDisconnected()
 			}
 		}
 	}
 
 	finalizeStream := func() (*ForwardResult, error) {
-		if failure := stream.failure(); failure != nil {
-			return finishAnthropicCompatStreamFailure(c, writerSizeBeforeStream, failure, resultWithUsage(), func() {
+		if failure := stream.deliveryFailure(); failure != nil {
+			return stream.finishFailure(c, writerSizeBeforeStream, failure, resultWithUsage(), func() {
 				writeAnthropicCompatResponsesStreamFailure(c, state, clientToolRestorer, failure)
 			})
 		}
@@ -746,13 +722,13 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 					return resultWithUsage(), err
 				}
 				for _, restored := range payloads {
-					if _, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", gjson.GetBytes(restored, "type").String(), restored); err != nil {
+					if err := compatWrite(c, fmt.Sprintf("event: %s\ndata: %s\n\n", gjson.GetBytes(restored, "type").String(), restored)); err != nil {
 						stream.markClientDisconnected()
 						return resultWithUsage(), stream.failure().err
 					}
 				}
 			}
-			if err := FlushGatewayResponse(c.Writer); err != nil {
+			if err := compatFlush(c); err != nil {
 				stream.markClientDisconnected()
 			}
 		}
@@ -773,7 +749,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 		observer.ObserveAnthropic([]byte(payload))
 		stream.observe(&event, payload)
 		if event.Type == "message_stop" {
-			continue
+			break
 		}
 		if stream.upstreamErrType != "" {
 			break

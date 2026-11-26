@@ -6,10 +6,13 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
 
+const gpt61SolSubscriptionLongContextThreshold = 500_000
+
 // openAISubscriptionLongContextExempt 按实际凭据和最终发送模型判断订阅豁免。
-// GPT-6.2 Sol / Astra、GPT-6.1 Sol / Terra 的订阅请求豁免模型附加费；API Key 仍使用 API 价卡。
+// GPT-6.2 Sol 和 Astra 的订阅请求免模型附加费，GPT-6.1 Sol 在 500,000
+// 输入 token 以内免附加费。GPT-6.1 Terra 和 API Key 沿用模型价卡。
 // 使用发送模型，避免客户别名、渠道计费模型或响应模型计费切换改变上游订阅规则。
-func openAISubscriptionLongContextExempt(account *Account, result *OpenAIForwardResult) bool {
+func openAISubscriptionLongContextExempt(account *Account, result *OpenAIForwardResult, tokens UsageTokens) bool {
 	if !account.IsOpenAIOAuthLike() || result == nil {
 		return false
 	}
@@ -17,5 +20,8 @@ func openAISubscriptionLongContextExempt(account *Account, result *OpenAIForward
 	if model == "" {
 		model = result.Model
 	}
-	return openai.GPT62ModelID(model) != "" || openai.IsGPT61SolModelSpelling(model) || openai.IsGPT61TerraModelSpelling(model)
+	if openai.IsGPT61SolModelSpelling(model) {
+		return longContextBillableInputTokens(tokens) <= gpt61SolSubscriptionLongContextThreshold
+	}
+	return openai.GPT62ModelID(model) != ""
 }

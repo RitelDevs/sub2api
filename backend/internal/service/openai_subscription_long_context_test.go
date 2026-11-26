@@ -17,11 +17,13 @@ func TestOpenAISubscriptionLongContextExempt(t *testing.T) {
 		name    string
 		account *Account
 		result  *OpenAIForwardResult
+		tokens  UsageTokens
 		want    bool
 	}{
 		{name: "空账号", result: &OpenAIForwardResult{Model: "gpt-6.1-sol"}},
 		{name: "空结果", account: oauth},
-		{name: "订阅", account: oauth, result: &OpenAIForwardResult{Model: "gpt-6.1-sol"}, want: true},
+		{name: "订阅刚好 500k", account: oauth, result: &OpenAIForwardResult{Model: "gpt-6.1-sol"}, tokens: UsageTokens{InputTokens: 500000}, want: true},
+		{name: "订阅超过 500k", account: oauth, result: &OpenAIForwardResult{Model: "gpt-6.1-sol"}, tokens: UsageTokens{InputTokens: 499999, CacheReadTokens: 1, CacheCreationTokens: 1}},
 		{name: "别名", account: oauth, result: &OpenAIForwardResult{Model: "openai/GPT_6.1_SOL-max"}, want: true},
 		{name: "压缩", account: oauth, result: &OpenAIForwardResult{Model: "gpt-6.1-sol-openai-compact"}, want: true},
 		{name: "映射到目标", account: oauth, result: &OpenAIForwardResult{Model: "custom", UpstreamModel: "gpt-6.1-sol"}, want: true},
@@ -33,15 +35,15 @@ func TestOpenAISubscriptionLongContextExempt(t *testing.T) {
 		{name: "API账号", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, result: &OpenAIForwardResult{Model: "gpt-6.1-sol"}},
 		{name: "其他平台", account: &Account{Platform: PlatformGrok, Type: AccountTypeOAuth}, result: &OpenAIForwardResult{Model: "gpt-6.1-sol"}},
 		{name: "订阅访问令牌", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeSetupToken}, result: &OpenAIForwardResult{Model: "gpt-6.1-sol"}, want: true},
-		{name: "Terra订阅", account: oauth, result: &OpenAIForwardResult{Model: "gpt-6.1-terra"}, want: true},
-		{name: "Terra别名", account: oauth, result: &OpenAIForwardResult{Model: "openai/GPT_6.1_TERRA-none"}, want: true},
-		{name: "映射到Terra", account: oauth, result: &OpenAIForwardResult{Model: "custom", UpstreamModel: "gpt-6.1-terra"}, want: true},
+		{name: "Terra订阅", account: oauth, result: &OpenAIForwardResult{Model: "gpt-6.1-terra"}},
+		{name: "Terra别名", account: oauth, result: &OpenAIForwardResult{Model: "openai/GPT_6.1_TERRA-none"}},
+		{name: "映射到Terra", account: oauth, result: &OpenAIForwardResult{Model: "custom", UpstreamModel: "gpt-6.1-terra"}},
 		{name: "Terra映射离开", account: oauth, result: &OpenAIForwardResult{Model: "gpt-6.1-terra", UpstreamModel: "gpt-5.6-terra"}},
 		{name: "Terra API账号", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, result: &OpenAIForwardResult{Model: "gpt-6.1-terra"}},
-		{name: "Terra订阅访问令牌", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeSetupToken}, result: &OpenAIForwardResult{Model: "gpt-6.1-terra"}, want: true},
+		{name: "Terra订阅访问令牌", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeSetupToken}, result: &OpenAIForwardResult{Model: "gpt-6.1-terra"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, openAISubscriptionLongContextExempt(tt.account, tt.result))
+			require.Equal(t, tt.want, openAISubscriptionLongContextExempt(tt.account, tt.result, tt.tokens))
 		})
 	}
 }
@@ -200,9 +202,9 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolLongContextBoundary(t *testing.
 		{AccountTypeAPIKey, 500001, true},
 		{AccountTypeOAuth, 272001, false},
 		{AccountTypeOAuth, 500000, false},
-		{AccountTypeOAuth, 500001, false},
+		{AccountTypeOAuth, 500001, true},
 		{AccountTypeSetupToken, 500000, false},
-		{AccountTypeSetupToken, 500001, false},
+		{AccountTypeSetupToken, 500001, true},
 	} {
 		t.Run(fmt.Sprintf("%s/%d", tt.accountType, tt.totalInput), func(t *testing.T) {
 			usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
@@ -227,14 +229,14 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolLongContextBoundary(t *testing.
 	}
 }
 
-func TestOpenAIGatewayServiceRecordUsage_GPT61SolSubscriptionCacheAbove500kRemainsExempt(t *testing.T) {
+func TestOpenAIGatewayServiceRecordUsage_GPT61SolSubscriptionCacheCountsToward500k(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		usage    OpenAIUsage
 		wantLong bool
 	}{
 		{name: "缓存使总输入刚好 500k", usage: OpenAIUsage{InputTokens: 500000, CacheReadInputTokens: 200000, OutputTokens: 1000}},
-		{name: "缓存使总输入超过 500k", usage: OpenAIUsage{InputTokens: 500001, CacheReadInputTokens: 100000, CacheCreationInputTokens: 1, OutputTokens: 1000}},
+		{name: "缓存使总输入超过 500k", usage: OpenAIUsage{InputTokens: 500001, CacheReadInputTokens: 100000, CacheCreationInputTokens: 1, OutputTokens: 1000}, wantLong: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
@@ -267,8 +269,8 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61SolSubscriptionAbove500kMatchesAcc
 			Extra: map[string]any{openAILongContextBillingEnabledKey: true}},
 	})
 	require.NoError(t, err)
-	const base = 500001*2e-6 + 2000*10e-6
-	require.False(t, usageRepo.lastLog.LongContextBillingApplied)
+	const base = 500001*2e-6*2 + 2000*10e-6*1.5
+	require.True(t, usageRepo.lastLog.LongContextBillingApplied)
 	require.InDelta(t, base, usageRepo.lastLog.TotalCost, 1e-9)
 	require.InDelta(t, base*1.1, usageRepo.lastLog.ActualCost, 1e-9)
 	require.InDelta(t, base*1.1, userRepo.lastAmount, 1e-9)
@@ -355,7 +357,7 @@ func TestOpenAIGatewayServiceRecordUsage_GPT61TerraLongContextBoundary(t *testin
 							Extra: map[string]any{openAILongContextBillingEnabledKey: true}},
 					})
 					require.NoError(t, err)
-					wantLong := accountType == AccountTypeAPIKey && totalInput > 272000
+					wantLong := totalInput > 272000
 					wantInput, wantOutput := float64(totalInput)*1e-6, 1000*5e-6
 					if wantLong {
 						wantInput *= 2

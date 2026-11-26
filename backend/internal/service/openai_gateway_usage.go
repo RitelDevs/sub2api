@@ -243,7 +243,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		serviceTier = strings.TrimSpace(*result.ServiceTier)
 	}
 	longContextBillingGate := openAILongContextBillingGate(billingAccount)
-	modelLongContextExempt := openAISubscriptionLongContextExempt(billingAccount, result)
+	modelLongContextExempt := openAISubscriptionLongContextExempt(billingAccount, result, tokens)
 	cost, err = s.calculateOpenAIRecordUsageCost(
 		ctx,
 		result,

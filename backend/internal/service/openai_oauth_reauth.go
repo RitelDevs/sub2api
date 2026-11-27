@@ -1228,11 +1228,15 @@ func (s *OpenAIOAuthReauthService) failCallback(ctx context.Context, taskID int6
 	if record != nil {
 		workerID = record.WorkerID
 	}
-	_ = s.repo.MarkFailed(ctx, taskID, workerID, public)
+	status := http.StatusBadRequest
 	if appErr, ok := cause.(*infraerrors.ApplicationError); ok {
-		return nil, infraerrors.New(int(appErr.Code), "OPENAI_REAUTH_FAILED", public)
+		status = int(appErr.Code)
 	}
-	return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_REAUTH_FAILED", public)
+	failure := infraerrors.New(status, "OPENAI_REAUTH_FAILED", public)
+	if err := s.repo.MarkFailed(ctx, taskID, workerID, public); err == nil {
+		failure = failure.WithMetadata(map[string]string{"task_finalized": "true"})
+	}
+	return nil, failure
 }
 
 func (s *OpenAIOAuthReauthService) FailTask(ctx context.Context, taskID int64, workerID, reason string) error {

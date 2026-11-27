@@ -568,7 +568,7 @@ class OpenAIOAuthReauthWorkerTest(unittest.TestCase):
                 process_claim(FakeAPI(), None, claim)
 
         stages = [event[2] for event in events if event[0] == "progress"]
-        self.assertEqual(stages, ["starting", "protocol_connecting", "applying_credentials"])
+        self.assertEqual(stages, ["starting", "protocol_connecting"])
         credential_event = next(event for event in events if event[0] == "credentials")
         self.assertEqual(credential_event[2]["access_token"], "access-secret")
         self.assertEqual(credential_event[3]["client_id"], "client-id")

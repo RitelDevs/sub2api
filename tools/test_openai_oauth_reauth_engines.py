@@ -371,7 +371,32 @@ class ReauthEngineTests(unittest.TestCase):
         self.assertEqual(req.get_header('Origin'),'https://session.example')
         api.credentials.assert_called_once_with(7,self.credentials(),{})
         local.assert_not_called();self.assertTrue(response.closed)
-        self.assertEqual([c.args[1] for c in api.progress.call_args_list],['starting','protocol_connecting','applying_credentials'])
+        self.assertEqual([c.args[1] for c in api.progress.call_args_list],['starting','protocol_connecting'])
+    def test_run_once_reports_failure_only_when_core_has_not_recorded_it(self):
+        for metadata, expect_report in (({'task_finalized': 'true'}, False), ({}, True)):
+            with self.subTest(metadata=metadata):
+                cfg = worker.WorkerConfig('http://127.0.0.1', 'x'*32, 'synthetic-worker', None)
+                api = worker.WorkerAPI(cfg)
+                provider_response = ChunkResponse([json.dumps({'credential': self.credentials()}).encode()])
+
+                def open_request(request, **_kwargs):
+                    if request.full_url.startswith('https://session.example/'):
+                        return provider_response
+                    self.assertTrue(request.full_url.endswith('/credentials'))
+                    body = {'code': 409, 'reason': 'OPENAI_REAUTH_FAILED', 'metadata': metadata}
+                    raise HTTPError(request.full_url, 409, 'Conflict', {}, io.BytesIO(json.dumps(body).encode()))
+
+                with (
+                    patch.object(api, 'claim', return_value=self.claim()),
+                    patch.object(api, 'claim_totp', return_value=None),
+                    patch.object(api, 'progress') as progress,
+                    patch.object(api, 'fail') as fail,
+                    patch.object(worker.NO_REDIRECT_OPENER, 'open', side_effect=open_request),
+                ):
+                    self.assertTrue(worker.run_once(api, None))
+                self.assertEqual([call.args[1] for call in progress.call_args_list], ['starting', 'protocol_connecting'])
+                self.assertEqual(fail.call_count, int(expect_report))
+
     def test_missing_endpoint_or_invalid_engine_never_falls_back(self):
         for overrides in ({'relogin_endpoint':''},{'relogin_endpoint':'http://session.example/'},{'relogin_endpoint':'https://user:pass@session.example/'},{'relogin_endpoint':'https://session.example/?token=secret'},{'engine':'typo'},{'proxy_url':'http://private-proxy/'},{'relogin_headers':{'X-OpenAI-Reauth-Worker-Token':'secret'}}):
             with self.subTest(overrides=overrides),patch.object(worker.NO_REDIRECT_OPENER,'open') as opener,patch.object(worker.subprocess,'run') as local:

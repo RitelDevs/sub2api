@@ -93,6 +93,7 @@ type reauthTestRepo struct {
 	config        *OpenAIOAuthReauthStoredConfig
 	task          *OpenAIOAuthReauthTaskRecord
 	markSucceeded int
+	markFailedErr error
 	createCalls   int
 	createErr     error
 }
@@ -187,6 +188,9 @@ func (r *reauthTestRepo) MarkSucceeded(_ context.Context, _ int64, workerID stri
 	return nil
 }
 func (r *reauthTestRepo) MarkFailed(_ context.Context, _ int64, workerID, reason string) error {
+	if r.markFailedErr != nil {
+		return r.markFailedErr
+	}
 	if r.task == nil || r.task.WorkerID != workerID {
 		return errors.New("worker mismatch")
 	}
@@ -362,7 +366,25 @@ func TestOpenAIOAuthReauthDirectCredentialsApplyWithIdentityAndCASChecks(t *test
 		_, err = svc.SubmitCredentials(ctx, claim.TaskID, "worker-a", directReauthCredentials("other-account", "user-1", "user@example.com"), nil)
 		require.Error(t, err)
 		require.Equal(t, http.StatusConflict, infraerrors.Code(err))
+		require.Equal(t, "true", infraerrors.FromError(err).Metadata["task_finalized"])
 		require.Equal(t, OpenAIOAuthReauthStatusFailed, repo.task.Status)
+		require.False(t, updater.applied)
+	})
+
+	t.Run("identity rejection without a recorded failure", func(t *testing.T) {
+		svc, _, repo, updater, _, _ := newReauthTestService("acct-1")
+		ctx := context.Background()
+		savePasswordReauthConfig(t, svc)
+		_, err := svc.CreateTask(ctx, 42)
+		require.NoError(t, err)
+		claim, err := svc.ClaimTask(ctx, "worker-a")
+		require.NoError(t, err)
+		repo.markFailedErr = errors.New("transient persistence failure")
+
+		_, err = svc.SubmitCredentials(ctx, claim.TaskID, "worker-a", directReauthCredentials("other-account", "user-1", "user@example.com"), nil)
+		require.Equal(t, http.StatusConflict, infraerrors.Code(err))
+		require.NotContains(t, infraerrors.FromError(err).Metadata, "task_finalized")
+		require.Equal(t, OpenAIOAuthReauthStatusCallbackProcessing, repo.task.Status)
 		require.False(t, updater.applied)
 	})
 

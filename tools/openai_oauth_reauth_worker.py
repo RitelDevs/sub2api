@@ -116,6 +116,10 @@ class WorkerError(RuntimeError):
     pass
 
 
+class ReauthFailureRecorded(WorkerError):
+    """The core confirmed it already finalized this failed task."""
+
+
 class OperationWorkerError(WorkerError):
     """Created only from this adapter's validated response envelope."""
     def __init__(self, code: str):
@@ -420,8 +424,15 @@ class WorkerAPI:
         except HTTPError as exc:
             message = ""
             try:
-                parsed = json.loads(exc.read(MAX_RESPONSE_BYTES).decode("utf-8", errors="replace"))
+                with exc:
+                    parsed = json.loads(exc.read(MAX_RESPONSE_BYTES).decode("utf-8", errors="replace"))
                 message = str(parsed.get("message") or parsed.get("reason") or "")
+                metadata = parsed.get("metadata")
+                if (path.endswith(("/credentials", "/callback"))
+                        and parsed.get("reason") == "OPENAI_REAUTH_FAILED"
+                        and isinstance(metadata, dict)
+                        and metadata.get("task_finalized") == "true"):
+                    raise ReauthFailureRecorded("re-login failure recorded by core") from None
             except (ValueError, AttributeError):
                 pass
             raise WorkerError(f"sub2api HTTP {exc.code}: {message or 'request failed'}") from None
@@ -1231,9 +1242,10 @@ def process_session_studio_claim(api: WorkerAPI, claim: dict[str, Any]) -> None:
         for key in ("access_token", "refresh_token", "id_token")
     ):
         raise fail("Session Studio returned incomplete OAuth credentials", "credentials_validation", "credentials_incomplete")
-    _best_effort_progress(api, task_id, "applying_credentials")
     try:
         result = api.credentials(task_id, credentials, {})
+    except ReauthFailureRecorded:
+        raise
     except WorkerError:
         raise fail("Session Studio credentials submission failed", "credentials_submit", "submission_failed") from None
     if not isinstance(result, dict) or result.get("status") != "succeeded":
@@ -1495,7 +1507,6 @@ def process_password_claim(api: WorkerAPI, claim: dict[str, Any]) -> None:
             validate_excel_credentials(credentials, email, claim.get("expected_workspace"))
         except ValueError as exc:
             raise WorkerError(str(exc)) from None
-    _best_effort_progress(api, task_id, "applying_credentials")
     result = api.credentials(task_id, credentials, extra if isinstance(extra, dict) else {})
     if not result or result.get("status") != "succeeded":
         raise WorkerError(str((result or {}).get("error") or "credentials were not accepted"))
@@ -1642,6 +1653,8 @@ def run_once(api: WorkerAPI, protocol: SimpleNamespace | None) -> bool:
     task_id = int(claim.get("task_id") or 0)
     try:
         process_claim(api, protocol, claim)
+    except ReauthFailureRecorded:
+        LOGGER.warning("task=%s re-login failure recorded by core", task_id or "?")
     except Exception as exc:
         reason = safe_worker_failure(exc)
         LOGGER.error("task=%s failed: %s", task_id or "?", reason)
